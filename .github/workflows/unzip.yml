@@ -1,0 +1,34 @@
+name: Unzip Project 
+on: [push, workflow_dispatch]
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip and organize
+        run: |
+          # البحث عن أي ملف مضغوط وفك ضغطه
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            unzip -o "$ZIP_FILE"
+            rm "$ZIP_FILE"
+          fi
+          
+          # ترتيب الملفات إذا كانت داخل مجلد فرعي
+          for dir in */; do
+            if [ -f "${dir}build.gradle.kts" ] || [ -f "${dir}settings.gradle.kts" ] || [ -f "${dir}build.gradle" ]; then
+              shopt -s dotglob
+              mv "${dir}"* .
+              rmdir "${dir}"
+              break
+            fi
+          done
+      - name: Commit files
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "Automatically extract and organize project files" || echo "No changes to commit"
+          git push

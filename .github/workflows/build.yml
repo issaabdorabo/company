@@ -1,0 +1,91 @@
+name: Build APK 
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    # 1. فك الضغط وترتيب الملفات
+    - name: Unzip and Organize
+      run: |
+        ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+        if [ -n "$ZIP_FILE" ]; then
+          unzip -o "$ZIP_FILE"
+          rm "$ZIP_FILE"
+        fi
+        for dir in */; do
+          if [ -f "${dir}settings.gradle.kts" ] || [ -f "${dir}build.gradle.kts" ] || [ -f "${dir}build.gradle" ]; then
+            shopt -s dotglob
+            mv "${dir}"* .
+            rmdir "${dir}"
+            break
+          fi
+        done
+
+    # 2. إصلاح تلقائي لملف settings.gradle.kts إذا كان مجلد app مفقوداً
+    - name: Fix settings.gradle.kts
+      run: |
+        if [ ! -d "app" ]; then
+          echo "app folder is missing. Patching settings.gradle.kts..."
+          sed -i '/include(":app")/d' settings.gradle.kts
+          sed -i '/project(":app").projectDir/d' settings.gradle.kts
+        fi
+
+    # 3. إنشاء ملف التوقيع
+    - name: Generate Debug Keystore
+      run: |
+        keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+
+    # 4. استخراج اسم الحزمة وإنشاء ملف Firebase وهمي متطابق
+    - name: Create Dummy google-services.json Dynamically
+      run: |
+        # قراءة اسم الحزمة من ملف build.gradle.kts
+        PKG_NAME=$(grep "applicationId" build.gradle.kts | grep -o '".*"' | tr -d '"' | head -1)
+        echo "Detected Package Name: $PKG_NAME"
+        
+        # إنشاء ملف google-services.json باستخدام اسم الحزمة المكتشف
+        cat << EOF > google-services.json
+        {
+          "project_info": {
+            "project_number": "1234567890",
+            "project_id": "dummy-project",
+            "storage_bucket": "dummy-project.appspot.com"
+          },
+          "client": [
+            {
+              "client_info": {
+                "mobilesdk_app_id": "1:1234567890:android:1234567890",
+                "android_client_info": {
+                  "package_name": "$PKG_NAME"
+                }
+              },
+              "oauth_client": [],
+              "api_key": [{"current_key": "AIzaSyDummyKey"}],
+              "services": {"appinvite_service": {"other_platform_oauth_client": []}}
+            }
+          ],
+          "configuration_version": "1"
+        }
+        EOF
+
+    - name: set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: '9.3.1'
+
+    - name: Build with Gradle
+      run: gradle assembleDebug
+
+    # 5. رفع أي ملف APK يتم إنشاؤه مهما كان اسمه
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: '**/*.apk'
