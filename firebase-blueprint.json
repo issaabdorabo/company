@@ -1,0 +1,61 @@
+{
+  "entities": {
+    "Warehouse": {
+      "title": "Warehouse",
+      "description": "Inventory warehouse entity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string" },
+        "managerName": { "type": "string" },
+        "location": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "name"]
+    },
+    "Item": {
+      "title": "Item",
+      "description": "Stock catalog item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string" },
+        "unit": { "type": "string" },
+        "packageUnit": { "type": "string" },
+        "unitsPerPackage": { "type": "number" },
+        "purchasePrice": { "type": "number" },
+        "minStockLevel": { "type": "number" }
+      },
+      "required": ["id", "name"]
+    },
+    "Voucher": {
+      "title": "Voucher",
+      "description": "Inventory voucher record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "voucherNumber": { "type": "string" },
+        "voucherType": { "type": "string" },
+        "date": { "type": "number" },
+        "supplierName": { "type": "string" },
+        "beneficiaryName": { "type": "string" }
+      },
+      "required": ["id", "voucherNumber", "voucherType"]
+    }
+  },
+  "firestore": {
+    "/warehouses/{warehouseId}": {
+      "schema": "Warehouse",
+      "description": "Collection of all warehouses"
+    },
+    "/items/{itemId}": {
+      "schema": "Item",
+      "description": "Collection of all items"
+    },
+    "/vouchers/{voucherId}": {
+      "schema": "Voucher",
+      "description": "Collection of all vouchers"
+    }
+  }
+}
