@@ -42,6 +42,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+// استيرادات Credential Manager و Google Sign-In
+import androidx.credentials.CredentialManager
+import androidx.credentials.GetCredentialRequest
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.firebase.auth.GoogleAuthProvider
+
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as InventoryApp
     private val repository = app.repository
@@ -51,37 +58,26 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     // Preferences & Theme
     val theme: StateFlow<AppTheme> = preferences.themeFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppTheme.LIGHT)
-
     val userName: StateFlow<String> = preferences.userNameFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "عيسى عبدربه")
-
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "المستخدم")
     val orgName: StateFlow<String> = preferences.orgNameFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "المؤسسة العامة للتوريد والمخازن")
-
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "المؤسسة")
     val googleAccount: StateFlow<String> = preferences.googleAccountFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-
     val syncEnabled: StateFlow<Boolean> = preferences.syncEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
-
     val lastSyncTime: StateFlow<Long> = preferences.lastSyncFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
-
     val deviceRole: StateFlow<String> = preferences.deviceRoleFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MAIN")
-
     val isMainDevice: StateFlow<Boolean> = preferences.isMainDeviceFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
-
     val workspaceId: StateFlow<String> = preferences.workspaceIdFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-
     val workspaceCode: StateFlow<String> = preferences.workspaceCodeFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-
     val devicePermissions: StateFlow<DevicePermissions> = preferences.devicePermissionsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DevicePermissions())
-
     val pairingLockedUntil: StateFlow<Long> = preferences.pairingLockedUntilFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
@@ -154,13 +150,71 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private var lastLocalPushTimestamp = 0L
 
     /**
+     * دالة تسجيل الدخول بحساب Google الفعلي باستخدام Credential Manager و Firebase Auth
+     */
+    fun signInWithGoogle(
+        context: android.content.Context,
+        activity: androidx.activity.ComponentActivity,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val webClientId = context.getString(com.example.R.string.default_web_client_id)
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setServerClientId(webClientId)
+                    .setFilterByAuthorizedAccounts(false)
+                    .build()
+
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(googleIdOption)
+                    .build()
+
+                val credentialManager = CredentialManager.create(context)
+                val result = credentialManager.getCredential(activity, request)
+                val credential = result.credential
+
+                if (credential is androidx.credentials.CustomCredential &&
+                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                ) {
+                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                    val googleToken = googleIdTokenCredential.idToken
+
+                    val firebaseAuthCredential = GoogleAuthProvider.getCredential(googleToken, null)
+                    Firebase.auth.signInWithCredential(firebaseAuthCredential)
+                        .addOnCompleteListener { task ->
+                            if (task.isSuccessful) {
+                                val firebaseUser = Firebase.auth.currentUser
+                                if (firebaseUser != null) {
+                                    onAuthenticatedSessionStarted(firebaseUser.uid, firebaseUser.email)
+                                    viewModelScope.launch {
+                                        _userMessage.emit("تم تسجيل الدخول بنجاح: ${firebaseUser.email}")
+                                    }
+                                    onSuccess()
+                                } else {
+                                    onError("فشل الحصول على بيانات المستخدم من Firebase.")
+                                }
+                            } else {
+                                onError(task.exception?.localizedMessage ?: "فشل تسجيل الدخول في Firebase.")
+                            }
+                        }
+                } else {
+                    onError("نوع الاعتماد المستلم غير مدعوم.")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                onError(e.localizedMessage ?: "حدث خطأ أثناء الاتصال بخدمة Google Sign-In.")
+            }
+        }
+    }
+
+    /**
      * Must ONLY be called after Google Sign-In succeeds so unauthenticated Firestore calls never run.
      */
     fun onAuthenticatedSessionStarted(uid: String, email: String?) {
         if (activeAuthUid == uid && (entityListenerJob?.isActive == true)) return
         activeAuthUid = uid
         stopCloudListeners()
-
         viewModelScope.launch {
             if (!email.isNullOrBlank()) {
                 preferences.setGoogleAccount(email)
@@ -168,7 +222,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val role = preferences.deviceRoleFlow.first()
             val savedWsId = preferences.workspaceIdFlow.first()
             val installId = preferences.getOrCreateInstallationId()
-
             if (role == "SUB" && savedWsId.isNotBlank()) {
                 startSubDeviceSync(savedWsId)
             } else {
@@ -239,7 +292,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         preferences.markKickedLocally()
                         repository.clearAllSyncedData()
                         stopCloudListeners()
-                        _kickedAlertMessage.value = "تم طرد هذا الجهاز أو إلغاء صلاحية دخوله من قبل الجهاز الرئيسي."
+                        _kickedAlertMessage.value = "تم طرد هذا الجهاز أو إلغاء تفعيله من قبل الجهاز الرئيسي."
                     } else {
                         preferences.updateLiveMemberPermissions(status)
                     }
@@ -262,7 +315,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     // Avoid redundant rewrite immediately after our own local batch push
                     val elapsedSincePush = System.currentTimeMillis() - lastLocalPushTimestamp
                     if (elapsedSincePush < 1200L) return@collect
-
                     val activeCloud = cloudRecords.filter { !it.isDeleted }
                     if (activeCloud.isNotEmpty()) {
                         val localSnapshotSize = repository.exportAllEntitiesForCloud().size
@@ -290,7 +342,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (wsId.isBlank()) return@launch
             val perms = preferences.devicePermissionsFlow.first()
             if (!perms.isMainDevice && (perms.isKicked || perms.isReadOnly)) return@launch
-
             lastLocalPushTimestamp = System.currentTimeMillis()
             val allUpserts = repository.exportAllEntitiesForCloud() + tombstones
             cloudRepo.pushEntityRecords(wsId, allUpserts)
@@ -324,7 +375,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun restoreFromCloudWorkspace(targetWorkspace: CloudWorkspace? = null) {
         viewModelScope.launch {
             if (currentAuthUidOrNull() == null) {
-                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً للاسترداد من السحابة")
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً.")
                 return@launch
             }
             _isSyncingCloud.value = true
@@ -336,15 +387,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 val wsIdToFetch = ws?.id ?: preferences.workspaceIdFlow.first()
                 if (wsIdToFetch.isBlank()) {
-                    _userMessage.emit("لم يتم العثور على قاعدة بيانات سحابية مرتبطة بهذا الحساب")
+                    _userMessage.emit("لا يوجد مساحة عمل مرتبطة لاستعادة البيانات.")
                     return@launch
                 }
-
                 val entitiesResult = cloudRepo.fetchAllWorkspaceEntities(wsIdToFetch)
                 entitiesResult.onSuccess { records ->
                     val active = records.filter { !it.isDeleted }
                     if (active.isEmpty()) {
-                        _userMessage.emit("القاعدة السحابية فارغة حالياً ولا تحتوي على بيانات سابقة")
+                        _userMessage.emit("المساحة السحابية فارغة ولا توجد بيانات للاستعادة.")
                     } else {
                         repository.replaceDatabaseFromCloudEntities(records)
                         if (ws != null) {
@@ -352,10 +402,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             startMainDeviceSync(ws.id)
                         }
                         preferences.updateLastSync()
-                        _userMessage.emit("تم استرداد كافة البيانات من السحابة بنجاح (${active.size} سجل)")
+                        _userMessage.emit("تمت استعادة البيانات بنجاح (${active.size} عنصر).")
                     }
                 }.onFailure { e ->
-                    _userMessage.emit("تعذر الاسترداد من السحابة: ${e.localizedMessage}")
+                    _userMessage.emit("فشل الاستعادة: ${e.localizedMessage}")
                 }
             } finally {
                 _isSyncingCloud.value = false
@@ -373,11 +423,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         viewModelScope.launch {
             if (currentAuthUidOrNull() == null) {
-                _userMessage.emit("يرجى التحقق وتسجيل الدخول بحساب Google أولاً قبل إضافة أجهزة فرعية")
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً.")
                 return@launch
             }
             if (!isMainDevice.value) {
-                _userMessage.emit("فقط الجهاز الرئيسي يمكنه إنشاء كلمات مرور للأجهزة الفرعية")
+                _userMessage.emit("هذا الإجراء متاح فقط للجهاز الرئيسي.")
                 return@launch
             }
             var wsId = preferences.workspaceIdFlow.first()
@@ -387,7 +437,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val wsRes = cloudRepo.ensureOwnerWorkspace(orgName.value, installId)
                 val ws = wsRes.getOrNull()
                 if (ws == null) {
-                    _userMessage.emit("تعذر تهيئة القاعدة السحابية، تأكد من الاتصال بالإنترنت")
+                    _userMessage.emit("فشل إنشاء مساحة العمل السحابية.")
                     return@launch
                 }
                 preferences.saveMainWorkspace(ws.id, ws.workspaceCode)
@@ -396,7 +446,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 pushAllLocalToCloud(wsId)
                 startMainDeviceSync(wsId)
             }
-
             cloudRepo.createSubDeviceSlot(
                 workspaceId = wsId,
                 workspaceCode = wsCode,
@@ -407,9 +456,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 canEditDelete = canEditDelete
             ).onSuccess { creds ->
                 _lastCreatedDeviceCredentials.value = creds
-                _userMessage.emit("تم توليد كلمة مرور فريدة خاصة بالجهاز: ${creds.deviceName}")
+                _userMessage.emit("تم إنشاء خانة الجهاز الفرعي بنجاح: ${creds.deviceName}")
             }.onFailure { err ->
-                _userMessage.emit("فشل إنشاء الجهاز الفرعي: ${err.localizedMessage}")
+                _userMessage.emit("فشل إنشاء الجهاز: ${err.localizedMessage}")
             }
         }
     }
@@ -427,17 +476,17 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         viewModelScope.launch {
             if (currentAuthUidOrNull() == null) {
-                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً")
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً.")
                 return@launch
             }
             val wsId = preferences.workspaceIdFlow.first()
             if (wsId.isBlank()) return@launch
             cloudRepo.updateSubDevicePermissions(wsId, device, canAddItems, canInward, canDisburse, canEditDelete)
                 .onSuccess {
-                    _userMessage.emit("تم تحديث صلاحيات \"${device.deviceName}\" فوراً")
+                    _userMessage.emit("تم تحديث صلاحيات الجهاز \"${device.deviceName}\" بنجاح")
                 }
                 .onFailure {
-                    _userMessage.emit("فشل تحديث الصلاحيات: ${it.localizedMessage}")
+                    _userMessage.emit("فشل التحديث: ${it.localizedMessage}")
                 }
         }
     }
@@ -445,17 +494,17 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun kickSubDevice(device: LinkedSubDevice) {
         viewModelScope.launch {
             if (currentAuthUidOrNull() == null) {
-                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً")
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً.")
                 return@launch
             }
             val wsId = preferences.workspaceIdFlow.first()
             if (wsId.isBlank()) return@launch
             cloudRepo.kickSubDevice(wsId, device)
                 .onSuccess {
-                    _userMessage.emit("تم طرد \"${device.deviceName}\" وإلغاء كلمة مروره فوراً")
+                    _userMessage.emit("تم طرد الجهاز \"${device.deviceName}\" بنجاح")
                 }
                 .onFailure {
-                    _userMessage.emit("تعذر تنفيذ الطرد: ${it.localizedMessage}")
+                    _userMessage.emit("فشل الطرد: ${it.localizedMessage}")
                 }
         }
     }
@@ -463,14 +512,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun deleteSubDeviceSlot(device: LinkedSubDevice) {
         viewModelScope.launch {
             if (currentAuthUidOrNull() == null) {
-                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً")
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً.")
                 return@launch
             }
             val wsId = preferences.workspaceIdFlow.first()
             if (wsId.isBlank()) return@launch
             cloudRepo.deleteSubDeviceSlot(wsId, device)
-                .onSuccess { _userMessage.emit("تم حذف سجل الجهاز من القائمة") }
-                .onFailure { _userMessage.emit("تعذر الحذف: ${it.localizedMessage}") }
+                .onSuccess { _userMessage.emit("تم حذف خانة الجهاز بنجاح") }
+                .onFailure { _userMessage.emit("فشل الحذف: ${it.localizedMessage}") }
         }
     }
 
@@ -481,18 +530,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         viewModelScope.launch {
             if (currentAuthUidOrNull() == null) {
-                _pairingError.value = "يرجى التحقق وتسجيل الدخول بحساب Google أولاً من قسم التحقق أعلاه"
+                _pairingError.value = "يرجى تسجيل الدخول بحساب Google أولاً."
                 return@launch
             }
-
             val lockedUntil = preferences.pairingLockedUntilFlow.first()
             val now = System.currentTimeMillis()
             if (lockedUntil > now) {
                 val secs = ((lockedUntil - now) / 1000L).coerceAtLeast(1L)
-                _pairingError.value = "تم قفل المحاولة مؤقتاً للحماية الأمنية. يرجى الانتظار $secs ثانية."
+                _pairingError.value = "الحساب مقفل مؤقتاً بسبب محاولات خاطئة. يرجى الانتظار $secs ثانية."
                 return@launch
             }
-
             _pairingError.value = null
             _isSyncingCloud.value = true
             try {
@@ -509,14 +556,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     startSubDeviceSync(paired.workspaceId)
                     preferences.updateLastSync()
-                    _userMessage.emit("تم الربط كجهاز فرعي (${paired.deviceName}) ومزامنة القاعدة الموحدة بنجاح")
+                    _userMessage.emit("تم ربط الجهاز بنجاح (${paired.deviceName})")
                     onPaired()
                 }.onFailure { err ->
                     val lockTs = preferences.recordPairingFailure()
                     _pairingError.value = if (lockTs > 0L) {
-                        "تجاوزت عدد المحاولات الخاطئة المسموح به. تم تفعيل الحظر المؤقت لمدة 60 ثانية."
+                        "تم تجاوز عدد المحاولات المسموحة. تم قفل الربط لمدة 60 ثانية."
                     } else {
-                        err.localizedMessage ?: "فشل الربط، تأكد من رمز القاعدة وكلمة المرور المنفردة"
+                        err.localizedMessage ?: "فشل ربط الجهاز. تحقق من الرمز وكلمة المرور."
                     }
                 }
             } finally {
@@ -549,7 +596,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 }
             }
-            _userMessage.emit("تم التحويل إلى نمط الجهاز الرئيسي")
+            _userMessage.emit("تم التبديل إلى نمط الجهاز الرئيسي بنجاح")
         }
     }
 
@@ -592,7 +639,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             if (warehouse.id == 0L) {
                 repository.insertWarehouse(warehouse)
-                _userMessage.emit("تمت إضافة المخزن بنجاح")
+                _userMessage.emit("تم إضافة المخزن بنجاح")
             } else {
                 repository.updateWarehouse(warehouse)
                 _userMessage.emit("تم تحديث بيانات المخزن بنجاح")
@@ -617,7 +664,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 isDeleted = true
             )
             pushAllLocalToCloud(tombstones = listOf(tombstone))
-            _userMessage.emit("تم حذف المخزن نهائياً")
+            _userMessage.emit("تم حذف المخزن بنجاح")
         }
     }
 
@@ -631,7 +678,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.addItemDirectlyToWarehouse(warehouseId, itemId, quantity, minStockAlert)
             pushAllLocalToCloud()
-            _userMessage.emit("تمت إضافة الصنف داخل المخزن بنجاح")
+            _userMessage.emit("تم ربط الصنف بالمخزن بنجاح")
             onDone()
         }
     }
@@ -644,7 +691,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.removeItemFromWarehouse(warehouseId, itemId)
             pushAllLocalToCloud()
-            _userMessage.emit("تم حذف الصنف نهائياً من هذا المخزن")
+            _userMessage.emit("تمت إزالة الصنف من المخزن بنجاح")
             onDone()
         }
     }
@@ -658,7 +705,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.updateWarehouseItemMinStock(warehouseId, itemId, customMinStock)
             pushAllLocalToCloud()
-            _userMessage.emit("تم تحديث حد إعادة الطلب الخاص بالمخزن")
+            _userMessage.emit("تم تحديث الحد الأدنى للصنف بالمخزن")
             onDone()
         }
     }
@@ -668,10 +715,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             if (item.id == 0L) {
                 repository.insertItem(item)
-                _userMessage.emit("تمت إضافة الصنف بنجاح")
+                _userMessage.emit("تم إضافة الصنف بنجاح")
             } else {
                 repository.updateItem(item)
-                _userMessage.emit("تم تحديث بيانات الصنف بنجاح")
+                _userMessage.emit("تم تحديث الصنف بنجاح")
             }
             pushAllLocalToCloud()
             onDone()
@@ -693,7 +740,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 isDeleted = true
             )
             pushAllLocalToCloud(tombstones = listOf(tombstone))
-            _userMessage.emit("تم حذف الصنف نهائياً")
+            _userMessage.emit("تم حذف الصنف بنجاح")
         }
     }
 
@@ -708,7 +755,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.adjustWarehouseStock(warehouseId, itemId, newQuantity, reasonNote)
             pushAllLocalToCloud()
-            _userMessage.emit("تم تعديل كمية المخزون وتوثيق السبب بنجاح")
+            _userMessage.emit("تم تعديل المخزون بنجاح")
             onDone()
         }
     }
@@ -718,11 +765,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val id = if (beneficiary.id == 0L) {
                 val newId = repository.insertBeneficiary(beneficiary)
-                _userMessage.emit("تمت إضافة الجهة المستفيدة بنجاح")
+                _userMessage.emit("تم إضافة الجهة/المستفيد بنجاح")
                 newId
             } else {
                 repository.updateBeneficiary(beneficiary)
-                _userMessage.emit("تم تحديث بيانات الجهة المستفيدة")
+                _userMessage.emit("تم تحديث بيانات الجهة بنجاح")
                 beneficiary.id
             }
             pushAllLocalToCloud()
@@ -746,9 +793,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     isDeleted = true
                 )
                 pushAllLocalToCloud(tombstones = listOf(tombstone))
-                _userMessage.emit("تم حذف الجهة المستفيدة بنجاح")
+                _userMessage.emit("تم حذف الجهة بنجاح")
             } else {
-                _userMessage.emit("لا يمكن حذف الجهة المستفيدة لوجود حركات صرف سابقة مرتبطة بها!")
+                _userMessage.emit("لا يمكن الحذف لارتباط الجهة بسندات مخزنية سابقة")
             }
             onResult(success)
         }
@@ -759,11 +806,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val id = if (supplier.id == 0L) {
                 val newId = repository.insertSupplier(supplier)
-                _userMessage.emit("تمت إضافة المورد بنجاح")
+                _userMessage.emit("تم إضافة المورد بنجاح")
                 newId
             } else {
                 repository.updateSupplier(supplier)
-                _userMessage.emit("تم تحديث بيانات المورد")
+                _userMessage.emit("تم تحديث بيانات المورد بنجاح")
                 supplier.id
             }
             pushAllLocalToCloud()
@@ -789,7 +836,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 pushAllLocalToCloud(tombstones = listOf(tombstone))
                 _userMessage.emit("تم حذف المورد بنجاح")
             } else {
-                _userMessage.emit("لا يمكن حذف المورد لوجود عمليات سابقة مرتبطة به!")
+                _userMessage.emit("لا يمكن حذف المورد لوجود سندات مرتبطة به")
             }
             onResult(success)
         }
@@ -801,7 +848,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (supp != null) {
                 repository.updateSupplier(supp.copy(name = newName.trim()))
                 pushAllLocalToCloud()
-                _userMessage.emit("تم تعديل اسم المورد بنجاح")
+                _userMessage.emit("تم تحديث اسم المورد بنجاح")
             }
             onDone()
         }
@@ -812,11 +859,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val id = if (party.id == 0L) {
                 val newId = repository.insertParty(party)
-                _userMessage.emit("تمت إضافة الاسم بنجاح")
+                _userMessage.emit("تم إضافة الطرف بنجاح")
                 newId
             } else {
                 repository.updateParty(party)
-                _userMessage.emit("تم تحديث البيانات")
+                _userMessage.emit("تم تحديث الطرف بنجاح")
                 party.id
             }
             pushAllLocalToCloud()
@@ -840,9 +887,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     isDeleted = true
                 )
                 pushAllLocalToCloud(tombstones = listOf(tombstone))
-                _userMessage.emit("تم الحذف بنجاح")
+                _userMessage.emit("تم حذف الطرف بنجاح")
             } else {
-                _userMessage.emit("لا يمكن الحذف لوجود عمليات سابقة مرتبطة بالاسم!")
+                _userMessage.emit("لا يمكن الحذف لارتباط الطرف بسندات سابقة")
             }
             onResult(success)
         }
@@ -854,7 +901,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (pty != null) {
                 repository.updateParty(pty.copy(name = newName.trim()))
                 pushAllLocalToCloud()
-                _userMessage.emit("تم تعديل الاسم بنجاح")
+                _userMessage.emit("تم تحديث اسم الطرف بنجاح")
             }
             onDone()
         }
@@ -866,7 +913,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (category.id == 0L) repository.insertCategory(category)
             else repository.updateCategory(category)
             pushAllLocalToCloud()
-            _userMessage.emit("تم حفظ التصنيف")
+            _userMessage.emit("تم حفظ التصنيف بنجاح")
             onDone()
         }
     }
@@ -882,7 +929,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 isDeleted = true
             )
             pushAllLocalToCloud(tombstones = listOf(tombstone))
-            _userMessage.emit("تم حذف التصنيف")
+            _userMessage.emit("تم حذف التصنيف بنجاح")
         }
     }
 
@@ -895,7 +942,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 unit.id
             }
             pushAllLocalToCloud()
-            _userMessage.emit("تم حفظ وحدة القياس بنجاح")
+            _userMessage.emit("تم حفظ الوحدة بنجاح")
             onDone(id)
         }
     }
@@ -908,7 +955,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.updateUnitName(unitId, newName)
             pushAllLocalToCloud()
-            _userMessage.emit("تم تعديل اسم الوحدة بنجاح")
+            _userMessage.emit("تم تحديث اسم الوحدة بنجاح")
             onDone()
         }
     }
@@ -931,7 +978,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 pushAllLocalToCloud(tombstones = listOf(tombstone))
                 _userMessage.emit("تم حذف الوحدة بنجاح")
             } else {
-                _userMessage.emit("لا يمكن حذف الوحدة لأنها مرتبطة بأصناف أو حركات توريد وصرف سابقة!")
+                _userMessage.emit("لا يمكن حذف الوحدة لارتباطها بأصناف أو سندات")
             }
             onResult(success)
         }
@@ -960,9 +1007,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             repository.saveVoucherWithItems(voucher, items)
             pushAllLocalToCloud()
             val actionName = when (voucher.voucherType) {
-                VoucherType.INWARD -> "التوريد"
-                VoucherType.TRANSFER -> "التحويل المخزني"
-                VoucherType.DISBURSEMENT -> "أمر الصرف"
+                VoucherType.INWARD -> "سند الإدخال"
+                VoucherType.TRANSFER -> "سند التحويل"
+                VoucherType.DISBURSEMENT -> "سند الصرف"
             }
             _userMessage.emit("تم حفظ $actionName بنجاح")
             onDone()
@@ -994,7 +1041,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             repository.deleteVoucher(voucherId)
             pushAllLocalToCloud(tombstones = tombstones)
-            _userMessage.emit("تم حذف السند بنجاح")
+            _userMessage.emit("تم حذف السند بنجاح وإعادة الكميات")
         }
     }
 
@@ -1015,10 +1062,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 if (isCloud) {
                     pushAllLocalToCloud()
                 }
-                val typeStr = if (isCloud) "سحابياً على بريد $email" else "محلياً على الهاتف"
-                _userMessage.emit("تم إنشاء وحفظ النسخة الاحتياطية $typeStr بنجاح")
+                val typeStr = if (isCloud) "سحابياً على حساب $email" else "محلياً"
+                _userMessage.emit("تم إنشاء النسخة الاحتياطية $typeStr بنجاح")
             } catch (e: Exception) {
-                _userMessage.emit("تعذر إنشاء النسخة: ${e.localizedMessage}")
+                _userMessage.emit("فشل النسخ الاحتياطي: ${e.localizedMessage}")
             }
         }
     }
@@ -1029,12 +1076,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val ok = repository.restoreBackup(record.backupJson)
                 if (ok) {
                     pushAllLocalToCloud()
-                    _userMessage.emit("تمت استعادة البيانات بنجاح من النسخة")
+                    _userMessage.emit("تمت استعادة النسخة الاحتياطية بنجاح")
                 } else {
-                    _userMessage.emit("فشلت استعادة البيانات من النسخة")
+                    _userMessage.emit("فشل استعادة النسخة الاحتياطية")
                 }
             } catch (e: Exception) {
-                _userMessage.emit("خطأ أثناء الاستعادة: ${e.localizedMessage}")
+                _userMessage.emit("فشل الاستعادة: ${e.localizedMessage}")
             }
         }
     }
@@ -1049,7 +1096,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun performManualSync() {
         viewModelScope.launch {
             if (currentAuthUidOrNull() == null) {
-                _userMessage.emit("التطبيق يعمل حالياً بالوضع المحلي. سجّل الدخول بحساب Google من الإعدادات لتفعيل المزامنة السحابية.")
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً.")
                 return@launch
             }
             _isSyncingCloud.value = true
@@ -1067,7 +1114,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     } else {
                         pushAllLocalToCloud(wsId)
                     }
-                    _userMessage.emit("تمت المزامنة والرفع للسحابة الموحدة بنجاح")
+                    _userMessage.emit("تم رفع المزامنة السحابية بنجاح")
                 } else if (wsId.isNotBlank()) {
                     val res = cloudRepo.fetchAllWorkspaceEntities(wsId)
                     res.onSuccess { recs ->
@@ -1075,9 +1122,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             repository.replaceDatabaseFromCloudEntities(recs)
                         }
                         preferences.updateLastSync()
-                        _userMessage.emit("تم تحديث البيانات من القاعدة الموحدة بنجاح")
+                        _userMessage.emit("تم جلب وتحديث البيانات السحابية بنجاح")
                     }.onFailure { err ->
-                        _userMessage.emit("تعذرت المزامنة: ${err.localizedMessage}")
+                        _userMessage.emit("فشل الجلب: ${err.localizedMessage}")
                     }
                 }
             } finally {
@@ -1091,7 +1138,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _isRunningDiagnostics.value = true
             try {
                 val checks = mutableListOf<DiagnosticCheckItem>()
-
                 // 1. Local Room Database Integrity Check
                 val localResult = runCatching { repository.getLocalDiagnosticsCounts() }
                 localResult.onSuccess { counts ->
@@ -1099,7 +1145,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         DiagnosticCheckItem(
                             title = "فحص قاعدة البيانات المحلية (Room)",
                             passed = true,
-                            detail = "سليمة • مخازن: ${counts.warehouses} | أصناف: ${counts.items} | سندات: ${counts.vouchers} | وحدات متاحة: ${counts.activeSerials} (منصرف: ${counts.disbursedSerials})"
+                            detail = "المخازن: ${counts.warehouses} | الأصناف: ${counts.items} | السندات: ${counts.vouchers} | السيريال النشط: ${counts.activeSerials} (المصروف: ${counts.disbursedSerials})"
                         )
                     )
                 }.onFailure { err ->
@@ -1107,20 +1153,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         DiagnosticCheckItem(
                             title = "فحص قاعدة البيانات المحلية (Room)",
                             passed = false,
-                            detail = "خطأ في الفحص المحلي: ${err.localizedMessage}"
+                            detail = "خطأ: ${err.localizedMessage}"
                         )
                     )
                 }
-
                 // 2. Network Connectivity
                 checks.add(
                     DiagnosticCheckItem(
                         title = "اختبار الاتصال بالشبكة",
                         passed = isNetworkAvailable,
-                        detail = if (isNetworkAvailable) "متصل بالإنترنت وجاهز للمزامنة" else "غير متصل بالإنترنت (يعمل بالوضع المحلي بأمان)"
+                        detail = if (isNetworkAvailable) "متصل بالإنترنت وجاهز للمزامنة" else "غير متصل بالإنترنت"
                     )
                 )
-
                 // 3. Google Auth Verification (Zero Firestore calls when unauthenticated)
                 val authUser = Firebase.auth.currentUser
                 checks.add(
@@ -1128,13 +1172,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         title = "التحقق من حساب Google و Firebase Auth",
                         passed = authUser != null,
                         detail = if (authUser != null) {
-                            "موثق بنجاح (${authUser.email ?: authUser.uid.take(10)})"
+                            "مسجل الدخول (${authUser.email ?: authUser.uid.take(10)})"
                         } else {
-                            "غير مسجل الدخول بعد — اضغط زر التحقق بحساب Google لتفعيل السحابة"
+                            "غير مسجل الدخول بعد - اضغط زر التحقق بحساب Google لتفعيل السحابة"
                         }
                     )
                 )
-
                 // 4. Cloud Workspace Verification (ONLY when signed in & online)
                 if (authUser != null && isNetworkAvailable) {
                     val t0 = System.currentTimeMillis()
@@ -1146,21 +1189,21 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             val activeWs = list.firstOrNull { it.id == wsId } ?: list.firstOrNull()
                             checks.add(
                                 DiagnosticCheckItem(
-                                    title = "اختبار الاتصال بقاعدة السحابة (Firestore)",
+                                    title = "اختبار القاعدة السحابية (Firestore)",
                                     passed = true,
                                     detail = if (activeWs != null) {
-                                        "استجابة ناجحة خلال ${latencyMs}ms • رمز القاعدة: ${activeWs.workspaceCode}"
+                                        "متصل بنجاح (${latencyMs}ms) - رمز المساحة: ${activeWs.workspaceCode}"
                                     } else {
-                                        "استجابة ناجحة خلال ${latencyMs}ms • جاهز لإنشاء قاعدة موحدة جديدة"
+                                        "متصل (${latencyMs}ms) - جاري إعداد مساحة العمل"
                                     }
                                 )
                             )
                         }.onFailure { err ->
                             checks.add(
                                 DiagnosticCheckItem(
-                                    title = "اختبار الاتصال بقاعدة السحابة (Firestore)",
+                                    title = "اختبار القاعدة السحابية (Firestore)",
                                     passed = false,
-                                    detail = "تعذر الاتصال: ${err.localizedMessage}"
+                                    detail = "فشل الاتصال: ${err.localizedMessage}"
                                 )
                             )
                         }
@@ -1170,26 +1213,26 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         entitiesCheck.onSuccess { recs ->
                             checks.add(
                                 DiagnosticCheckItem(
-                                    title = "اختبار مزامنة الجهاز الفرعي (Firestore)",
+                                    title = "اختبار القاعدة السحابية (Firestore)",
                                     passed = true,
-                                    detail = "متصل بالقاعدة (${workspaceCode.value}) خلال ${latencyMs}ms • ${recs.count { !it.isDeleted }} سجل متزامن"
+                                    detail = "مرتبط بالجهاز الرئيسي (${workspaceCode.value}) - زمن الاستجابة ${latencyMs}ms - عناصر المستودع: ${recs.count { !it.isDeleted }}"
                                 )
                             )
                         }.onFailure { err ->
                             checks.add(
                                 DiagnosticCheckItem(
-                                    title = "اختبار مزامنة الجهاز الفرعي (Firestore)",
+                                    title = "اختبار القاعدة السحابية (Firestore)",
                                     passed = false,
-                                    detail = "فشل قراءة القاعدة الموحدة: ${err.localizedMessage}"
+                                    detail = "فشل الجلب: ${err.localizedMessage}"
                                 )
                             )
                         }
                     } else {
                         checks.add(
                             DiagnosticCheckItem(
-                                title = "حالة ربط الجهاز الفرعي",
+                                title = "اختبار القاعدة السحابية (Firestore)",
                                 passed = false,
-                                detail = "بانتظار إدخال رمز القاعدة وكلمة المرور المنفردة للربط"
+                                detail = "لم يتم ربط مساحة العمل الفرعية بعد"
                             )
                         )
                     }
@@ -1198,19 +1241,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         DiagnosticCheckItem(
                             title = "اختبار القاعدة السحابية (Firestore)",
                             passed = false,
-                            detail = if (authUser == null) "موقوف احترازياً حتى إتمام تسجيل الدخول بحساب Google" else "مؤجل لعدم توفر اتصال بالإنترنت"
+                            detail = if (authUser == null) "موقوف إجبارياً حتى إتمام تسجيل الدخول بحساب Google" else "لا يوجد اتصال بالإنترنت"
                         )
                     )
                 }
-
                 // 5. Device Role & Permissions Check
                 val perms = devicePermissions.value
                 val roleDesc = if (perms.isMainDevice) {
-                    "جهاز رئيسي • كافة الصلاحيات مفعلة"
+                    "جهاز رئيسي (كامل الصلاحيات)"
                 } else if (perms.isKicked) {
-                    "جهاز موقوف / مطرود"
+                    "تم طرد الجهاز أو تعطيله"
                 } else {
-                    "جهاز فرعي • إضافة:${if (perms.canAddItems) "✓" else "✕"} وارد:${if (perms.canInward) "✓" else "✕"} صرف:${if (perms.canDisburse) "✓" else "✕"} تعديل:${if (perms.canEditDelete) "✓" else "✕"}"
+                    "جهاز فرعي :${if (perms.canAddItems) "إضافة" else ""} :${if (perms.canInward) "إدخال" else ""} :${if (perms.canDisburse) "صرف" else ""} :${if (perms.canEditDelete) "تعديل" else ""}"
                 }
                 checks.add(
                     DiagnosticCheckItem(
@@ -1219,7 +1261,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         detail = roleDesc
                     )
                 )
-
                 _diagnosticsReport.value = DiagnosticsReport(
                     checkedAtMillis = System.currentTimeMillis(),
                     checks = checks
@@ -1254,8 +1295,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun setDeviceRole(role: String) {
         viewModelScope.launch {
             preferences.setDeviceRole(role)
-            val label = if (role == "MAIN") "الجهاز الرئيسي (صلاحيات كاملة)" else "جهاز فرعي"
-            _userMessage.emit("تم تبديل النمط إلى: $label")
+            val label = if (role == "MAIN") "جهاز رئيسي" else "جهاز فرعي"
+            _userMessage.emit("تم تبديل نمط الجهاز إلى: $label")
         }
     }
 
@@ -1282,7 +1323,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.saveSerialsAndReturn(serials)
             pushAllLocalToCloud()
-            _userMessage.emit("تم حفظ الأرقام المميزة والحالات بنجاح")
+            _userMessage.emit("تم حفظ الأرقام التسلسلية بنجاح")
             onDone()
         }
     }
