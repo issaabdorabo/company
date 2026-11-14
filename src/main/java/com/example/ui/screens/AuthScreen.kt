@@ -68,7 +68,6 @@ import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
 import com.example.ui.theme.DangerRed
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.Firebase
 import com.google.firebase.auth.GoogleAuthProvider
@@ -116,11 +115,7 @@ suspend fun attemptSilentGoogleSignIn(
         }
     } catch (e: CancellationException) {
         throw e
-    } catch (e: GetCredentialException) {
-        Log.d(AUTH_TAG, "Silent Google sign-in skipped (${e.type}): ${e.message}")
-        false
     } catch (e: Exception) {
-        Log.d(AUTH_TAG, "Silent Google sign-in error: ${e.message}")
         false
     }
 }
@@ -131,7 +126,7 @@ suspend fun performGoogleSignIn(
 ): GoogleSignInOutcome {
     val webClientId = runCatching { context.getString(R.string.default_web_client_id) }.getOrDefault("")
     if (webClientId.isBlank()) {
-        return GoogleSignInOutcome.Error("معرف عميل Web (default_web_client_id) غير مهيأ في إعدادات Firebase.")
+        return GoogleSignInOutcome.Error("معرف عميل Web (default_web_client_id) غير مهيأ في ملف strings.xml أو Firebase.")
     }
 
     val uiContext: Context = context.findActivity() ?: context
@@ -149,103 +144,32 @@ suspend fun performGoogleSignIn(
         }
     }
 
-    suspend fun runGoogleIdOptionFallback(filterByAuthorized: Boolean): GoogleSignInOutcome {
+    // Direct and robust implementation using GetGoogleIdOption directly for all accounts
+    return try {
         val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(filterByAuthorized)
+            .setFilterByAuthorizedAccounts(false)
             .setServerClientId(webClientId)
             .setAutoSelectEnabled(false)
             .build()
-        val fallbackRequest = GetCredentialRequest.Builder()
+
+        val request = GetCredentialRequest.Builder()
             .addCredentialOption(googleIdOption)
             .build()
-        val response = credentialManager.getCredential(uiContext, fallbackRequest)
-        return signInWithResponseCredential(response.credential)
-    }
 
-    // Request 1: Primary interactive GetSignInWithGoogleOption (1 option per request)
-    val startTimeMs = System.currentTimeMillis()
-    return try {
-        val signInOption = GetSignInWithGoogleOption.Builder(webClientId).build()
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(signInOption)
-            .build()
         val response = credentialManager.getCredential(uiContext, request)
         signInWithResponseCredential(response.credential)
     } catch (e: CancellationException) {
         throw e
     } catch (e: GetCredentialCancellationException) {
-        val elapsedMs = System.currentTimeMillis() - startTimeMs
-        Log.w(AUTH_TAG, "Google Sign-In cancelled or dismissed after ${elapsedMs}ms: ${e.message}", e)
-        // If Play Services immediately auto-cancelled before user interaction (< 500ms),
-        // retry via a separate single-option GetGoogleIdOption request for all device accounts.
-        if (elapsedMs < 500L) {
-            try {
-                return runGoogleIdOptionFallback(filterByAuthorized = false)
-            } catch (c: CancellationException) {
-                throw c
-            } catch (c2: GetCredentialCancellationException) {
-                Log.w(AUTH_TAG, "Fallback GoogleIdOption also cancelled: ${c2.message}", c2)
-                return GoogleSignInOutcome.Cancelled(
-                    "تعذر قبول المصادقة من خدمات Google Play (تم إلغاء الطلب تلقائياً). تأكد من تحديث خدمات Google Play ومن مطابقة توقيع التطبيق وبصمة SHA-1، أو جرّب إعادة المحاولة."
-                )
-            } catch (f: GetCredentialException) {
-                Log.w(AUTH_TAG, "Fallback GoogleIdOption failed (${f.type}): ${f.message}", f)
-                return GoogleSignInOutcome.Error(
-                    "تعذر إتمام تسجيل الدخول بحساب Google (${f.errorMessage ?: f.localizedMessage ?: f.type})."
-                )
-            } catch (f: Exception) {
-                Log.e(AUTH_TAG, "Fallback Firebase auth failed", f)
-                return GoogleSignInOutcome.Error(
-                    "فشل توثيق الحساب سحابياً: ${f.localizedMessage ?: "يرجى المحاولة مرة أخرى"}"
-                )
-            }
-        }
-        GoogleSignInOutcome.Cancelled(
-            "تم إلغاء نافذة تسجيل الدخول بحساب Google أو رفض المصادقة. اضغط الزر للمحاولة مرة أخرى."
-        )
+        GoogleSignInOutcome.Cancelled("تم إلغاء نافذة تسجيل الدخول بحساب Google.")
     } catch (e: NoCredentialException) {
-        Log.w(AUTH_TAG, "NoCredential on GetSignInWithGoogleOption; trying GetGoogleIdOption fallback", e)
-        try {
-            runGoogleIdOptionFallback(filterByAuthorized = false)
-        } catch (c: CancellationException) {
-            throw c
-        } catch (c2: GetCredentialCancellationException) {
-            Log.w(AUTH_TAG, "GoogleIdOption cancelled after NoCredential: ${c2.message}", c2)
-            GoogleSignInOutcome.Cancelled("تم إلغاء اختيار حساب Google.")
-        } catch (f: GetCredentialException) {
-            Log.w(AUTH_TAG, "GoogleIdOption fallback error (${f.type}): ${f.message}", f)
-            GoogleSignInOutcome.Error(
-                "لم يتم العثور على حساب Google نشط أو تعذرت المصادقة: ${f.errorMessage ?: f.localizedMessage ?: f.type}"
-            )
-        } catch (f: Exception) {
-            Log.e(AUTH_TAG, "Firebase Google auth failure after NoCredential", f)
-            GoogleSignInOutcome.Error(
-                "فشل توثيق الحساب سحابياً: ${f.localizedMessage ?: "يرجى المحاولة مرة أخرى"}"
-            )
-        }
+        GoogleSignInOutcome.Error("لم يتم العثور على حساب Google نشط على الجهاز. تأكد من إضافة حساب في إعدادات الهاتف.")
     } catch (e: GetCredentialException) {
         Log.w(AUTH_TAG, "CredentialManager error (${e.type}): ${e.message}", e)
-        try {
-            runGoogleIdOptionFallback(filterByAuthorized = false)
-        } catch (c: CancellationException) {
-            throw c
-        } catch (c2: GetCredentialCancellationException) {
-            Log.w(AUTH_TAG, "Fallback GoogleIdOption cancelled: ${c2.message}", c2)
-            GoogleSignInOutcome.Cancelled("تم إلغاء اختيار حساب Google.")
-        } catch (f: GetCredentialException) {
-            GoogleSignInOutcome.Error(
-                "تعذر تسجيل الدخول عبر Google (${f.type}): ${f.errorMessage ?: f.localizedMessage ?: "تأكد من توفر حساب Google على الجهاز واتصالك بالإنترنت"}"
-            )
-        } catch (f: Exception) {
-            GoogleSignInOutcome.Error(
-                "فشل توثيق الحساب سحابياً: ${f.localizedMessage ?: "يرجى المحاولة مرة أخرى"}"
-            )
-        }
+        GoogleSignInOutcome.Error("تعذر تسجيل الدخول عبر Google: ${e.errorMessage ?: e.localizedMessage ?: e.type}")
     } catch (e: Exception) {
         Log.e(AUTH_TAG, "Firebase Google auth failure", e)
-        GoogleSignInOutcome.Error(
-            "فشل توثيق الحساب سحابياً: ${e.localizedMessage ?: "يرجى المحاولة مرة أخرى"}"
-        )
+        GoogleSignInOutcome.Error("فشل توثيق الحساب سحابياً: ${e.localizedMessage ?: "يرجى المحاولة مرة أخرى"}")
     }
 }
 
@@ -267,7 +191,6 @@ fun AuthScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // Attempt silent authorized-account auto sign-in on mount if user already signed in previously
     LaunchedEffect(Unit) {
         if (Firebase.auth.currentUser == null) {
             attemptSilentGoogleSignIn(uiContext, credentialManager)
@@ -279,7 +202,9 @@ fun AuthScreen(
             isLoading = true
             errorMessage = null
             when (val outcome = performGoogleSignIn(ctx, credentialManager)) {
-                is GoogleSignInOutcome.Success -> Unit
+                is GoogleSignInOutcome.Success -> {
+                    // النجاح التام
+                }
                 is GoogleSignInOutcome.Cancelled -> errorMessage = outcome.reason
                 is GoogleSignInOutcome.Error -> errorMessage = outcome.message
             }
