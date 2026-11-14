@@ -81,6 +81,9 @@ import kotlinx.coroutines.tasks.await
 
 private const val AUTH_TAG = "AuthScreen"
 
+private const val WEB_CLIENT_ID =
+    "841164346396-j9bt3pq82o1pjomgi1dabkrnf3jemem5.apps.googleusercontent.com"
+
 tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
@@ -92,7 +95,7 @@ suspend fun attemptSilentGoogleSignIn(
     credentialManager: CredentialManager
 ): Boolean {
     if (Firebase.auth.currentUser != null) return true
-    val webClientId = runCatching { context.getString(R.string.default_web_client_id) }.getOrDefault("")
+    val webClientId = WEB_CLIENT_ID
     if (webClientId.isBlank()) return false
     val activity = context.findActivity()
     val uiContext: Context = if (activity != null) MutableContextWrapper(activity) else context
@@ -164,7 +167,7 @@ suspend fun performGoogleSignIn(
     context: Context,
     credentialManager: CredentialManager
 ): GoogleSignInOutcome {
-    val webClientId = runCatching { context.getString(R.string.default_web_client_id) }.getOrDefault("")
+    val webClientId = WEB_CLIENT_ID
     if (webClientId.isBlank()) {
         return GoogleSignInOutcome.Error("معرف عميل Web (default_web_client_id) غير مهيأ في إعدادات Firebase.")
     }
