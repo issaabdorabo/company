@@ -1,6 +1,0 @@
-{
-  "name": "مخزني الذكي",
-  "description": "تطبيق إدارة المخازن والمخزون، الوارد، المنصرف، التحويلات، التقارير الذكية PDF وإكسل، والنسخ الاحتياطي",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
