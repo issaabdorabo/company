@@ -1,55 +1,61 @@
 name: Unzip Project
+
 on: [push, workflow_dispatch]
+
 jobs:
   unzip:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      workflows: write # صلاحية ضرورية لتعديل ملفات الـ workflows وتجنب خطأ الـ push
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Unzip and organize
+        with:
+          # إذا استمر خطأ الصلاحيات، قم بتفعيل هذا السطر واستخدام Personal Access Token
+          # token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Unzip all zip files and organize
         run: |
-          echo "--- محتويات المجلد الحالي ---"
-          ls -la
+          echo "--- بدء البحث عن ملفات ZIP في كل المجلدات ---"
           
-          # البحث عن أي ملف مضغوط في كل المجلدات (وليس فقط الرئيسي)
-          ZIP_FILE=$(find . -name "*.zip" | head -n 1)
+          # البحث الشامل عن جميع ملفات zip
+          ZIP_FILES=$(find . -name "*.zip")
           
-          if [ -n "$ZIP_FILE" ]; then
-            echo "تم العثور على الملف: $ZIP_FILE"
-            unzip -o "$ZIP_FILE"
-            
-            # التحقق من نجاح فك الضغط قبل الحذف
-            if [ $? -eq 0 ]; then
-              echo "تم فك الضغط بنجاح."
-              rm "$ZIP_FILE"
-            else
-              echo "خطأ: فشل فك الضغط. قد يكون الملف تالفاً أو ليس بصيغة ZIP."
-              exit 1
-            fi
-          else
-            echo "لم يتم العثور على أي ملف .zip في المستودع."
+          if [ -z "$ZIP_FILES" ]; then
+            echo "لم يتم العثور على أي ملفات مضغوطة. الخروج..."
             exit 0
           fi
           
-          # ترتيب الملفات إذا كانت داخل مجلد فرعي
+          # المرور على كل ملف مضغوط وفك ضغطه
+          for ZIP_FILE in $ZIP_FILES; do
+            echo "جاري فك الضغط عن: $ZIP_FILE"
+            unzip -o "$ZIP_FILE"
+            if [ $? -eq 0 ]; then
+              echo "تم فك الضغط بنجاح: $ZIP_FILE"
+              rm "$ZIP_FILE" # حذف الملف المضغوط بعد نجاح فك الضغط
+            else
+              echo "خطأ في فك الضغط: $ZIP_FILE"
+            fi
+          done
+          
+          echo "--- ترتيب الملفات ---"
+          # إذا كان فك الضغط قد أنشأ مجلداً فرعياً يحتوي على المشروع، نقوم بنقله للجذر
           for dir in */; do
-            if [ -f "${dir}build.gradle.kts" ] || [ -f "${dir}settings.gradle.kts" ] || [ -f "${dir}build.gradle" ]; then
-              echo "تم العثور على المشروع داخل المجلد: $dir"
-              shopt -s dotglob
-              # استخدام cp -r ثم rm لتجنب مشاكل التداخل
-              cp -r "${dir}"* .
-              rm -rf "$dir"
+            if [ -f "${dir}build.gradle.kts" ] || [ -f "${dir}settings.gradle.kts" ] || [ -f "${dir}build.gradle" ] || [ -f "${dir}package.json" ]; then
+              echo "تم العثور على ملفات المشروع داخل المجلد: $dir -- جاري نقلها للجذر..."
+              shopt -s dotglob # لضمان نقل الملفات المخفية أيضاً
+              mv "${dir}"* .
+              rm -rf "$dir" # حذف المجلد الفارغ بعد النقل
               break
             fi
           done
           
-      - name: Commit files
+      - name: Commit and push changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          # استخدام [skip ci] لمنع إعادة تشغيل السكربت مرة أخرى لا نهائياً
-          git commit -m "Automatically extract and organize project files [skip ci]" || echo "No changes to commit"
+          # استخدام [skip ci] لمنع إعادة تشغيل السكربت لا نهائياً
+          git commit -m "فك ضغط وترتيب الملفات تلقائياً [skip ci]" || echo "لا توجد تغييرات للـ commit"
           git push
