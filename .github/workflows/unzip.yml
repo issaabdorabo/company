@@ -7,28 +7,49 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      
       - name: Unzip and organize
         run: |
-          # البحث عن أي ملف مضغوط وفك ضغطه
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          echo "--- محتويات المجلد الحالي ---"
+          ls -la
+          
+          # البحث عن أي ملف مضغوط في كل المجلدات (وليس فقط الرئيسي)
+          ZIP_FILE=$(find . -name "*.zip" | head -n 1)
+          
           if [ -n "$ZIP_FILE" ]; then
+            echo "تم العثور على الملف: $ZIP_FILE"
             unzip -o "$ZIP_FILE"
-            rm "$ZIP_FILE"
+            
+            # التحقق من نجاح فك الضغط قبل الحذف
+            if [ $? -eq 0 ]; then
+              echo "تم فك الضغط بنجاح."
+              rm "$ZIP_FILE"
+            else
+              echo "خطأ: فشل فك الضغط. قد يكون الملف تالفاً أو ليس بصيغة ZIP."
+              exit 1
+            fi
+          else
+            echo "لم يتم العثور على أي ملف .zip في المستودع."
+            exit 0
           fi
           
           # ترتيب الملفات إذا كانت داخل مجلد فرعي
           for dir in */; do
             if [ -f "${dir}build.gradle.kts" ] || [ -f "${dir}settings.gradle.kts" ] || [ -f "${dir}build.gradle" ]; then
+              echo "تم العثور على المشروع داخل المجلد: $dir"
               shopt -s dotglob
-              mv "${dir}"* .
-              rmdir "${dir}"
+              # استخدام cp -r ثم rm لتجنب مشاكل التداخل
+              cp -r "${dir}"* .
+              rm -rf "$dir"
               break
             fi
           done
+          
       - name: Commit files
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Automatically extract and organize project files" || echo "No changes to commit"
+          # استخدام [skip ci] لمنع إعادة تشغيل السكربت مرة أخرى لا نهائياً
+          git commit -m "Automatically extract and organize project files [skip ci]" || echo "No changes to commit"
           git push
