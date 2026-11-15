@@ -6,14 +6,13 @@ jobs:
   unzip:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      workflows: write # صلاحية ضرورية لتعديل ملفات الـ workflows وتجنب خطأ الـ push
+      contents: write # صلاحية الكتابة في محتويات المستودع فقط
 
     steps:
       - uses: actions/checkout@v4
         with:
-          # إذا استمر خطأ الصلاحيات، قم بتفعيل هذا السطر واستخدام Personal Access Token
-          # token: ${{ secrets.PAT_TOKEN }}
+          # استخدام PAT لتجاوز قيود التوكن الافتراضي عند تعديل ملفات الـ workflow
+          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Unzip all zip files and organize
         run: |
@@ -44,9 +43,9 @@ jobs:
           for dir in */; do
             if [ -f "${dir}build.gradle.kts" ] || [ -f "${dir}settings.gradle.kts" ] || [ -f "${dir}build.gradle" ] || [ -f "${dir}package.json" ]; then
               echo "تم العثور على ملفات المشروع داخل المجلد: $dir -- جاري نقلها للجذر..."
-              shopt -s dotglob # لضمان نقل الملفات المخفية أيضاً
+              shopt -s dotglob
               mv "${dir}"* .
-              rm -rf "$dir" # حذف المجلد الفارغ بعد النقل
+              rm -rf "$dir"
               break
             fi
           done
@@ -56,6 +55,5 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          # استخدام [skip ci] لمنع إعادة تشغيل السكربت لا نهائياً
           git commit -m "فك ضغط وترتيب الملفات تلقائياً [skip ci]" || echo "لا توجد تغييرات للـ commit"
           git push
