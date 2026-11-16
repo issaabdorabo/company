@@ -1,12 +1,15 @@
-name: Build APK 
+name: Build APK
 on: [push, workflow_dispatch]
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
 
-    # 1. فك الضغط وترتيب الملفات
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # 1. فك الضغط وترتيب الملفات (في حال وجود ملفات مضغوطة)
     - name: Unzip and Organize
       run: |
         ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
@@ -23,7 +26,7 @@ jobs:
           fi
         done
 
-    # 2. إصلاح تلقائي لملف settings.gradle.kts (مهم جداً لأن مشروعك لا يحتوي على مجلد app)
+    # 2. إصلاح تلقائي لملف settings.gradle.kts (لأن مشروعك لا يحتوي على مجلد app)
     - name: Fix settings.gradle.kts
       run: |
         if [ ! -d "app" ]; then
@@ -32,36 +35,34 @@ jobs:
           sed -i '/project(":app").projectDir/d' settings.gradle.kts
         fi
 
-    # 3. التحقق من ملف Firebase الحقيقي (حذفنا إنشاء الملف الوهمي)
+    # 3. التحقق من ملف Firebase الحقيقي (لمنع بناء مشروع وهمي)
     - name: Verify real google-services.json
       env:
         GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
       run: |
-        # إذا لم يكن الملف موجوداً في المستودع، قم باستعادته من الـ Secrets
         if [ ! -f google-services.json ]; then
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > google-services.json
             echo "Restored google-services.json from GitHub Secret."
           else
-            echo "::error::google-services.json is missing! Please add it to the repository or Secrets."
+            echo "::error::google-services.json is missing!"
             exit 1
           fi
         fi
         
-        # التأكد من أنه ليس مشروعاً وهمياً
         if grep -qE '"project_id": *"(remixed-project-id|dummy-project)"' google-services.json; then
           echo "::error::google-services.json contains a placeholder project_id."
           exit 1
         fi
 
-    # 4. إنشاء ملف التوقيع وطباعة البصمة
+    # 4. إنشاء ملف التوقيع (debug.keystore) في المجلد الرئيسي وطباعة البصمة
     - name: Generate Debug Keystore
       run: |
-        mkdir -p ~/.android
-        keytool -genkey -v -keystore ~/.android/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+        keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
         echo "================= SHA-1 FINGERPRINT ================="
-        keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA1:"
+        keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA1:"
 
+    # 5. إعداد بيئة جافا و Gradle
     - name: set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -73,10 +74,11 @@ jobs:
       with:
         gradle-version: '9.3.1'
 
+    # 6. بناء التطبيق
     - name: Build with Gradle
       run: gradle assembleDebug
 
-    # 5. رفع أي ملف APK يتم إنشاؤه مهما كان اسمه
+    # 7. رفع ملف الـ APK أينما كان مكانه في المشروع
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
