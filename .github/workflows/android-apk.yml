@@ -1,4 +1,8 @@
-name: Build Android Debug APK 
+name: Build Android Debug APK
+
+# منع تحذيرات Node.js التي تظهر في الواجهة
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
@@ -19,6 +23,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # التحقق من ملف Firebase وتوفيره قبل البناء
       - name: Verify google-services.json
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
@@ -26,25 +31,34 @@ jobs:
           if [ ! -f google-services.json ]; then
             if [ -n "$GOOGLE_SERVICES_JSON" ]; then
               printf '%s' "$GOOGLE_SERVICES_JSON" > google-services.json
+              echo "Restored google-services.json from GitHub Secret."
             else
               echo "::error::google-services.json is missing!"
               exit 1
             fi
+          fi
+          
+          if grep -qE '"project_id": *"(remixed-project-id|dummy-project)"' google-services.json; then
+            echo "::error::google-services.json contains a placeholder project_id."
+            exit 1
           fi
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Setup Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '9.3.1'
 
+      # البناء باستخدام الأمر الذي كان يعمل معك سابقاً + إظهار تفاصيل الخطأ إذا فشل
       - name: Build Debug APK
-        run: gradle assembleDebug
+        run: gradle assembleDebug --stacktrace
 
+      # البحث عن ملف الـ APK في أي مكان داخل المشروع ورفعه
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: smart-inventory-debug-apk
-          path: '**/build/outputs/apk/debug/*.apk'
+          path: '**/*.apk'
+          retention-days: 30
