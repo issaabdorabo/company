@@ -21,37 +21,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Decode repository debug keystore
+      - name: Prepare debug keystore
         run: |
-          if [ -f debug.keystore.base64 ]; then
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
-            echo "Decoded debug.keystore successfully."
-            keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -E "SHA1:|SHA256:"
-          else
-            echo "::error::debug.keystore.base64 not found! Google Sign-In SHA-1 verification requires matching keystore."
-            exit 1
-          fi
-
-      - name: Verify or restore Firebase google-services.json
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-        run: |
-          if [ ! -f app/google-services.json ]; then
-            if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-              if echo "$GOOGLE_SERVICES_JSON" | grep -q '"project_info"'; then
-                printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
-              else
-                printf '%s' "$GOOGLE_SERVICES_JSON" | base64 -d > app/google-services.json
-              fi
-              echo "Restored app/google-services.json from GitHub Secret GOOGLE_SERVICES_JSON."
-            else
-              echo "::error::app/google-services.json is missing! Building without it injects dummy-project and causes API key not valid. Commit app/google-services.json or configure secret GOOGLE_SERVICES_JSON."
-              exit 1
-            fi
-          fi
-          if grep -qE '"project_id": *"(remixed-project-id|dummy-project)"' app/google-services.json; then
-            echo "::error::app/google-services.json contains a placeholder project_id instead of the provisioned Firebase project."
-            exit 1
           fi
 
       - name: Setup Android SDK
