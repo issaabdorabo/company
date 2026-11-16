@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan to resolve the GitHub-build Firebase API key & Google Sign-In SHA-1 mismatch, add runtime certificate and multi-device sync diagnostics, harden cloud data recovery, and ensure seamless offline operation.",
+  "updatedAt":  "2026-11-15T19:12:11.033789999Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
