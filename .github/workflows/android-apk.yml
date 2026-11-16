@@ -1,4 +1,5 @@
-name: Build Android Debug APK 
+
+name: Build Android Debug APK
 
 on:
   push:
@@ -28,7 +29,9 @@ jobs:
           fi
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.2
+        with:
+          packages: 'platform-tools'
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
