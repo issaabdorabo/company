@@ -1,87 +1,49 @@
-name: Build APK
-on: [push, workflow_dispatch]
+name: Build Android Debug APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-apk:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # 1. فك ضغط ذكي ينقل الملفات للجذر الرئيسي أينما كانت
-    - name: Unzip and Organize
-      run: |
-        ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-        if [ -n "$ZIP_FILE" ]; then
-          echo "جاري فك الضغط عن: $ZIP_FILE"
-          unzip -o "$ZIP_FILE"
-          rm "$ZIP_FILE"
-        fi
-        
-        # البحث عن ملف settings.gradle.kts في أي مكان ونقل محتويات مجلده للجذر
-        SETTINGS_FILE=$(find . -name "settings.gradle.kts" | head -n 1)
-        if [ -n "$SETTINGS_FILE" ]; then
-          DIR_NAME=$(dirname "$SETTINGS_FILE")
-          if [ "$DIR_NAME" != "." ]; then
-            echo "تم العثور على المشروع داخل: $DIR_NAME -- جاري نقله للجذر..."
-            shopt -s dotglob
-            mv "$DIR_NAME"/* .
-            rm -rf "$DIR_NAME"
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare debug keystore
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
           fi
-        fi
-        
-        echo "--- محتويات المجلد الرئيسي الآن ---"
-        ls -la
 
-    # 2. إصلاح إعدادات Gradle
-    - name: Fix settings.gradle.kts
-      run: |
-        if [ ! -d "app" ]; then
-          echo "app folder is missing. Patching settings.gradle.kts..."
-          sed -i '/include(":app")/d' settings.gradle.kts
-          sed -i '/project(":app").projectDir/d' settings.gradle.kts
-        fi
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-    # 3. التحقق من ملف Firebase
-    - name: Verify real google-services.json
-      env:
-        GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-      run: |
-        if [ ! -f google-services.json ]; then
-          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            printf '%s' "$GOOGLE_SERVICES_JSON" > google-services.json
-          else
-            echo "::error::google-services.json is missing!"
-            exit 1
-          fi
-        fi
+      - name: Setup Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
 
-    # 4. إنشاء ملف التوقيع
-    - name: Generate Debug Keystore
-      run: |
-        keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-        echo "================= SHA-1 FINGERPRINT ================="
-        keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA1:"
+      - name: Run Unit Tests
+        run: gradle :app:testDebugUnitTest
 
-    - name: set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '9.3.1'
-
-    # 5. البناء المباشر (بدون اختبارات لتجنب الأخطاء)
-    - name: Build with Gradle
-      run: gradle assembleDebug
-
-    # 6. رفع التطبيق
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-debug
-        path: '**/*.apk'
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-inventory-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
