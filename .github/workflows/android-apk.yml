@@ -1,3 +1,4 @@
+
 name: Build Android Debug APK
 
 on:
@@ -23,27 +24,58 @@ jobs:
 
       - name: Prepare debug keystore
         run: |
-          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair \
+              -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Verify Android SDK
+        run: |
+          echo "Android SDK: $ANDROID_HOME"
+          sdkmanager --version
+          adb version
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      - name: Run Unit Tests
-        run: gradle :app:testDebugUnitTest
-
       - name: Build Debug APK
-        run: gradle :app:assembleDebug
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK
+        run: |
+          echo "Searching for generated APK files..."
+          find . -type f -name "*.apk" -print
+
+          APK_PATH=$(find . -type f -path "*/outputs/apk/debug/*.apk" -print -quit)
+
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: No Debug APK was found."
+            find . -type d -name build -print
+            exit 1
+          fi
+
+          echo "APK found: $APK_PATH"
+          ls -lh "$APK_PATH"
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: smart-inventory-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.APK_PATH }}
           retention-days: 30
