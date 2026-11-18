@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for the unified Backup & Sync Settings component, last-synced status & email persistence, confirmation dialogs, loading indicators, and backup creation/rename/specific-restore workflows across local storage and Firestore.",
-  "updatedAt":  "2026-11-18T16:32:56.922135718Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}
