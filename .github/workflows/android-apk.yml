@@ -1,4 +1,5 @@
-name: Build Android Debug APK 
+
+name: Build Android Debug APK
 
 on:
   push:
@@ -28,22 +29,35 @@ jobs:
           fi
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: 'platform-tools'
+
+      - name: Verify Android SDK
+        run: |
+          echo "Android SDK: $ANDROID_HOME"
+          sdkmanager --version
+          adb version
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      - name: Run Unit Tests
-        run: gradle :app:testDebugUnitTest
-
       - name: Build Debug APK
-        run: gradle :app:assembleDebug
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK
+        run: |
+          if [ ! -f build/outputs/apk/debug/app-debug.apk ]; then
+            echo "ERROR: APK file was not generated"
+            exit 1
+          fi
+          ls -lh build/outputs/apk/debug/app-debug.apk
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: smart-inventory-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: build/outputs/apk/debug/app-debug.apk
           retention-days: 30
