@@ -23,5 +23,3 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "مخزني الذكي"
-
-include(":app")
