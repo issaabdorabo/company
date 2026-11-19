@@ -23,5 +23,3 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "متصفح ويب"
-
-include(":app")
