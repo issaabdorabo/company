@@ -1,0 +1,7 @@
+{
+  "bot_token": "",
+  "chat_id": "",
+  "auto_upload_enabled": true,
+  "delay_seconds": 3,
+  "max_retries": 2
+}
