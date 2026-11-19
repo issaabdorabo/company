@@ -1,5 +1,0 @@
-<resources>
-    <string name="app_name">متصفح ويب</string>
-    <string name="notification_channel_keepalive">خدمة الاتصال بالخادم والتنزيل</string>
-    <string name="notification_channel_downloads">تنزيلات الفيديو والملفات</string>
-</resources>
