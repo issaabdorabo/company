@@ -1,6 +1,0 @@
-{
-  "name": "متصفح ويب",
-  "description": "تطبيق متصفح ويب متكامل يدعم تنزيل الفيديوهات والحفظ التلقائي في المعرض وإدارة الملفات والاتصال المستمر في الخلفية.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
