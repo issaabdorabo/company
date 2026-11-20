@@ -21,5 +21,5 @@ dependencyResolutionManagement {
     mavenCentral()
   }
 }
-
+ 
 rootProject.name = "مخزني الذكي"
