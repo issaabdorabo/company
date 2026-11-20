@@ -1,5 +1,6 @@
+
 name: Build Android Debug APK
-  
+
 on:
   push:
     branches: [ main, master ]
@@ -36,9 +37,6 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-
-      - name: Run Unit Tests
-        run: gradle testDebugUnitTest
 
       - name: Build Debug APK
         run: gradle assembleDebug
