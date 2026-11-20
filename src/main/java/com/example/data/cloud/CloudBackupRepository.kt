@@ -47,7 +47,7 @@ class CloudBackupRepository(
                 "files(id,name,description,size,createdTime,modifiedTime,appProperties)",
                 "UTF-8"
             )
-            val url = "$DRIVE_API_BASE/files?q=$encodedQ&fields=$encodedFields&orderBy=modifiedTime%20desc&pageSize=100"
+            val url = "$DRIVE_API_BASE/files?q=$encodedQ&spaces=appDataFolder&fields=$encodedFields&orderBy=modifiedTime%20desc&pageSize=100"
 
             val request = Request.Builder()
                 .url(url)
