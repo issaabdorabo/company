@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for replacing Firebase Auth cloud backup with a simplified phone-stored Google Account picker (AccountManager) and direct Google Drive backup, restore, rename, and confirmed delete scoped to the selected account.",
+  "updatedAt":  "2026-11-18T23:26:57.940369944Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
