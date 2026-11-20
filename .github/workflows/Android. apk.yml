@@ -24,9 +24,30 @@ jobs:
 
       - name: Prepare debug keystore
         run: |
-          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+          if [ ! -f debug.keystore ]; then
+            if [ -f debug.keystore.base64 ]; then
+              echo "Restoring debug keystore from Base64..."
+              base64 -d debug.keystore.base64 > debug.keystore
+            else
+              echo "Generating new debug keystore..."
+              keytool -genkeypair -v \
+                -keystore debug.keystore \
+                -storepass android \
+                -alias androiddebugkey \
+                -keypass android \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
           fi
+
+          if [ ! -s debug.keystore ]; then
+            echo "ERROR: Debug keystore was not created!"
+            exit 1
+          fi
+
+          echo "Debug keystore is ready."
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
@@ -40,6 +61,18 @@ jobs:
 
       - name: Build Debug APK
         run: gradle assembleDebug
+
+      - name: Verify APK
+        run: |
+          APK_PATH="build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK file was not generated!"
+            exit 1
+          fi
+
+          echo "APK generated successfully."
+          ls -lh "$APK_PATH"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
