@@ -70,6 +70,19 @@ jobs:
           echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
           echo "APK found: $APK_PATH"
 
+
+      - name: Extract Package Name and SHA1
+        shell: bash
+        run: |
+          echo "PACKAGE NAME:"
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          "$AAPT" dump badging "$APK_PATH" | grep "^package:"
+
+          echo "SHA1 CERTIFICATE:"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --print-certs "$APK_PATH"
+
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
