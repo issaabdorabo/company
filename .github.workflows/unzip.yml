@@ -1,0 +1,59 @@
+name: Unzip Project 
+
+on: [push, workflow_dispatch]
+
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # صلاحية الكتابة في محتويات المستودع فقط
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # استخدام PAT لتجاوز قيود التوكن الافتراضي عند تعديل ملفات الـ workflow
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Unzip all zip files and organize
+        run: |
+          echo "--- بدء البحث عن ملفات ZIP في كل المجلدات ---"
+          
+          # البحث الشامل عن جميع ملفات zip
+          ZIP_FILES=$(find . -name "*.zip")
+          
+          if [ -z "$ZIP_FILES" ]; then
+            echo "لم يتم العثور على أي ملفات مضغوطة. الخروج..."
+            exit 0
+          fi
+          
+          # المرور على كل ملف مضغوط وفك ضغطه
+          for ZIP_FILE in $ZIP_FILES; do
+            echo "جاري فك الضغط عن: $ZIP_FILE"
+            unzip -o "$ZIP_FILE"
+            if [ $? -eq 0 ]; then
+              echo "تم فك الضغط بنجاح: $ZIP_FILE"
+              rm "$ZIP_FILE" # حذف الملف المضغوط بعد نجاح فك الضغط
+            else
+              echo "خطأ في فك الضغط: $ZIP_FILE"
+            fi
+          done
+          
+          echo "--- ترتيب الملفات ---"
+          # إذا كان فك الضغط قد أنشأ مجلداً فرعياً يحتوي على المشروع، نقوم بنقله للجذر
+          for dir in */; do
+            if [ -f "${dir}build.gradle.kts" ] || [ -f "${dir}settings.gradle.kts" ] || [ -f "${dir}build.gradle" ] || [ -f "${dir}package.json" ]; then
+              echo "تم العثور على ملفات المشروع داخل المجلد: $dir -- جاري نقلها للجذر..."
+              shopt -s dotglob
+              mv "${dir}"* .
+              rm -rf "$dir"
+              break
+            fi
+          done
+          
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "فك ضغط وترتيب الملفات تلقائياً [skip ci]" || echo "لا توجد تغييرات للـ commit"
+          git push
