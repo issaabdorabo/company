@@ -1,7 +1,0 @@
-<resources>
-    <string name="app_name">متصفح ويب</string>
-    <string name="notification_channel_keepalive">خدمة الاتصال بالخادم والتنزيل</string>
-    <string name="notification_channel_downloads">تنزيلات الفيديو والملفات</string>
-    <string name="notification_listener_label">الوصول إلى إشعارات التطبيقات</string>
-    <string name="notification_listener_description">صلاحية يمنحها المستخدم من إعدادات Android لتمكين ميزات إشعارات التطبيقات.</string>
-</resources>
