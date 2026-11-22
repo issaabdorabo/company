@@ -1938,8 +1938,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _isCloudBackupBusy.value = true
             _cloudSyncOperationLabel.value = "جاري استرداد البيانات من الملف..."
             try {
-                val plainJson = CloudBackupCrypto.decryptOrLegacy(rawJson, backupPassphrase.toCharArray())
-                    val ok = repository.restoreBackupReplacingExisting(plainJson)
+                val ok = repository.restoreBackupReplacingExisting(rawJson)
                 if (ok) {
                     notifyAndPropagate(
                         action = DeviceAction.BACKUP_RESTORE,
