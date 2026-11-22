@@ -86,7 +86,7 @@ class SupabaseAuthRepository(
             runCatching {
                 requireConfigured()
                 val cleanEmail = email.trim().lowercase()
-                require(cleanEmail.matches(Regex("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\\\.[A-Z]{2,}$", RegexOption.IGNORE_CASE))) {
+                require(cleanEmail.matches(Regex("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$", RegexOption.IGNORE_CASE))) {
                     "يرجى اختيار بريد إلكتروني صحيح."
                 }
                 postAuth(
@@ -107,7 +107,7 @@ class SupabaseAuthRepository(
                 val cleanEmail = email.trim().lowercase()
                 val cleanCode = code.trim()
                 require(cleanEmail.isNotBlank()) { "البريد الإلكتروني غير صالح." }
-                require(cleanCode.matches(Regex("^\\\\d{6}$"))) { "أدخل رمز التحقق المكوّن من 6 أرقام." }
+                require(cleanCode.matches(Regex("^\\d{6}$"))) { "أدخل رمز التحقق المكوّن من 6 أرقام." }
 
                 val response = postAuth(
                     endpoint = "verify",
