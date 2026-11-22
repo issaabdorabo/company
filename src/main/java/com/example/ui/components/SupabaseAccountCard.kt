@@ -1,11 +1,15 @@
 package com.example.ui.components
 
+import android.accounts.AccountManager
+import android.app.Activity
+import com.google.android.gms.common.AccountPicker
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
@@ -27,7 +31,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.data.cloud.SupabaseAccountInfo
 import com.example.data.cloud.SupabaseAuthRepository
@@ -42,12 +45,30 @@ fun SupabaseAccountCard() {
     val scope = rememberCoroutineScope()
 
     var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var otp by remember { mutableStateOf("") }
+    var otpSent by remember { mutableStateOf(false) }
     var account by remember { mutableStateOf<SupabaseAccountInfo?>(null) }
-    var pendingConfirmationEmail by remember { mutableStateOf<String?>(null) }
     var isBusy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var messageIsError by remember { mutableStateOf(false) }
+
+    val accountPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val chosenEmail = result.data
+                ?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+                ?.trim()
+                .orEmpty()
+            if (chosenEmail.isNotBlank()) {
+                email = chosenEmail
+                otp = ""
+                otpSent = false
+                message = "تم اختيار $chosenEmail. أرسل رمز التحقق للمتابعة."
+                messageIsError = false
+            }
+        }
+    }
 
     LaunchedEffect(repository) {
         if (repository.isConfigured) {
@@ -74,7 +95,7 @@ fun SupabaseAccountCard() {
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "أنشئ حساباً أو سجّل الدخول بالبريد وكلمة المرور. هذه الخطوة تجهّز هوية المستخدم فقط؛ مشاركة المخزون والعمليات بين المواقع ستُفعّل بعد ربط العضويات والصلاحيات بالخادم.",
+                text = "اختر حساب Google الموجود على هاتفك، ثم أدخل رمز التحقق المكوّن من 6 أرقام الذي سنرسله إلى البريد. لا تحتاج إلى كلمة مرور.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -97,8 +118,9 @@ fun SupabaseAccountCard() {
                             isBusy = true
                             repository.signOut()
                             account = null
-                            pendingConfirmationEmail = null
-                            password = ""
+                            email = ""
+                            otp = ""
+                            otpSent = false
                             message = "تم تسجيل الخروج من هذا الجهاز."
                             messageIsError = false
                             isBusy = false
@@ -110,101 +132,108 @@ fun SupabaseAccountCard() {
                     Text("تسجيل الخروج")
                 }
             } else {
+                OutlinedButton(
+                    onClick = {
+                        val intent = AccountPicker.newChooseAccountIntent(
+                            null,
+                            null,
+                            arrayOf("com.google"),
+                            false,
+                            null,
+                            null,
+                            null,
+                            null
+                        )
+                        accountPicker.launch(intent)
+                    },
+                    enabled = !isBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("اختيار حساب Google من الهاتف")
+                }
+
                 OutlinedTextField(
                     value = email,
                     onValueChange = {
                         email = it
+                        otp = ""
+                        otpSent = false
                         message = null
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("البريد الإلكتروني") },
+                    label = { Text("البريد الإلكتروني المختار") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
                 )
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = {
-                        password = it
-                        message = null
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("كلمة المرور") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
-                )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                if (!otpSent) {
                     Button(
                         onClick = {
                             scope.launch {
                                 isBusy = true
                                 message = null
-                                val result = repository.signIn(email, password)
-                                result.onSuccess {
-                                    account = it
-                                    password = ""
-                                    pendingConfirmationEmail = null
-                                    message = "تم تسجيل الدخول بنجاح."
+                                repository.sendEmailOtp(email).onSuccess {
+                                    otpSent = true
+                                    otp = ""
+                                    message = "أرسلنا رمزاً من 6 أرقام إلى $email. تحقق من الوارد والرسائل غير المرغوب فيها."
                                     messageIsError = false
                                 }.onFailure {
-                                    message = it.localizedMessage ?: "تعذر تسجيل الدخول."
+                                    message = it.localizedMessage ?: "تعذر إرسال رمز التحقق."
                                     messageIsError = true
                                 }
                                 isBusy = false
                             }
                         },
-                        enabled = !isBusy && email.isNotBlank() && password.isNotBlank(),
-                        modifier = Modifier.weight(1f)
+                        enabled = !isBusy && email.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("تسجيل الدخول")
+                        Text("إرسال رمز التحقق إلى البريد")
                     }
-                    OutlinedButton(
+                } else {
+                    OutlinedTextField(
+                        value = otp,
+                        onValueChange = { value ->
+                            otp = value.filter(Char::isDigit).take(6)
+                            message = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("رمز التحقق المكوّن من 6 أرقام") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    Button(
                         onClick = {
                             scope.launch {
                                 isBusy = true
                                 message = null
-                                val result = repository.signUp(email, password)
-                                result.onSuccess { outcome ->
-                                    if (outcome.account != null) {
-                                        account = outcome.account
-                                        password = ""
-                                        message = "تم إنشاء الحساب وتسجيل الدخول."
-                                        messageIsError = false
-                                    } else {
-                                        pendingConfirmationEmail = email.trim()
-                                        password = ""
-                                        message = "تم إنشاء الحساب. افتح رسالة التأكيد التي أُرسلت إلى بريدك ثم ارجع لتسجيل الدخول."
-                                        messageIsError = false
-                                    }
+                                repository.verifyEmailOtp(email, otp).onSuccess {
+                                    account = it
+                                    otp = ""
+                                    otpSent = false
+                                    message = "تم التحقق من البريد وتسجيل الدخول بنجاح."
+                                    messageIsError = false
                                 }.onFailure {
-                                    message = it.localizedMessage ?: "تعذر إنشاء الحساب."
+                                    message = it.localizedMessage ?: "رمز التحقق غير صحيح أو انتهت صلاحيته."
                                     messageIsError = true
                                 }
                                 isBusy = false
                             }
                         },
-                        enabled = !isBusy && email.isNotBlank() && password.isNotBlank(),
-                        modifier = Modifier.weight(1f)
+                        enabled = !isBusy && otp.length == 6,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("إنشاء حساب")
+                        Text("تأكيد الرمز وتسجيل الدخول")
                     }
-                }
-
-                if (pendingConfirmationEmail != null) {
                     OutlinedButton(
                         onClick = {
                             scope.launch {
                                 isBusy = true
-                                val result = repository.resendSignupConfirmation(pendingConfirmationEmail.orEmpty())
-                                result.onSuccess {
-                                    message = "تم طلب إعادة إرسال رسالة التأكيد."
+                                repository.sendEmailOtp(email).onSuccess {
+                                    otp = ""
+                                    message = "تم طلب إرسال رمز جديد. تحقق من بريدك."
                                     messageIsError = false
                                 }.onFailure {
-                                    message = it.localizedMessage ?: "تعذر إعادة إرسال رسالة التأكيد."
+                                    message = it.localizedMessage ?: "تعذر إعادة إرسال الرمز."
                                     messageIsError = true
                                 }
                                 isBusy = false
@@ -213,15 +242,24 @@ fun SupabaseAccountCard() {
                         enabled = !isBusy,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("إعادة إرسال رسالة التأكيد")
+                        Text("إعادة إرسال الرمز")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            otpSent = false
+                            otp = ""
+                            message = null
+                        },
+                        enabled = !isBusy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("اختيار بريد آخر")
                     }
                 }
             }
 
             if (isBusy) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     Text("جارٍ الاتصال...")
                 }
