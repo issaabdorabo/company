@@ -77,22 +77,47 @@ class SupabaseAuthRepository(
             }
         }
 
-    suspend fun signIn(email: String, password: String): Result<SupabaseAccountInfo> =
+    /**
+     * Sends a six-digit email OTP to an existing account.
+     * create_user=false prevents silently creating duplicate/unrequested accounts.
+     */
+    suspend fun sendEmailOtp(email: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
                 requireConfigured()
                 val cleanEmail = email.trim().lowercase()
-                require(cleanEmail.isNotBlank()) { "يرجى إدخال البريد الإلكتروني." }
-                require(password.isNotBlank()) { "يرجى إدخال كلمة المرور." }
-
-                val response = postAuth(
-                    endpoint = "token?grant_type=password",
+                require(cleanEmail.matches(Regex("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\\\.[A-Z]{2,}$", RegexOption.IGNORE_CASE))) {
+                    "يرجى اختيار بريد إلكتروني صحيح."
+                }
+                postAuth(
+                    endpoint = "otp",
                     payload = JSONObject()
                         .put("email", cleanEmail)
-                        .put("password", password)
+                        .put("create_user", false)
+                )
+                Unit
+            }
+        }
+
+    /** Verifies the six-digit email OTP and stores the returned encrypted session. */
+    suspend fun verifyEmailOtp(email: String, code: String): Result<SupabaseAccountInfo> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                requireConfigured()
+                val cleanEmail = email.trim().lowercase()
+                val cleanCode = code.trim()
+                require(cleanEmail.isNotBlank()) { "البريد الإلكتروني غير صالح." }
+                require(cleanCode.matches(Regex("^\\\\d{6}$"))) { "أدخل رمز التحقق المكوّن من 6 أرقام." }
+
+                val response = postAuth(
+                    endpoint = "verify",
+                    payload = JSONObject()
+                        .put("email", cleanEmail)
+                        .put("token", cleanCode)
+                        .put("type", "email")
                 )
                 val session = persistSessionIfPresent(response, fallback = null)
-                    ?: throw IOException("لم تُرجع خدمة الدخول جلسة صالحة.")
+                    ?: throw IOException("لم تُرجع خدمة التحقق جلسة صالحة.")
                 session.toAccountInfo()
             }
         }
