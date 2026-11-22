@@ -2293,7 +2293,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 jsonRes.onSuccess { rawJson ->
-                    val ok = repository.restoreBackupReplacingExisting(rawJson)
+                    val plainJson = CloudBackupCrypto.decryptOrLegacy(rawJson, backupPassphrase.toCharArray())
+                    val ok = repository.restoreBackupReplacingExisting(plainJson)
                     if (ok) {
                         notifyAndPropagate(
                             action = DeviceAction.BACKUP_RESTORE,
