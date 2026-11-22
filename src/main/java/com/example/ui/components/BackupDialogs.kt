@@ -41,6 +41,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -321,7 +322,7 @@ fun CloudBackupRadioPickerDialog(
 @Composable
 fun CreateCloudBackupDialog(
     linkedEmail: String,
-    onConfirmUpload: (name: String) -> Unit,
+    onConfirmUpload: (name: String, passphrase: String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var cloudBackupName by remember {
@@ -329,6 +330,9 @@ fun CreateCloudBackupDialog(
         mutableStateOf("نسخة $dateStr")
     }
     var nameError by remember { mutableStateOf<String?>(null) }
+    var backupPassphrase by remember { mutableStateOf("") }
+    var confirmPassphrase by remember { mutableStateOf("") }
+    var passwordError by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -379,8 +383,29 @@ fun CreateCloudBackupDialog(
                         .testTag("cloud_backup_name_input"),
                     singleLine = true
                 )
+                OutlinedTextField(
+                    value = backupPassphrase,
+                    onValueChange = { backupPassphrase = it; passwordError = null },
+                    label = { Text("كلمة مرور تشفير النسخة *") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    isError = passwordError != null,
+                    modifier = Modifier.fillMaxWidth().testTag("cloud_backup_password_input")
+                )
+                OutlinedTextField(
+                    value = confirmPassphrase,
+                    onValueChange = { confirmPassphrase = it; passwordError = null },
+                    label = { Text("تأكيد كلمة المرور *") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    isError = passwordError != null,
+                    modifier = Modifier.fillMaxWidth().testTag("cloud_backup_password_confirm_input")
+                )
+                if (passwordError != null) {
+                    Text(passwordError!!, color = DangerRed, style = MaterialTheme.typography.labelSmall)
+                }
                 Text(
-                    text = "سيتم حفظ هذه النسخة في Google Drive الخاص بالحساب أعلاه ولن تتأثر بحذف التطبيق.",
+                    text = "ستُشفّر البيانات قبل رفعها. احتفظ بكلمة المرور؛ لا يمكن استعادة النسخة المشفّرة بدونها، ولن يحفظها التطبيق أو Google Drive.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -392,8 +417,12 @@ fun CreateCloudBackupDialog(
                     val trimmedName = cloudBackupName.trim()
                     if (trimmedName.isEmpty()) {
                         nameError = "يرجى إدخال اسم النسخة السحابية"
+                    } else if (backupPassphrase.length < 10) {
+                        passwordError = "كلمة المرور يجب ألا تقل عن 10 أحرف"
+                    } else if (backupPassphrase != confirmPassphrase) {
+                        passwordError = "كلمتا المرور غير متطابقتين"
                     } else {
-                        onConfirmUpload(trimmedName)
+                        onConfirmUpload(trimmedName, backupPassphrase)
                     }
                 },
                 shape = RoundedCornerShape(50),
@@ -703,6 +732,44 @@ fun LocalBackupSelectorDialog(
             ) {
                 Text("إغلاق")
             }
+        }
+    )
+}
+
+
+@Composable
+fun CloudBackupPassphraseDialog(
+    backupName: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var passphrase by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        title = {
+            Text("كلمة مرور النسخة الاحتياطية", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("أدخل كلمة المرور لفك تشفير النسخة ($backupName). إذا كانت نسخة قديمة غير مشفّرة، اترك الحقل فارغاً.")
+                OutlinedTextField(
+                    value = passphrase,
+                    onValueChange = { passphrase = it },
+                    label = { Text("كلمة المرور") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("cloud_restore_password_input")
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(passphrase) }, shape = RoundedCornerShape(50)) {
+                Text("متابعة الاستعادة")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("إلغاء") }
         }
     )
 }
