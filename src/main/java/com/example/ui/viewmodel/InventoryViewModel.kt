@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.InventoryApp
 import com.example.data.cloud.CloudBackupItem
+import com.example.data.cloud.CloudBackupCrypto
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
 import com.example.data.cloud.DeviceRole
@@ -1937,7 +1938,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _isCloudBackupBusy.value = true
             _cloudSyncOperationLabel.value = "جاري استرداد البيانات من الملف..."
             try {
-                val ok = repository.restoreBackupReplacingExisting(rawJson)
+                val plainJson = CloudBackupCrypto.decryptOrLegacy(rawJson, backupPassphrase.toCharArray())
+                    val ok = repository.restoreBackupReplacingExisting(plainJson)
                 if (ok) {
                     notifyAndPropagate(
                         action = DeviceAction.BACKUP_RESTORE,
@@ -2168,7 +2170,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun createCloudBackup(context: Context, name: String) {
+    fun createCloudBackup(context: Context, name: String, backupPassphrase: String) {
         if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
@@ -2197,7 +2199,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         warehouseCount = snapshot.warehouseCount,
                         itemCount = snapshot.itemCount,
                         voucherCount = snapshot.voucherCount,
-                        backupJson = snapshot.backupJson
+                        backupJson = CloudBackupCrypto.encrypt(snapshot.backupJson, backupPassphrase.toCharArray())
                     )
                 } ?: return@launch
 
@@ -2266,7 +2268,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun restoreCloudBackup(context: Context, item: CloudBackupItem) {
+    fun restoreCloudBackup(context: Context, item: CloudBackupItem, backupPassphrase: String) {
         if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
