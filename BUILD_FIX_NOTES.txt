@@ -1,8 +1,0 @@
-Build error fixes applied:
-- Added GoogleApiHttpException and parseGoogleApiError in the cloud package.
-- Added the missing Compose Email icon import used by the cloud-backup account label.
-- Kept Google Drive authorization scoped to drive.appdata; no Gmail scopes or email OTP flow are present.
-
-Validation note:
-- The reported unresolved Kotlin references were checked against the source tree and fixed.
-- A full Gradle build was not run in this environment because this archive does not contain gradlew and no system Gradle installation is available. Run the existing GitHub Actions workflow to perform the authoritative build.
