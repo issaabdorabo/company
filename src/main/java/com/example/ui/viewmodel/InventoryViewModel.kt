@@ -2069,10 +2069,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
         when (action) {
-            is PendingPostConsentAction.CreateBackup -> createCloudBackup(context, action.backupName)
+            is PendingPostConsentAction.CreateBackup -> createCloudBackup(context, action.backupName, action.passphrase)
             is PendingPostConsentAction.ListBackups -> refreshCloudBackupsFromDrive(context, action.silent)
             is PendingPostConsentAction.RenameBackup -> renameCloudBackup(context, action.item, action.newName)
-            is PendingPostConsentAction.RestoreBackup -> restoreCloudBackup(context, action.item)
+            is PendingPostConsentAction.RestoreBackup -> restoreCloudBackup(context, action.item, action.passphrase)
             is PendingPostConsentAction.DeleteBackup -> deleteCloudBackup(context, action.item)
             null -> Unit
         }
@@ -2189,7 +2189,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val res = executeWithGoogleToken(
                     context = context,
                     email = email,
-                    postConsentAction = PendingPostConsentAction.CreateBackup(email, cleanName)
+                    postConsentAction = PendingPostConsentAction.CreateBackup(email, cleanName, backupPassphrase)
                 ) { token ->
                     cloudBackupRepo.createCloudBackup(
                         accessToken = token,
@@ -2286,7 +2286,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     executeWithGoogleToken(
                         context = context,
                         email = email,
-                        postConsentAction = PendingPostConsentAction.RestoreBackup(email, item)
+                        postConsentAction = PendingPostConsentAction.RestoreBackup(email, item, backupPassphrase)
                     ) { token ->
                         cloudBackupRepo.downloadBackupJson(token, item.id)
                     } ?: return@launch
@@ -2353,10 +2353,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private sealed interface PendingPostConsentAction {
-        data class CreateBackup(val email: String, val backupName: String) : PendingPostConsentAction
+        data class CreateBackup(val email: String, val backupName: String, val passphrase: String) : PendingPostConsentAction
         data class ListBackups(val email: String, val silent: Boolean) : PendingPostConsentAction
         data class RenameBackup(val email: String, val item: CloudBackupItem, val newName: String) : PendingPostConsentAction
-        data class RestoreBackup(val email: String, val item: CloudBackupItem) : PendingPostConsentAction
+        data class RestoreBackup(val email: String, val item: CloudBackupItem, val passphrase: String) : PendingPostConsentAction
         data class DeleteBackup(val email: String, val item: CloudBackupItem) : PendingPostConsentAction
     }
 
