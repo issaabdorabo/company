@@ -19,6 +19,12 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Public Supabase client configuration only.
+    val supabaseUrl = (System.getenv("SUPABASE_URL") ?: "").trim()
+    val supabaseKey = (System.getenv("SUPABASE_PUBLISHABLE_KEY") ?: "").trim()
+    buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+    buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"$supabaseKey\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

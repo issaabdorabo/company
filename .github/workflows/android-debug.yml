@@ -56,6 +56,9 @@ jobs:
 
       - name: Build APK (retry Maven rate limits)
         shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           cd "$PROJECT_DIR"
           set +e
