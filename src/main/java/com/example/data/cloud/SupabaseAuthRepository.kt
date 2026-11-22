@@ -122,6 +122,32 @@ class SupabaseAuthRepository(
             }
         }
 
+
+    /**
+     * Exchanges a Google ID token for a Supabase session.
+     * The raw nonce is sent to Supabase; Google receives only its SHA-256 hash.
+     */
+    suspend fun signInWithGoogleIdToken(
+        idToken: String,
+        rawNonce: String
+    ): Result<SupabaseAccountInfo> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireConfigured()
+            require(idToken.isNotBlank()) { "لم نستلم رمز هوية من Google." }
+            require(rawNonce.isNotBlank()) { "تعذر إنشاء قيمة الحماية لتسجيل الدخول." }
+            val response = postAuth(
+                endpoint = "token?grant_type=id_token",
+                payload = JSONObject()
+                    .put("provider", "google")
+                    .put("id_token", idToken)
+                    .put("nonce", rawNonce)
+            )
+            val session = persistSessionIfPresent(response, fallback = null)
+                ?: throw IOException("لم تُرجع Supabase جلسة تسجيل دخول صالحة.")
+            session.toAccountInfo()
+        }
+    }
+
     suspend fun resendSignupConfirmation(email: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
