@@ -98,6 +98,38 @@ jobs:
           echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
           echo "APK found: $APK_PATH"
 
+      - name: Extract APK Signing Fingerprints
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          APKSIGNER=$(find "$SDK_ROOT/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1)
+
+          if [ -z "$APKSIGNER" ]; then
+            echo "ERROR: apksigner was not found."
+            echo "Android SDK: $SDK_ROOT"
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "APK SIGNATURE INFORMATION"
+          echo "======================================"
+
+          "$APKSIGNER" verify --verbose --print-certs "$APK_PATH"
+
+          echo "======================================"
+          echo "APK PACKAGE INFORMATION"
+          echo "======================================"
+
+          AAPT=$(find "$SDK_ROOT/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -n 1)
+
+          if [ -n "$AAPT" ]; then
+            "$AAPT" dump badging "$APK_PATH" | head -n 1
+          fi
+
+          echo "======================================"
+          echo "FINGERPRINT EXTRACTION COMPLETED"
+          echo "======================================"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
