@@ -16,3 +16,10 @@
 # Retain source line numbers for useful crash diagnostics without retaining source file names.
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+
+
+# Keep Credential Manager Play Services bridge classes for native Google sign-in.
+-if class androidx.credentials.CredentialManager
+-keep class androidx.credentials.playservices.** {
+    *;
+}
