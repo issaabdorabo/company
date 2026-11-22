@@ -1,25 +1,21 @@
 package com.example.ui.components
 
-import android.accounts.AccountManager
-import android.app.Activity
-import com.google.android.gms.common.AccountPicker
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialException
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,11 +26,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.data.cloud.SupabaseAccountInfo
 import com.example.data.cloud.SupabaseAuthRepository
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.launch
+import java.security.MessageDigest
+import java.util.UUID
 
 @Composable
 fun SupabaseAccountCard() {
@@ -44,31 +44,10 @@ fun SupabaseAccountCard() {
     }
     val scope = rememberCoroutineScope()
 
-    var email by remember { mutableStateOf("") }
-    var otp by remember { mutableStateOf("") }
-    var otpSent by remember { mutableStateOf(false) }
     var account by remember { mutableStateOf<SupabaseAccountInfo?>(null) }
     var isBusy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var messageIsError by remember { mutableStateOf(false) }
-
-    val accountPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val chosenEmail = result.data
-                ?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
-                ?.trim()
-                .orEmpty()
-            if (chosenEmail.isNotBlank()) {
-                email = chosenEmail
-                otp = ""
-                otpSent = false
-                message = "تم اختيار $chosenEmail. أرسل رمز التحقق للمتابعة."
-                messageIsError = false
-            }
-        }
-    }
 
     LaunchedEffect(repository) {
         if (repository.isConfigured) {
@@ -79,6 +58,70 @@ fun SupabaseAccountCard() {
                     message = error.localizedMessage ?: "تعذر تجديد جلسة الحساب حالياً."
                     messageIsError = true
                 }
+        }
+    }
+
+    fun signInWithGoogle() {
+        scope.launch {
+            isBusy = true
+            message = null
+            try {
+                val webClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID.trim()
+                check(webClientId.endsWith(".apps.googleusercontent.com")) {
+                    "لم تتم إضافة GOOGLE_WEB_CLIENT_ID إلى أسرار GitHub Actions بعد."
+                }
+
+                val rawNonce = UUID.randomUUID().toString()
+                val hashedNonce = MessageDigest.getInstance("SHA-256")
+                    .digest(rawNonce.toByteArray(Charsets.UTF_8))
+                    .joinToString("") { byte -> "%02x".format(byte) }
+
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId(webClientId)
+                    .setNonce(hashedNonce)
+                    .build()
+
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(googleIdOption)
+                    .build()
+
+                val credentialManager = CredentialManager.create(context)
+                val result = credentialManager.getCredential(
+                    context = context,
+                    request = request
+                )
+                val credential = result.credential
+                check(
+                    credential is CustomCredential &&
+                        credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                ) {
+                    "لم يُرجع Google بيانات اعتماد صالحة."
+                }
+
+                val googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                repository.signInWithGoogleIdToken(
+                    idToken = googleCredential.idToken,
+                    rawNonce = rawNonce
+                ).onSuccess {
+                    account = it
+                    message = "تم تسجيل الدخول باستخدام Google بنجاح."
+                    messageIsError = false
+                }.onFailure {
+                    message = it.localizedMessage ?: "تعذر التحقق من حساب Google لدى Supabase."
+                    messageIsError = true
+                }
+            } catch (error: GetCredentialException) {
+                message = when (error) {
+                    else -> error.localizedMessage ?: "تم إلغاء اختيار حساب Google أو تعذر الحصول على بياناته."
+                }
+                messageIsError = true
+            } catch (error: Exception) {
+                message = error.localizedMessage ?: "حدث خطأ أثناء تسجيل الدخول باستخدام Google."
+                messageIsError = true
+            } finally {
+                isBusy = false
+            }
         }
     }
 
@@ -95,7 +138,7 @@ fun SupabaseAccountCard() {
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "اختر حساب Google الموجود على هاتفك، ثم أدخل رمز التحقق المكوّن من 6 أرقام الذي سنرسله إلى البريد. لا تحتاج إلى كلمة مرور.",
+                text = "سجّل الدخول مباشرة بحساب Google. سيتحقق Google من هويتك ثم ينشئ Supabase جلسة آمنة دون كلمة مرور أو رمز بريد.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -118,9 +161,6 @@ fun SupabaseAccountCard() {
                             isBusy = true
                             repository.signOut()
                             account = null
-                            email = ""
-                            otp = ""
-                            otpSent = false
                             message = "تم تسجيل الخروج من هذا الجهاز."
                             messageIsError = false
                             isBusy = false
@@ -132,136 +172,26 @@ fun SupabaseAccountCard() {
                     Text("تسجيل الخروج")
                 }
             } else {
-                OutlinedButton(
-                    onClick = {
-                        val intent = AccountPicker.newChooseAccountIntent(
-                            null,
-                            null,
-                            arrayOf("com.google"),
-                            false,
-                            null,
-                            null,
-                            null,
-                            null
-                        )
-                        accountPicker.launch(intent)
-                    },
-                    enabled = !isBusy,
+                Button(
+                    onClick = { signInWithGoogle() },
+                    enabled = !isBusy && BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("اختيار حساب Google من الهاتف")
+                    Text("تسجيل الدخول باستخدام Google")
                 }
-
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = {
-                        email = it
-                        otp = ""
-                        otpSent = false
-                        message = null
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("البريد الإلكتروني المختار") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
-                )
-
-                if (!otpSent) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                isBusy = true
-                                message = null
-                                repository.sendEmailOtp(email).onSuccess {
-                                    otpSent = true
-                                    otp = ""
-                                    message = "أرسلنا رمزاً من 6 أرقام إلى $email. تحقق من الوارد والرسائل غير المرغوب فيها."
-                                    messageIsError = false
-                                }.onFailure {
-                                    message = it.localizedMessage ?: "تعذر إرسال رمز التحقق."
-                                    messageIsError = true
-                                }
-                                isBusy = false
-                            }
-                        },
-                        enabled = !isBusy && email.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("إرسال رمز التحقق إلى البريد")
-                    }
-                } else {
-                    OutlinedTextField(
-                        value = otp,
-                        onValueChange = { value ->
-                            otp = value.filter(Char::isDigit).take(6)
-                            message = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("رمز التحقق المكوّن من 6 أرقام") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                if (BuildConfig.GOOGLE_WEB_CLIENT_ID.isBlank()) {
+                    Text(
+                        text = "يلزم إعداد Google OAuth وإضافة GOOGLE_WEB_CLIENT_ID إلى GitHub Actions قبل استخدام الزر.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
                     )
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                isBusy = true
-                                message = null
-                                repository.verifyEmailOtp(email, otp).onSuccess {
-                                    account = it
-                                    otp = ""
-                                    otpSent = false
-                                    message = "تم التحقق من البريد وتسجيل الدخول بنجاح."
-                                    messageIsError = false
-                                }.onFailure {
-                                    message = it.localizedMessage ?: "رمز التحقق غير صحيح أو انتهت صلاحيته."
-                                    messageIsError = true
-                                }
-                                isBusy = false
-                            }
-                        },
-                        enabled = !isBusy && otp.length == 6,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("تأكيد الرمز وتسجيل الدخول")
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            scope.launch {
-                                isBusy = true
-                                repository.sendEmailOtp(email).onSuccess {
-                                    otp = ""
-                                    message = "تم طلب إرسال رمز جديد. تحقق من بريدك."
-                                    messageIsError = false
-                                }.onFailure {
-                                    message = it.localizedMessage ?: "تعذر إعادة إرسال الرمز."
-                                    messageIsError = true
-                                }
-                                isBusy = false
-                            }
-                        },
-                        enabled = !isBusy,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("إعادة إرسال الرمز")
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            otpSent = false
-                            otp = ""
-                            message = null
-                        },
-                        enabled = !isBusy,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("اختيار بريد آخر")
-                    }
                 }
             }
 
             if (isBusy) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Text("جارٍ الاتصال...")
+                    Text("جارٍ التحقق من حساب Google...")
                 }
             }
 
