@@ -19,6 +19,14 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Public Supabase client configuration only.
+    val supabaseUrl = (System.getenv("SUPABASE_URL") ?: "").trim()
+    val supabaseKey = (System.getenv("SUPABASE_PUBLISHABLE_KEY") ?: "").trim()
+    val googleWebClientId = (System.getenv("GOOGLE_WEB_CLIENT_ID") ?: "").trim()
+    buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+    buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"$supabaseKey\"")
+    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -36,7 +44,9 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      // Enable R8 shrinking, optimization and obfuscation for release APKs.
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -99,9 +109,9 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
 
-  // implementation(libs.androidx.credentials)
-  // implementation(libs.androidx.credentials.play.services)
-  // implementation(libs.googleid)
+  implementation(libs.androidx.credentials)
+  implementation(libs.androidx.credentials.play.services)
+  implementation(libs.googleid)
   implementation(libs.play.services.auth)
   implementation(libs.zxing.core)
   implementation(libs.kotlinx.coroutines.android)

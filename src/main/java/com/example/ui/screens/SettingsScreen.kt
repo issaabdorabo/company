@@ -77,6 +77,7 @@ import com.example.BuildConfig
 import com.example.data.cloud.CloudBackupItem
 import com.example.data.model.BackupRecord
 import com.example.ui.components.CloudBackupRadioPickerDialog
+import com.example.ui.components.CloudBackupPassphraseDialog
 import com.example.ui.components.CloudSyncAndAuthCard
 import com.example.ui.components.CreateCloudBackupDialog
 import com.example.ui.components.CreateLocalBackupDialog
@@ -834,8 +835,8 @@ fun SettingsScreen(
     if (showCreateCloudBackupDialog) {
         CreateCloudBackupDialog(
             linkedEmail = verifiedGoogleEmail,
-            onConfirmUpload = { chosenName ->
-                viewModel.createCloudBackup(context, chosenName)
+            onConfirmUpload = { chosenName, passphrase ->
+                viewModel.createCloudBackup(context, chosenName, passphrase)
                 showCreateCloudBackupDialog = false
             },
             onDismiss = { showCreateCloudBackupDialog = false }
@@ -872,15 +873,12 @@ fun SettingsScreen(
         )
     }
 
-    // Confirm Restore Specific Cloud Backup
+    // Request the backup passphrase before attempting decryption or database replacement.
     cloudBackupToRestore?.let { target ->
-        SimpleConfirmDialog(
-            title = "تأكيد استعادة النسخة السحابية",
-            message = "تحذير: هل تريد استعادة النسخة السحابية \"${target.name}\"؟\nسيتم استبدال كافة البيانات الحالية بالمخازن والأصناف والسندات المحفوظة في هذه النسخة.",
-            confirmButtonText = "نعم، استعد هذه النسخة",
-            isDestructive = true,
-            onConfirm = {
-                viewModel.restoreCloudBackup(context, target)
+        CloudBackupPassphraseDialog(
+            backupName = target.name,
+            onConfirm = { passphrase ->
+                viewModel.restoreCloudBackup(context, target, passphrase)
                 cloudBackupToRestore = null
             },
             onDismiss = { cloudBackupToRestore = null }
