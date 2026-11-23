@@ -584,6 +584,19 @@ fun MultiDeviceControlSection(
                         }
                     }
 
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "تنبيه: هذا الجهاز فرعي. صلاحيات الأصناف والمخازن لا تمنحه حق إنشاء أجهزة فرعية أو إدارة روابط الأجهزة؛ هذه الإدارة حصرية للجهاز الرئيسي.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+
                     // Granted permissions summary
                     Surface(
                         shape = RoundedCornerShape(10.dp),
