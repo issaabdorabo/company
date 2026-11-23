@@ -75,6 +75,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.data.cloud.CloudBackupItem
+import com.example.data.cloud.SupabaseAuthClient
 import com.example.data.model.BackupRecord
 import com.example.ui.components.CloudBackupRadioPickerDialog
 import com.example.ui.components.CloudSyncAndAuthCard
@@ -340,6 +341,37 @@ fun SettingsScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("النسخ الاحتياطي والتصدير غير متاح", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
                         Text("لم يمنحك المستخدم الرئيسي صلاحية النسخ الاحتياطي المحلي أو السحابي أو تصدير واستيراد JSON.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        // Supabase account used for online collaboration
+        item {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("حساب التعاون عبر الإنترنت", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "اربط التطبيق بحساب Google لتفعيل هوية المستخدم والربط السحابي بين الأجهزة. هذا الحساب مستقل عن حساب Google Drive للنسخ الاحتياطي.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                runCatching { SupabaseAuthClient.signInWithGoogle() }
+                                    .onFailure { error ->
+                                        Toast.makeText(context, "تعذر بدء تسجيل الدخول: ${error.localizedMessage ?: "خطأ غير معروف"}", Toast.LENGTH_LONG).show()
+                                    }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("تسجيل الدخول باستخدام Google")
                     }
                 }
             }
