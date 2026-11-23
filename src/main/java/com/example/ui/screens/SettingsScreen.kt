@@ -409,32 +409,55 @@ fun SettingsScreen(
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (internetAvailable) SuccessGreen.copy(alpha = 0.12f) else WarningOrange.copy(alpha = 0.12f)
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    runCatching { SupabaseAuthClient.signInWithGoogle(context) }
+                                        .onFailure { error ->
+                                            Toast.makeText(context, "تعذر بدء تسجيل الدخول: ${error.localizedMessage ?: "خطأ غير معروف"}", Toast.LENGTH_LONG).show()
+                                        }
+                                }
+                            },
+                            enabled = internetAvailable && !isSupabaseAuthenticated,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
                         ) {
                             Text(
-                                if (internetAvailable) "متصل بالإنترنت" else "لا يوجد اتصال بالإنترنت",
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                color = if (internetAvailable) SuccessGreen else WarningOrange,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold
+                                if (isSupabaseAuthenticated) "تم ربط Google" else "تسجيل الدخول باستخدام Google",
+                                fontSize = 12.sp
                             )
                         }
-                        Surface(
-                            shape = CircleShape,
-                            color = if (isSupabaseAuthenticated) SuccessGreen.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
+                        Column(
+                            modifier = Modifier.weight(0.9f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text(
-                                if (isSupabaseAuthenticated) "Supabase مرتبط" else "Supabase غير مرتبط",
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                color = if (isSupabaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = if (internetAvailable) SuccessGreen.copy(alpha = 0.12f) else WarningOrange.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    if (internetAvailable) "الإنترنت متصل" else "الإنترنت غير متصل",
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    color = if (internetAvailable) SuccessGreen else WarningOrange,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Surface(
+                                shape = CircleShape,
+                                color = if (isSupabaseAuthenticated) SuccessGreen.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    if (isSupabaseAuthenticated) "Supabase مرتبط" else "Supabase غير مرتبط",
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    color = if (isSupabaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                     Text(
