@@ -38,9 +38,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VpnKey
-import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -105,7 +103,6 @@ fun MultiDeviceControlSection(
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val availableWarehouses by viewModel.warehouses.collectAsState()
     val serverStatus by viewModel.serverStatus.collectAsState()
-    val discoveredMainDevices by viewModel.discoveredMainDevices.collectAsState()
     val createdCredentials by viewModel.createdDeviceCredentials.collectAsState()
     val sessionPairingCredentials by viewModel.sessionPairingCredentials.collectAsState()
     val isPairingInProgress by viewModel.isPairingInProgress.collectAsState()
@@ -432,67 +429,6 @@ fun MultiDeviceControlSection(
                         Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("مسح باركود الربط بالكاميرا (ربط تلقائي فوري)", fontWeight = FontWeight.Bold)
-                    }
-
-                    // Nearby Auto-Discovered Main Devices
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = InfoBlue.copy(alpha = 0.08f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.WifiFind,
-                                    contentDescription = null,
-                                    tint = InfoBlue,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "الأجهزة الرئيسية المكتشفة تلقائياً على الشبكة",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = InfoBlue
-                                )
-                            }
-
-                            if (discoveredMainDevices.isEmpty()) {
-                                Text(
-                                    text = "جاري البحث على نفس شبكة Wi-Fi / نقطة الاتصال... يمكنك أيضاً إدخال عنوان IP والرمز يدوياً بالأسفل.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    discoveredMainDevices.forEach { found ->
-                                        AssistChip(
-                                            onClick = {
-                                                hostInput = found.hostAddress
-                                                codeInput = found.workspaceCode
-                                            },
-                                            label = {
-                                                Text("${found.workspaceCode} (${found.hostAddress})")
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    Icons.Default.Link,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            },
-                                            modifier = Modifier.testTag("discovered_main_chip_${found.workspaceCode}")
-                                        )
-                                    }
-                                }
-                            }
-                        }
                     }
 
                     OutlinedTextField(
