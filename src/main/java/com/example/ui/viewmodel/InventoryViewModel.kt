@@ -12,7 +12,6 @@ import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
 import com.example.data.cloud.DeviceRole
-import com.example.data.cloud.DiscoveredMainDevice
 import com.example.data.cloud.GoogleApiHttpException
 import com.example.data.cloud.GoogleOAuthHelper
 import com.example.data.cloud.LinkedSubDevice
@@ -39,7 +38,6 @@ import com.example.data.model.WarehouseParty
 import com.example.data.repository.StockSnapshot
 import com.example.data.sync.LocalNetworkSyncClient
 import com.example.data.sync.LocalNetworkSyncServer
-import com.example.data.sync.NsdDiscoveryHelper
 import com.example.data.sync.SyncApiException
 import com.example.ui.theme.AppTheme
 import com.example.util.AppNotificationManager
@@ -74,7 +72,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val notificationManager = AppNotificationManager(application)
 
     private val syncClient = LocalNetworkSyncClient()
-    private val nsdHelper = NsdDiscoveryHelper(application)
 
     private val syncServer = LocalNetworkSyncServer(
         scope = viewModelScope,
@@ -166,8 +163,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     val serverStatus: StateFlow<LocalServerStatus> = syncServer.status
 
-    private val _discoveredMainDevices = MutableStateFlow<List<DiscoveredMainDevice>>(emptyList())
-    val discoveredMainDevices: StateFlow<List<DiscoveredMainDevice>> = _discoveredMainDevices.asStateFlow()
 
     private val _createdDeviceCredentials = MutableStateFlow<CreatedDeviceCredentials?>(null)
     val createdDeviceCredentials: StateFlow<CreatedDeviceCredentials?> = _createdDeviceCredentials.asStateFlow()
@@ -330,7 +325,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var subSyncJob: Job? = null
     private val subSyncMutex = Mutex()
-    private var nsdDiscoveryJob: Job? = null
 
     init {
         startMultiDeviceCoordinator()
@@ -349,32 +343,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 if (state.role == DeviceRole.MAIN) {
                     subSyncJob?.cancel()
                     subSyncJob = null
-                    nsdDiscoveryJob?.cancel()
-                    nsdDiscoveryJob = null
-                    _discoveredMainDevices.value = emptyList()
 
                     val code = preferences.ensureWorkspaceCode()
                     val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-                    if (port > 0) {
-                        nsdHelper.registerMainService(port, code)
-                    }
                 } else {
                     syncServer.stop()
-                    nsdHelper.unregisterMainService()
-
                     if (state.subToken.isBlank() || state.permissions.isKicked) {
                         subSyncJob?.cancel()
                         subSyncJob = null
-                        if (nsdDiscoveryJob?.isActive != true) {
-                            nsdDiscoveryJob = launch {
-                                nsdHelper.observeDiscoveredMainDevices().collect { found ->
-                                    _discoveredMainDevices.value = found
-                                }
-                            }
-                        }
                     } else {
-                        nsdDiscoveryJob?.cancel()
-                        nsdDiscoveryJob = null
                         if (subSyncJob?.isActive != true) {
                             subSyncJob = launch {
                                 while (isActive) {
@@ -392,8 +369,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         subSyncJob?.cancel()
-        nsdDiscoveryJob?.cancel()
-        nsdHelper.unregisterMainService()
         syncServer.stop()
     }
 
@@ -532,9 +507,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val code = preferences.ensureWorkspaceCode()
             val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
             syncServer.refreshIpAddresses()
-            if (port > 0) {
-                nsdHelper.registerMainService(port, code)
-            }
         }
     }
 
@@ -543,9 +515,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val newCode = preferences.regenerateWorkspaceCode()
             syncServer.refreshIpAddresses()
             val port = syncServer.actualPort
-            if (port > 0) {
-                nsdHelper.registerMainService(port, newCode)
-            }
             _userMessage.emit("تم إنشاء رمز قاعدة بيانات جديد: $newCode")
         }
     }
@@ -576,9 +545,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             val code = preferences.ensureWorkspaceCode()
             val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            if (port > 0) {
-                nsdHelper.registerMainService(port, code)
-            }
             val ips = LocalNetworkSyncServer.getLocalLanIpAddresses()
             val hostDisplay = (ips.firstOrNull() ?: "192.168.43.1") + ":" + (if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT)
 
