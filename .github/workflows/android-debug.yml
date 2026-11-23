@@ -21,12 +21,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Reuse one CI debug certificate so Android OAuth keeps the same package/SHA-1 identity.
+      # Keep one CI-only debug certificate between builds. This is not the release key.
       - name: Restore stable Android debug keystore
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
+          path: /home/runner/.android/debug.keystore
           key: android-debug-keystore-v1
+
+      - name: Ensure stable Android debug keystore exists
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -keyalg RSA -keysize 2048 -validity 10000
+          fi
 
       - name: Find Gradle project
         shell: bash
