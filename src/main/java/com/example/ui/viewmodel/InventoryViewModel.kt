@@ -355,8 +355,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         if (subSyncJob?.isActive != true) {
                             subSyncJob = launch {
                                 while (isActive) {
-                                    pullFromMainOnce(silent = true)
-                                    delay(1000L)
+                                    try {
+                                        pullFromMainOnce(silent = true)
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Exception) {
+                                        // A failed background sync must never terminate the app process.
+                                        _lastSyncError.value = "تعذر تحديث بيانات الجهاز حالياً"
+                                    }
+                                    delay(3000L)
                                 }
                             }
                         }
@@ -777,6 +784,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             ?: "تعذر الاتصال بالجهاز الرئيسي. تأكد أن الجهازين على نفس شبكة Wi-Fi أو نقطة الاتصال وأن العنوان صحيح."
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // Keep the app alive if importing the initial snapshot or saving the pairing state fails.
+                val detail = error.localizedMessage?.take(120).orEmpty()
+                _pairingError.value = if (detail.isBlank()) {
+                    "تم الاتصال لكن تعذر إكمال حفظ بيانات الربط. أعد المحاولة."
+                } else {
+                    "تم الاتصال لكن تعذر إكمال حفظ بيانات الربط: $detail"
+                }
             } finally {
                 _isPairingInProgress.value = false
             }
@@ -808,13 +825,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch { pullFromMainOnce(silent = true) }
     }
 
-    private suspend fun pullFromMainOnce(silent: Boolean) = subSyncMutex.withLock {
-        val host = preferences.mainHostUrlFlow.first()
-        val token = preferences.subSessionTokenFlow.first()
-        if (host.isBlank() || token.isBlank()) return@withLock Result.failure(IllegalStateException("بيانات اتصال الجهاز الرئيسي غير مكتملة"))
-
+    private suspend fun pullFromMainOnce(silent: Boolean): Unit = subSyncMutex.withLock {
         if (!silent) _isSyncingNow.value = true
         try {
+            val host = preferences.mainHostUrlFlow.first()
+            val token = preferences.subSessionTokenFlow.first()
+            if (host.isBlank() || token.isBlank()) {
+                _lastSyncError.value = "بيانات اتصال الجهاز الرئيسي غير مكتملة"
+                return@withLock
+            }
+
             val result = syncClient.fetchSyncSnapshot(host, token)
             result.onSuccess { snapshot ->
                 _lastSyncError.value = null
@@ -849,6 +869,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         _userMessage.emit("تعذر الوصول للجهاز الرئيسي حالياً. تأكد من الاتصال بنفس الشبكة.")
                     }
                 }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // Covers DataStore, JSON, Room transaction and permission-update failures as well
+            // as HTTP failures so no background sync exception can crash the app.
+            _lastSyncError.value = "تعذر تحديث بيانات الجهاز: " + (error.localizedMessage?.take(100).orEmpty())
+            if (!silent) {
+                _userMessage.emit("تعذر إكمال المزامنة. سيحاول التطبيق مرة أخرى تلقائياً.")
             }
         } finally {
             if (!silent) _isSyncingNow.value = false
