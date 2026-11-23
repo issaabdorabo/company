@@ -478,8 +478,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     // Multi-Device Setup & Controls
+    private suspend fun requireMainDeviceForDeviceManagement(): Boolean {
+        if (preferences.deviceRoleFlow.first() == DeviceRole.MAIN) return true
+        _userMessage.emit("إدارة وربط الأجهزة الفرعية متاحان للجهاز الرئيسي فقط. لا يمكن للجهاز الفرعي إنشاء أجهزة تابعة أو إدارتها.")
+        return false
+    }
+
     fun switchToMainDeviceMode() {
         viewModelScope.launch {
+            if (preferences.subSessionTokenFlow.first().isNotBlank()) {
+                _userMessage.emit("هذا الجهاز مرتبط بالفعل. استخدم خيار فك الارتباط أولاً قبل تحويله إلى جهاز رئيسي.")
+                return@launch
+            }
             _pairingError.value = null
             _lastSyncError.value = null
             subSyncJob?.cancel()
@@ -498,6 +508,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun switchToSubDeviceDraftMode() {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             // A main device with any registered device history must remain a main device.
             if (preferences.getLinkedSubDevicesSnapshot().isNotEmpty()) {
                 _userMessage.emit("لا يمكن تحويل الجهاز الرئيسي إلى جهاز فرعي ما دامت لديه أجهزة فرعية مسجلة")
@@ -511,6 +522,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshMainServerInfo() {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             val code = preferences.ensureWorkspaceCode()
             val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
             syncServer.refreshIpAddresses()
@@ -519,6 +531,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun regenerateWorkspaceCode() {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             val newCode = preferences.regenerateWorkspaceCode()
             syncServer.refreshIpAddresses()
             val port = syncServer.actualPort
@@ -544,6 +557,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         canEditCatalogItems: Boolean = false
     ) {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             val cleanName = deviceName.trim().ifBlank { "جهاز فرعي #${linkedSubDevices.value.size + 1}" }
             val currentDevices = preferences.getLinkedSubDevicesSnapshot()
             if (currentDevices.any { it.deviceName.trim().equals(cleanName, ignoreCase = true) }) {
@@ -607,6 +621,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun showSessionCredentialsQr(slotId: String) {
+        if (!isMainDevice.value) return
         val cached = _sessionPairingCredentials.value[slotId]
         if (cached != null) {
             _createdDeviceCredentials.value = cached
@@ -635,6 +650,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         canEditCatalogItems: Boolean = false
     ) {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx >= 0) {
@@ -664,6 +680,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun kickSubDevice(slotId: String) {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx >= 0) {
@@ -685,6 +702,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     /** Re-enable a previously kicked device without deleting its identity, permissions or audit history. */
     fun reactivateSubDevice(slotId: String) {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx >= 0) {
@@ -705,6 +723,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun removeSubDeviceSlot(slotId: String) {
         viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val removed = current.firstOrNull { it.id == slotId }
             if (removed != null) {
@@ -722,6 +741,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         passwordInput: String
     ) {
         viewModelScope.launch {
+            if (preferences.deviceRoleFlow.first() != DeviceRole.SUB) {
+                _pairingError.value = "لا يمكن ربط هذا الجهاز كفرعي قبل تحويله إلى وضع الجهاز الفرعي."
+                return@launch
+            }
+            if (preferences.subSessionTokenFlow.first().isNotBlank()) {
+                _pairingError.value = "هذا الجهاز مرتبط بالفعل بجهاز رئيسي."
+                return@launch
+            }
             val lockedUntil = preferences.pairingLockedUntilFlow.first()
             val now = System.currentTimeMillis()
             if (lockedUntil > now) {
