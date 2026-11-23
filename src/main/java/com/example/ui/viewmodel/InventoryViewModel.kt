@@ -2035,7 +2035,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             is OAuthTokenResult.Success -> {
                 val firstCall = block(firstTokenRes.accessToken)
                 val err = firstCall.exceptionOrNull()
-                if (err is GoogleApiHttpException && err.statusCode == 401) {
+                val needsFreshGoogleAuthorization = err is GoogleApiHttpException && (
+                    err.statusCode == 401 ||
+                        (err.statusCode == 403 && (
+                            err.message.contains("scope", ignoreCase = true) ||
+                                err.message.contains("permission", ignoreCase = true)
+                            ))
+                    )
+                if (needsFreshGoogleAuthorization) {
+                    // A 403 caused by a missing Drive scope can come from an older cached token.
+                    // Invalidate it, then request the same least-privilege drive.appdata scope again.
                     GoogleOAuthHelper.clearToken(context, firstTokenRes.accessToken)
                     val retryTokenRes = GoogleOAuthHelper.fetchAccessToken(context, email)
                     return when (retryTokenRes) {
