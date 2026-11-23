@@ -276,7 +276,7 @@ fun MainApp(viewModel: InventoryViewModel) {
                             navigationIcon = {
                                 val syncReady = if (isMainDevice) serverStatus.isRunning else isSubConnected
                                 IconButton(
-                                    onClick = { currentDestination = AppNavDestination.DEVICES },
+                                    onClick = { navigateTo(AppNavDestination.DEVICES) },
                                     modifier = Modifier.testTag("top_bar_sync_status_btn")
                                 ) {
                                     Icon(
@@ -338,7 +338,7 @@ fun MainApp(viewModel: InventoryViewModel) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { currentDestination = AppNavDestination.DEVICES }
+                                .clickable { navigateTo(AppNavDestination.DEVICES) }
                                 .padding(horizontal = 14.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
