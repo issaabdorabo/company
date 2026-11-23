@@ -6,11 +6,11 @@ import androidx.credentials.GetCredentialRequest
 import com.example.BuildConfig
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import io.supabase.createSupabaseClient
-import io.supabase.auth.Auth
-import io.supabase.auth.auth
-import io.supabase.auth.providers.Google
-import io.supabase.auth.providers.builtin.IDToken
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.providers.Google
+import io.github.jan.supabase.auth.providers.builtin.IDToken
 import java.security.MessageDigest
 import java.util.UUID
 
