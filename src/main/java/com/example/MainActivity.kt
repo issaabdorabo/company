@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -82,6 +83,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import com.example.data.cloud.SupabaseAuthClient
 import com.example.data.model.VoucherType
 import com.example.data.model.OperationAuditLog
 import com.example.util.AppNotificationManager
@@ -123,6 +125,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        intent?.let { SupabaseAuthClient.handleDeeplink(it) }
         setContent {
             val currentTheme by viewModel.theme.collectAsState()
             SmartInventoryTheme(theme = currentTheme) {
@@ -132,6 +135,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        SupabaseAuthClient.handleDeeplink(intent)
     }
 }
 
