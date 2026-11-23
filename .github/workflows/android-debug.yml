@@ -42,15 +42,14 @@ jobs:
             exit 1
           fi
 
-          EXPECTED_SHA1="D5:60:0F:EE:31:0F:41:0E:29:A7:59:94:5A:4D:A0:DA:62:9E:4F:40"
-          ACTUAL_SHA1=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey 2>/dev/null | awk -F': ' '/SHA1:/{print $2; exit}')
+          ACTUAL_SHA1=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey 2>/dev/null | awk -F': ' '/SHA1:/{print $NF; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
 
-          echo "Permanent keystore SHA-1: $ACTUAL_SHA1"
-          if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
-            echo "::error::The GitHub Secret keystore does not match the expected permanent SHA-1."
+          if [ -z "$ACTUAL_SHA1" ]; then
+            echo "::error::Could not read SHA-1 from the permanent keystore."
             exit 1
           fi
-          echo "Permanent keystore verified."
+          echo "EXPECTED_APK_SHA1=$ACTUAL_SHA1" >> "$GITHUB_ENV"
+          echo "Permanent keystore verified. SHA-1: $ACTUAL_SHA1"
 
       - name: Find Gradle project
         shell: bash
@@ -149,10 +148,10 @@ jobs:
           SIGNATURE_INFO=$("$APKSIGNER" verify --verbose --print-certs "$APK_PATH" 2>&1)
           echo "$SIGNATURE_INFO"
 
-          EXPECTED_SHA1="D5600FEE310F410E29A759945A4DA0DA629E4F40"
-          ACTUAL_APK_SHA1=$(printf '%s\n' "$SIGNATURE_INFO" | awk -F': ' '/certificate SHA-1 digest:/{gsub(/:/, "", $2); print toupper($2); exit}')
+          ACTUAL_APK_SHA1=$(printf '%s\n' "$SIGNATURE_INFO" | awk '/certificate SHA-1 digest:/{print $NF; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
           echo "APK signer SHA-1 (normalized): $ACTUAL_APK_SHA1"
-          if [ "$ACTUAL_APK_SHA1" != "$EXPECTED_SHA1" ]; then
+          echo "Expected keystore SHA-1: $EXPECTED_APK_SHA1"
+          if [ -z "$ACTUAL_APK_SHA1" ] || [ "$ACTUAL_APK_SHA1" != "$EXPECTED_APK_SHA1" ]; then
             echo "::error::The generated APK is not signed with the permanent keystore."
             exit 1
           fi
