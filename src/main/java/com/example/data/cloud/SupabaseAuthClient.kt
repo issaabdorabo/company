@@ -1,42 +1,64 @@
 package com.example.data.cloud
 
-import android.content.Intent
+import android.content.Context
+import androidx.credentials.CredentialManager
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialException
 import com.example.BuildConfig
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import io.github.jan.supabase.createSupabaseClient
-import io.github.jan.supabase.gotrue.GoTrue
-import io.github.jan.supabase.gotrue.handleDeeplinks
-import io.github.jan.supabase.gotrue.providers.builtin.Google
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.providers.Google
+import io.github.jan.supabase.auth.providers.IDToken
+import java.security.MessageDigest
+import java.util.UUID
 
 /**
- * Supabase Auth for online collaboration. This is deliberately separate from
- * GoogleOAuthHelper, which is only used for Google Drive appData backups.
+ * Native Google sign-in for Supabase collaboration.
+ * Kept separate from GoogleOAuthHelper, which handles Google Drive backups only.
  */
 object SupabaseAuthClient {
-    private const val REDIRECT_SCHEME = "com.aistudio.inventory.essa"
-    private const val REDIRECT_HOST = "auth-callback"
+    // Must be the OAuth Web application client ID from Google Cloud, not the Android client ID.
+    private const val WEB_CLIENT_ID = "ADD_WEB_OAUTH_CLIENT_ID_HERE"
 
     val client by lazy {
         createSupabaseClient(
             supabaseUrl = BuildConfig.SUPABASE_URL,
             supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         ) {
-            install(GoTrue) {
-                flowType = io.github.jan.supabase.gotrue.FlowType.PKCE
-                scheme = REDIRECT_SCHEME
-                host = REDIRECT_HOST
-                defaultExternalAuthAction =
-                    io.github.jan.supabase.gotrue.ExternalAuthAction.CUSTOM_TABS
-            }
+            install(Auth)
         }
     }
 
-    suspend fun signInWithGoogle() {
-        client.gotrue.loginWith(Google)
-    }
+    suspend fun signInWithGoogle(context: Context) {
+        val rawNonce = UUID.randomUUID().toString()
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(rawNonce.toByteArray())
+        val hashedNonce = digest.joinToString("") { "%02x".format(it) }
 
-    fun handleDeeplink(intent: Intent) {
-        if (intent.data?.scheme == REDIRECT_SCHEME && intent.data?.host == REDIRECT_HOST) {
-            client.handleDeeplinks(intent)
+        val googleOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(WEB_CLIENT_ID)
+            .setNonce(hashedNonce)
+            .build()
+
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(googleOption)
+            .build()
+
+        val credentialManager = CredentialManager.create(context)
+        val result = credentialManager.getCredential(
+            request = request,
+            context = context
+        )
+        val googleCredential = GoogleIdTokenCredential.createFrom(result.credential.data)
+
+        client.auth.signInWith(IDToken) {
+            idToken = googleCredential.idToken
+            provider = Google
+            nonce = rawNonce
         }
     }
 }
