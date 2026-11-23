@@ -79,6 +79,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.SupabaseAuthClient
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.status.SessionStatus
 import com.example.data.model.BackupRecord
 import com.example.ui.components.CloudBackupRadioPickerDialog
