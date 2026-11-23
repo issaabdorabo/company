@@ -33,6 +33,15 @@ android {
     }
   }
 
+  signingConfigs {
+    create("stableDebug") {
+      storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
+  }
+
   buildTypes {
     release {
       isCrunchPngs = false
@@ -43,9 +52,9 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      // Use Android Gradle Plugin's standard debug signing config. It generates/uses the
-      // default debug keystore automatically on CI; no repository keystore is required.
-      signingConfig = signingConfigs.getByName("debug")
+      // Use the permanent CI keystore installed at ~/.android/debug.keystore.
+      // Keep the same signing identity for every debug APK build.
+      signingConfig = signingConfigs.getByName("stableDebug")
     }
   }
   compileOptions {
