@@ -7,6 +7,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
@@ -76,6 +79,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.SupabaseAuthClient
+import io.github.jan.supabase.auth.status.SessionStatus
 import com.example.data.model.BackupRecord
 import com.example.ui.components.CloudBackupRadioPickerDialog
 import com.example.ui.components.CloudSyncAndAuthCard
@@ -123,6 +127,50 @@ fun SettingsScreen(
     val cloudAuthError by viewModel.cloudAuthError.collectAsState()
     val lastCloudBackupAt by viewModel.lastCloudBackupAt.collectAsState()
     val lastCloudBackupName by viewModel.lastCloudBackupName.collectAsState()
+
+    var internetAvailable by remember { mutableStateOf(false) }
+    var supabaseAuthStatus by remember { mutableStateOf("جارٍ التحقق من حساب Supabase…") }
+    var isSupabaseAuthenticated by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        SupabaseAuthClient.client.auth.sessionStatus.collect { status ->
+            when (status) {
+                is SessionStatus.Authenticated -> {
+                    isSupabaseAuthenticated = true
+                    supabaseAuthStatus = "الحساب مرتبط: ${status.session.user?.email ?: "Google"}"
+                }
+                is SessionStatus.NotAuthenticated -> {
+                    isSupabaseAuthenticated = false
+                    supabaseAuthStatus = "لم يتم ربط حساب Google بعد"
+                }
+                SessionStatus.Initializing -> {
+                    supabaseAuthStatus = "جارٍ استعادة جلسة الحساب…"
+                }
+                is SessionStatus.RefreshFailure -> {
+                    isSupabaseAuthenticated = false
+                    supabaseAuthStatus = "تعذر تحديث جلسة الحساب؛ تحقق من الاتصال"
+                }
+            }
+        }
+    }
+
+    DisposableEffect(context) {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        fun updateInternetState() {
+            val network = connectivityManager.activeNetwork
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+            internetAvailable = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = updateInternetState()
+            override fun onLost(network: Network) = updateInternetState()
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = updateInternetState()
+        }
+        updateInternetState()
+        connectivityManager.registerDefaultNetworkCallback(callback)
+        onDispose { runCatching { connectivityManager.unregisterNetworkCallback(callback) } }
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     var notificationsEnabled by remember {
@@ -359,6 +407,41 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = if (internetAvailable) SuccessGreen.copy(alpha = 0.12f) else WarningOrange.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                if (internetAvailable) "متصل بالإنترنت" else "لا يوجد اتصال بالإنترنت",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                color = if (internetAvailable) SuccessGreen else WarningOrange,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Surface(
+                            shape = CircleShape,
+                            color = if (isSupabaseAuthenticated) SuccessGreen.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                if (isSupabaseAuthenticated) "Supabase مرتبط" else "Supabase غير مرتبط",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                color = if (isSupabaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                    Text(
+                        supabaseAuthStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSupabaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Button(
                         onClick = {
                             coroutineScope.launch {
@@ -368,10 +451,11 @@ fun SettingsScreen(
                                     }
                             }
                         },
+                        enabled = internetAvailable && !isSupabaseAuthenticated,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("تسجيل الدخول باستخدام Google")
+                        Text(if (isSupabaseAuthenticated) "تم ربط حساب Google" else "تسجيل الدخول باستخدام Google")
                     }
                 }
             }
