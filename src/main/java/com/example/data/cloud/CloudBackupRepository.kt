@@ -58,14 +58,20 @@ class CloudBackupRepository(
             httpClient.newCall(request).execute().use { response ->
                 val respBody = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
+                    val errorMessage = parseGoogleApiError(
+                        statusCode = response.code,
+                        body = respBody,
+                        fallback = "تعذر جلب النسخ الاحتياطية من Google Drive"
+                    )
+                    // Keep the original Google API detail available in Logcat for diagnosis.
+                    android.util.Log.e(
+                        "CloudBackupRepository",
+                        "Drive files.list failed: $errorMessage"
+                    )
                     return@withContext Result.failure(
                         GoogleApiHttpException(
                             statusCode = response.code,
-                            message = parseGoogleApiError(
-                                statusCode = response.code,
-                                body = respBody,
-                                fallback = "تعذر جلب النسخ الاحتياطية من Google Drive"
-                            )
+                            message = errorMessage
                         )
                     )
                 }
