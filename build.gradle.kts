@@ -114,9 +114,9 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
 
-  // implementation(libs.androidx.credentials)
-  // implementation(libs.androidx.credentials.play.services)
-  // implementation(libs.googleid)
+  implementation(libs.androidx.credentials)
+  implementation(libs.androidx.credentials.play.services)
+  implementation(libs.googleid)
   implementation(libs.play.services.auth)
   implementation(libs.zxing.core)
   implementation(libs.kotlinx.coroutines.android)
