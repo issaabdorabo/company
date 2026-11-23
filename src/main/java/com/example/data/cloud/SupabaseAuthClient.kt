@@ -3,11 +3,9 @@ package com.example.data.cloud
 import android.content.Context
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
-import androidx.credentials.exceptions.GetCredentialException
 import com.example.BuildConfig
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.providers.Google
@@ -21,7 +19,7 @@ import java.util.UUID
  */
 object SupabaseAuthClient {
     // Must be the OAuth Web application client ID from Google Cloud, not the Android client ID.
-    private const val WEB_CLIENT_ID = "ADD_WEB_OAUTH_CLIENT_ID_HERE"
+    private const val WEB_CLIENT_ID = "970638159667-gbt5i1nksbafkuf4lutsipv8icjvm5tr.apps.googleusercontent.com"
 
     val client by lazy {
         createSupabaseClient(
