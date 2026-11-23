@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -146,7 +147,29 @@ fun MainApp(viewModel: InventoryViewModel) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val navigationScope = rememberCoroutineScope()
+    val nearbyWifiPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            navigationScope.launch {
+                snackbarHostState.showSnackbar(
+                    "تم رفض إذن الأجهزة القريبة. قد يتعذر الربط المحلي على Android 16 عند تفعيل حماية الشبكة."
+                )
+            }
+        }
+    }
+    var hasAskedNearbyWifiPermission by remember { mutableStateOf(false) }
+
     fun navigateTo(destination: AppNavDestination) {
+        if (
+            destination == AppNavDestination.DEVICES &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA &&
+            !hasAskedNearbyWifiPermission &&
+            context.checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED
+        ) {
+            hasAskedNearbyWifiPermission = true
+            nearbyWifiPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
         if (destination == AppNavDestination.REPORTS) {
             viewModel.checkPermission(
                 action = DeviceAction.VIEW_REPORTS,
