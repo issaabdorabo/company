@@ -362,7 +362,7 @@ fun SettingsScreen(
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                runCatching { SupabaseAuthClient.signInWithGoogle() }
+                                runCatching { SupabaseAuthClient.signInWithGoogle(context) }
                                     .onFailure { error ->
                                         Toast.makeText(context, "تعذر بدء تسجيل الدخول: ${error.localizedMessage ?: "خطأ غير معروف"}", Toast.LENGTH_LONG).show()
                                     }
