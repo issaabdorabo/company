@@ -149,8 +149,10 @@ jobs:
           SIGNATURE_INFO=$("$APKSIGNER" verify --verbose --print-certs "$APK_PATH" 2>&1)
           echo "$SIGNATURE_INFO"
 
-          EXPECTED_SHA1="D5:60:0F:EE:31:0F:41:0E:29:A7:59:94:5A:4D:A0:DA:62:9E:4F:40"
-          if ! printf '%s\n' "$SIGNATURE_INFO" | grep -Fqi "$EXPECTED_SHA1"; then
+          EXPECTED_SHA1="D5600FEE310F410E29A759945A4DA0DA629E4F40"
+          ACTUAL_APK_SHA1=$(printf '%s\n' "$SIGNATURE_INFO" | awk -F': ' '/certificate SHA-1 digest:/{gsub(/:/, "", $2); print toupper($2); exit}')
+          echo "APK signer SHA-1 (normalized): $ACTUAL_APK_SHA1"
+          if [ "$ACTUAL_APK_SHA1" != "$EXPECTED_SHA1" ]; then
             echo "::error::The generated APK is not signed with the permanent keystore."
             exit 1
           fi
