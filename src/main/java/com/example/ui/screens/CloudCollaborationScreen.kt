@@ -263,6 +263,26 @@ fun CloudCollaborationScreen(
                         }
                     }
 
+                    if (activeWorkspace != null) {
+                        if (activeWorkspace?.ownerUserId == currentUserId) {
+                            Button(
+                                onClick = { viewModel.uploadLocalInventoryToCloud() },
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("رفع بيانات المخازن الحالية إلى السحابة") }
+                            Text(
+                                "هذه الخطوة تنشئ النسخة السحابية الأولى من قاعدة الجهاز الرئيسي. لا تبدأها من جهاز مستخدم فرعي.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { viewModel.downloadCloudWorkspaceData() },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("تنزيل / تحديث بيانات المخازن من السحابة على هذا الجهاز") }
+                    }
+
                     if (members.isNotEmpty()) {
                         Text("أعضاء مساحة العمل", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         members.forEach { member ->
