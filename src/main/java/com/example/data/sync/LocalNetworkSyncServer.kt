@@ -41,6 +41,8 @@ class LocalNetworkSyncServer(
     private val onExportEntities: suspend () -> List<CloudEntityUpsert>,
     private val onExportAuditLogs: suspend (deviceName: String) -> List<OperationAuditLog> = { emptyList() },
     private val onApplyRemoteEntities: suspend (List<CloudEntityRecord>) -> Unit,
+    private val hasAppliedSyncOperation: suspend (String) -> Boolean = { false },
+    private val onMarkSyncOperationApplied: suspend (String) -> Unit = {},
     private val onRemoteOperationAlert: (
         subDeviceName: String,
         actorName: String,
@@ -659,6 +661,7 @@ class LocalNetworkSyncServer(
         val body = runCatching { JSONObject(rawBody) }.getOrNull()
             ?: return jsonResponse(400, errorJson("BAD_REQUEST", "بيانات المزامنة غير صالحة"))
 
+        val clientOperationId = body.optString("clientOperationId", "").trim()
         val actionType = body.optString("actionType", "")
         val operationTitle = body.optString("operationTitle", "").trim()
         val operationDetails = body.optString("operationDetails", "").trim()
@@ -684,6 +687,13 @@ class LocalNetworkSyncServer(
 
             if (slot.isKicked) {
                 return@withLock jsonResponse(403, errorJson("KICKED", "تم طرد هذا الجهاز من الجهاز الرئيسي"))
+            }
+
+            if (clientOperationId.isNotBlank() && hasAppliedSyncOperation(clientOperationId)) {
+                return@withLock jsonResponse(
+                    200,
+                    JSONObject().put("ok", true).put("duplicate", true).put("syncVersion", getSyncVersion())
+                )
             }
 
             val legacyGlobalGrant = slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty()
@@ -770,6 +780,9 @@ class LocalNetworkSyncServer(
                     )
                 }
                 onApplyRemoteEntities(mergeResult.records)
+            }
+            if (clientOperationId.isNotBlank()) {
+                onMarkSyncOperationApplied(clientOperationId)
             }
             val now = System.currentTimeMillis()
             val updatedDevices = devices.map {
