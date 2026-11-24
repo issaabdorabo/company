@@ -3,6 +3,7 @@ package com.example
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -55,8 +56,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -67,7 +66,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,7 +80,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
 import com.example.data.model.VoucherType
 import com.example.data.model.OperationAuditLog
 import com.example.util.AppNotificationManager
@@ -155,13 +152,14 @@ fun MainApp(
     var transactionFilterPreset by remember { mutableStateOf<VoucherType?>(null) }
 
     val context = LocalContext.current
-    val snackbarHostState = remember { SnackbarHostState() }
-    val navigationScope = rememberCoroutineScope()
+    fun showVisibleMessage(message: String) {
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+    }
     fun navigateTo(destination: AppNavDestination) {
         if (destination == AppNavDestination.REPORTS) {
             viewModel.checkPermission(
                 action = DeviceAction.VIEW_REPORTS,
-                onDenied = { navigationScope.launch { snackbarHostState.showSnackbar("لا تملك صلاحية عرض التقارير لأي مخزن.") } }
+                onDenied = { showVisibleMessage("لا تملك صلاحية عرض التقارير لأي مخزن.") }
             ) { currentDestination = destination }
         } else {
             currentDestination = destination
@@ -205,10 +203,10 @@ fun MainApp(
         }
     }
 
-    // Handle ViewModel snackbar messages
+    // Android system toasts are rendered above Compose dialogs and modal windows.
     LaunchedEffect(Unit) {
         viewModel.userMessage.collect { message ->
-            snackbarHostState.showSnackbar(message)
+            showVisibleMessage(message)
         }
     }
 
@@ -234,7 +232,6 @@ fun MainApp(
             val isExpandedWidth = maxWidth >= 700.dp
 
             Scaffold(
-                snackbarHost = { SnackbarHost(snackbarHostState) },
                 topBar = {
                     Column(
                         modifier = Modifier
