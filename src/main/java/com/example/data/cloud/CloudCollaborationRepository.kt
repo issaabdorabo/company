@@ -261,6 +261,9 @@ class CloudCollaborationRepository {
         }.distinctBy { it.id }
     }
 
+    suspend fun canCreateFirstWorkspace(): Boolean =
+        client.postgrest.rpc("can_create_first_workspace").decodeSingle<Boolean>()
+
     suspend fun createWorkspace(name: String): CloudWorkspace {
         val cleanName = name.trim()
         require(cleanName.length in 2..100) { "اسم مساحة العمل يجب أن يكون بين حرفين و100 حرف" }
