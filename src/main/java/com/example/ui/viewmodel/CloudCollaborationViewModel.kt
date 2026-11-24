@@ -285,7 +285,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
 
         if (workspace.ownerUserId == userId) {
             localWarehouses.forEach { warehouse ->
-                repository.ensureCloudWarehouse(workspace.id, warehouse.id, warehouse.name)
+                repository.ensureCloudWarehouse(workspace.id, warehouse)
             }
             _warehouses.value = repository.listWarehouses(workspace.id)
 
@@ -340,7 +340,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 if (deviceId.isBlank()) error("هذا الجهاز غير مسجل في مساحة العمل")
                 val localWarehouses = localInventoryRepository.allWarehouses.first()
                 localWarehouses.forEach { warehouse ->
-                    repository.ensureCloudWarehouse(workspace.id, warehouse.id, warehouse.name)
+                    repository.ensureCloudWarehouse(workspace.id, warehouse)
                 }
                 _warehouses.value = repository.listWarehouses(workspace.id)
                 val warehouseMap = _warehouses.value.mapNotNull { remote ->
