@@ -12,6 +12,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.InventoryApp
 import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.CloudCollaborationRepository
+import com.example.data.cloud.CloudOperationAuditEntry
+import com.example.data.cloud.CloudUserNotification
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
 import com.example.data.cloud.DeviceRole
@@ -1195,9 +1197,85 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         cloudOutboxJob = viewModelScope.launch {
             while (isActive) {
                 runCatching { flushCloudPendingSyncOperations() }
+                runCatching { pollCloudIncomingOperations() }
                 delay(15_000L)
             }
         }
+    }
+
+    private suspend fun pollCloudIncomingOperations() {
+        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+        if (workspaceId.isBlank() || cloudCollaborationRepo.currentUserIdOrNull().isNullOrBlank()) return
+
+        val notifications = cloudCollaborationRepo.listMyOperationNotifications(workspaceId)
+        if (notifications.isEmpty()) return
+
+        val auditEntries = runCatching {
+            cloudCollaborationRepo.listAllowedOperationAuditEntries(workspaceId)
+        }.getOrDefault(emptyList())
+        val auditByOperationId = auditEntries
+            .filter { !it.operationId.isNullOrBlank() }
+            .associateBy { it.operationId!! }
+        val membersByUserId = runCatching {
+            cloudCollaborationRepo.listWorkspaceMembers(workspaceId)
+                .associateBy { it.userId }
+        }.getOrDefault(emptyMap())
+        val ownerUserId = runCatching {
+            cloudCollaborationRepo.getWorkspace(workspaceId).ownerUserId
+        }.getOrNull()
+
+        notifications.forEach { notification ->
+            if (preferences.hasSeenCloudNotification(notification.id)) return@forEach
+
+            val audit = notification.relatedOperationId?.let(auditByOperationId::get)
+            val member = audit?.let { membersByUserId[it.actorUserId] }
+            val actorName = member?.displayName?.takeIf { it.isNotBlank() }
+                ?: member?.email?.takeIf { it.isNotBlank() }
+                ?: if (audit?.actorUserId == ownerUserId) "المستخدم الرئيسي" else "عضو مساحة العمل"
+            val sourceDevice = audit?.deviceName?.ifBlank { null } ?: "جهاز غير محدد"
+            val operationTitle = audit?.title?.ifBlank { null }
+                ?: notification.title.ifBlank { "عملية مخزنية" }
+            val operationDetails = audit?.details?.ifBlank { null }
+                ?: notification.body
+            val operationType = audit?.operationType?.ifBlank { null }
+                ?: notification.notificationType
+
+            if (audit != null) {
+                repository.recordOperation(
+                    OperationAuditLog(
+                        timestamp = parseCloudAuditTimestamp(audit.createdAt),
+                        actorName = actorName,
+                        deviceName = "$sourceDevice • سحابي",
+                        operationType = operationType,
+                        title = operationTitle,
+                        details = operationDetails
+                    )
+                )
+            }
+
+            notificationManager.notifyOperation(
+                title = "عملية على مخزن مرتبط: $operationTitle",
+                details = "نفّذها: $actorName • الجهاز: $sourceDevice\n$operationDetails",
+                isRemoteSubDeviceAlert = true
+            )
+            preferences.markCloudNotificationSeen(notification.id)
+        }
+    }
+
+    private fun parseCloudAuditTimestamp(value: String): Long {
+        val patterns = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        )
+        for (pattern in patterns) {
+            val parsed = runCatching {
+                SimpleDateFormat(pattern, Locale.US).parse(value)?.time
+            }.getOrNull()
+            if (parsed != null) return parsed
+        }
+        return System.currentTimeMillis()
     }
 
     private suspend fun flushCloudPendingSyncOperations(): Boolean = cloudPushMutex.withLock {
