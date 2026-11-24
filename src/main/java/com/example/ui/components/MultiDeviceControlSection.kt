@@ -792,59 +792,188 @@ private fun SubDeviceManagementCard(
     var deleteSupply by remember(slot.id) { mutableStateOf(slot.canDeleteSupplyVoucher) }
     var editGeneral by remember(slot.id) { mutableStateOf(slot.canEditDelete) }
     var expanded by remember(slot.id) { mutableStateOf(false) }
-    val publish: () -> Unit = {
-        onUpdatePermissions(slot.canAddItems, slot.canInward, slot.canDisburse, editGeneral, canBackup, canViewAll, grants, false, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalogItems)
+
+    val isOnline = slot.isClaimed && !slot.isKicked &&
+        System.currentTimeMillis() - slot.lastSeenAt < 15_000L
+    val statusText = when {
+        slot.isKicked -> "موقوف"
+        isOnline -> "متصل الآن"
+        slot.isClaimed -> "غير متصل"
+        slot.wasUnlinked -> "تم فك الارتباط"
+        else -> "بانتظار الربط"
     }
+    val statusColor = when {
+        slot.isKicked -> DangerRed
+        isOnline -> SuccessGreen
+        slot.isClaimed -> WarningOrange
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val statusBackground = statusColor.copy(alpha = 0.12f)
+    val lastSeenText = if (slot.lastSeenAt > 0L) {
+        "آخر اتصال: " + SimpleDateFormat("dd/MM/yyyy  hh:mm a", Locale.getDefault()).format(Date(slot.lastSeenAt))
+    } else {
+        "لم يتصل بعد"
+    }
+    val publish: () -> Unit = {
+        onUpdatePermissions(
+            slot.canAddItems, slot.canInward, slot.canDisburse, editGeneral,
+            canBackup, canViewAll, grants, false, deleteItem, editIssue,
+            deleteIssue, editSupply, deleteSupply, editCatalogItems
+        )
+    }
+
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        border = BorderStroke(1.dp, if (slot.isKicked) DangerRed.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth().testTag("sub_device_card_${slot.id}")
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (slot.isKicked) DangerRed.copy(alpha = 0.35f)
+            else if (isOnline) SuccessGreen.copy(alpha = 0.35f)
+            else MaterialTheme.colorScheme.outlineVariant
+        ),
+        shadowElevation = if (expanded) 3.dp else 1.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("sub_device_card_${slot.id}")
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.weight(1f).clickable { expanded = !expanded }) {
-                    Text(slot.deviceName + if (expanded) "  ▴" else "  ▾", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    val isOnline = slot.isClaimed && !slot.isKicked &&
-                        System.currentTimeMillis() - slot.lastSeenAt < 15_000L
-                    val statusText = when {
-                        slot.isKicked -> "🚫 مطرود وموقوف"
-                        isOnline -> "🟢 متصل الآن"
-                        slot.isClaimed -> "🟠 مرتبط لكن غير متصل حالياً"
-                        slot.wasUnlinked -> "⚪ تم فك الارتباط بواسطة المستخدم الفرعي"
-                        else -> "🟡 بانتظار ربط الجهاز الفرعي"
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(15.dp),
+                    color = statusBackground,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Devices,
+                            contentDescription = null,
+                            tint = statusColor,
+                            modifier = Modifier.size(25.dp)
+                        )
                     }
-                    Text(statusText, style = MaterialTheme.typography.labelSmall, color = when {
-                        slot.isKicked -> DangerRed
-                        isOnline -> SuccessGreen
-                        else -> WarningOrange
-                    })
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (hasQrAvailable) IconButton(onClick = onShowQr, modifier = Modifier.testTag("show_device_qr_btn_${slot.id}")) {
-                        Icon(Icons.Default.QrCode2, contentDescription = "عرض باركود الربط", tint = MaterialTheme.colorScheme.primary)
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = slot.deviceName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = statusBackground
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = statusColor,
+                                    modifier = Modifier.size(7.dp)
+                                ) {}
+                                Text(
+                                    text = statusText,
+                                    color = statusColor,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
-                    if (!slot.isKicked) {
-                        OutlinedButton(onClick = onKick, colors = ButtonDefaults.outlinedButtonColors(contentColor = DangerRed), modifier = Modifier.testTag("kick_device_btn_${slot.id}"), shape = RoundedCornerShape(8.dp)) {
-                            Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("طرد", fontSize = 11.sp)
-                        }
-                    } else {
-                        OutlinedButton(onClick = onReactivate, modifier = Modifier.testTag("reactivate_device_btn_${slot.id}"), shape = RoundedCornerShape(8.dp)) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("إعادة الربط", fontSize = 11.sp)
-                        }
+                    Text(
+                        text = lastSeenText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.Refresh else Icons.Default.Add,
+                    contentDescription = if (expanded) "طي التفاصيل" else "عرض التفاصيل",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (hasQrAvailable) {
+                    OutlinedButton(
+                        onClick = onShowQr,
+                        modifier = Modifier.weight(1f).testTag("show_device_qr_btn_${slot.id}"),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.QrCode2, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("رمز الربط", fontSize = 12.sp)
+                    }
+                }
+                if (!slot.isKicked) {
+                    OutlinedButton(
+                        onClick = onKick,
+                        modifier = Modifier.weight(1f).testTag("kick_device_btn_${slot.id}"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = DangerRed),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("إيقاف الجهاز", fontSize = 12.sp)
+                    }
+                } else {
+                    Button(
+                        onClick = onReactivate,
+                        modifier = Modifier.weight(1f).testTag("reactivate_device_btn_${slot.id}"),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("إعادة التفعيل", fontSize = 12.sp)
                     }
                 }
             }
+
             if (expanded && !slot.isKicked) {
-                PermissionSwitchRow("إضافة أصناف ومخازن إلى الدليل", slot.canAddItems) { onUpdatePermissions(it, slot.canInward, slot.canDisburse, editGeneral, canBackup, canViewAll, grants, false, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalogItems) }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text(
+                    "إعدادات وصلاحيات الجهاز",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                PermissionSwitchRow("إضافة أصناف ومخازن إلى الدليل", slot.canAddItems) {
+                    onUpdatePermissions(it, slot.canInward, slot.canDisburse, editGeneral, canBackup, canViewAll, grants, false, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalogItems)
+                }
                 PermissionSwitchRow("تعديل بيانات الأصناف داخل الدليل", editCatalogItems) { editCatalogItems = it; publish() }
                 PermissionSwitchRow("تعديل وحذف البيانات العامة الأخرى (الموردون والجهات والوحدات)", editGeneral) { editGeneral = it; publish() }
-                Text("صلاحيات المخزون والأصناف داخل المخازن", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("صلاحيات المخزون والأصناف", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 PermissionSwitchRow("حذف صنف من الدليل", deleteItem) { deleteItem = it; publish() }
-                Text("صلاحيات أوامر الصرف", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("أوامر الصرف والتحويل", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 PermissionSwitchRow("تعديل أمر الصرف / التحويل", editIssue) { editIssue = it; publish() }
                 PermissionSwitchRow("حذف أمر الصرف / التحويل", deleteIssue) { deleteIssue = it; publish() }
-                Text("صلاحيات أوامر التوريد", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("أوامر التوريد", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 PermissionSwitchRow("تعديل أمر التوريد", editSupply) { editSupply = it; publish() }
                 PermissionSwitchRow("حذف أمر التوريد", deleteSupply) { deleteSupply = it; publish() }
                 PermissionSwitchRow("السماح بالنسخ الاحتياطي والتصدير المحلي والسحابي وJSON", canBackup) { canBackup = it; publish() }
