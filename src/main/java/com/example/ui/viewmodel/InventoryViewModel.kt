@@ -989,7 +989,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     } else {
                         _pairingError.value = apiErr?.message
-                            ?: "تعذر الاتصال بالجهاز الرئيسي. تأكد أن الجهازين على نفس شبكة Wi-Fi أو نقطة الاتصال وأن العنوان صحيح."
+                            ?: "تعذر الاتصال بالجهاز الرئيسي. تأكد من صحة العنوان وأن الجهازين على شبكة Wi-Fi نفسها أو نقطة الاتصال نفسها. قد يكون السبب ضعف الشبكة أو انقطاعاً مؤقتاً؛ أعد المحاولة بعد استقرار الاتصال."
                     }
                 }
             } catch (cancelled: CancellationException) {
