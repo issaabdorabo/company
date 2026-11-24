@@ -74,6 +74,7 @@ class UserPreferencesManager(private val context: Context) {
         val KEY_CLOUD_WORKSPACE_NAME = stringPreferencesKey("cloud_workspace_name")
         val KEY_CLOUD_DEVICE_ID = stringPreferencesKey("cloud_device_id")
         val KEY_CLOUD_SNAPSHOT_SIGNATURE = stringPreferencesKey("cloud_snapshot_signature")
+        val KEY_SEEN_CLOUD_NOTIFICATIONS_JSON = stringPreferencesKey("seen_cloud_notifications_json")
     }
 
     val themeFlow: Flow<AppTheme> = context.dataStore.data.map { prefs ->
@@ -331,6 +332,28 @@ class UserPreferencesManager(private val context: Context) {
 
     suspend fun saveCloudSnapshotSignature(signature: String) {
         context.dataStore.edit { prefs -> prefs[KEY_CLOUD_SNAPSHOT_SIGNATURE] = signature }
+    }
+
+    suspend fun hasSeenCloudNotification(notificationId: String): Boolean {
+        if (notificationId.isBlank()) return true
+        val raw = context.dataStore.data.first()[KEY_SEEN_CLOUD_NOTIFICATIONS_JSON] ?: "[]"
+        val ids = runCatching { JSONArray(raw) }.getOrNull() ?: return false
+        return (0 until ids.length()).any { ids.optString(it) == notificationId }
+    }
+
+    suspend fun markCloudNotificationSeen(notificationId: String) {
+        if (notificationId.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val raw = prefs[KEY_SEEN_CLOUD_NOTIFICATIONS_JSON] ?: "[]"
+            val existing = runCatching { JSONArray(raw) }.getOrDefault(JSONArray())
+            val ids = LinkedHashSet<String>()
+            for (index in 0 until existing.length()) {
+                existing.optString(index).takeIf { it.isNotBlank() }?.let(ids::add)
+            }
+            ids.add(notificationId)
+            val trimmed = ids.toList().takeLast(200)
+            prefs[KEY_SEEN_CLOUD_NOTIFICATIONS_JSON] = JSONArray(trimmed).toString()
+        }
     }
 
     suspend fun getOrCreateInstallationId(): String {
