@@ -387,11 +387,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         syncServer.stop()
     }
 
-    private fun isWarehouseAssignedToSubDevice(warehouseId: Long): Boolean =
-        linkedSubDevices.value.any { slot ->
+    private fun linkedSubDevicesForWarehouse(warehouseId: Long): List<LinkedSubDevice> =
+        linkedSubDevices.value.filter { slot ->
             !slot.isKicked && !slot.wasUnlinked &&
-                slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+                (slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView } ||
+                    (slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty()))
         }
+
+    private fun isAssignedSubDeviceOnline(warehouseId: Long): Boolean {
+        val now = System.currentTimeMillis()
+        return linkedSubDevicesForWarehouse(warehouseId).any { slot ->
+            slot.isClaimed && now - slot.lastSeenAt in 0L..15_000L
+        }
+    }
 
     private fun hasValidatedInternetConnection(): Boolean {
         val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -411,11 +419,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         val perms = devicePermissions.value
         if (perms.isMainDevice) {
-            val assignedWarehouseOffline = warehouseIds.any(::isWarehouseAssignedToSubDevice) &&
-                !hasValidatedInternetConnection()
-            if (assignedWarehouseOffline) {
+            val assignedWarehouses = warehouseIds.filter { linkedSubDevicesForWarehouse(it).isNotEmpty() }
+            val assignedWarehouseUnavailable = assignedWarehouses.isNotEmpty() &&
+                (!hasValidatedInternetConnection() || assignedWarehouses.any { !isAssignedSubDeviceOnline(it) })
+            if (assignedWarehouseUnavailable) {
                 viewModelScope.launch {
-                    _userMessage.emit("لا يمكن للجهاز الرئيسي تنفيذ عمليات على مخزن مرتبط بمستخدم فرعي دون اتصال موثّق بالإنترنت. أعد الاتصال أولاً.")
+                    _userMessage.emit("لا يمكن تنفيذ العملية على هذا المخزن إلا عند توفر إنترنت موثّق وظهور الجهاز الفرعي المرتبط به متصلاً.")
                 }
                 onDenied()
                 return
