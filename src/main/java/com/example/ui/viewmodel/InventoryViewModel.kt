@@ -1232,12 +1232,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val actorName = member?.displayName?.takeIf { it.isNotBlank() }
                 ?: member?.email?.takeIf { it.isNotBlank() }
                 ?: if (audit?.actorUserId == ownerUserId) "المستخدم الرئيسي" else "عضو مساحة العمل"
-            val sourceDevice = audit?.deviceName?.ifBlank { null } ?: "جهاز غير محدد"
-            val operationTitle = audit?.title?.ifBlank { null }
+            val sourceDevice = audit?.deviceName?.takeIf { it.isNotBlank() } ?: "جهاز غير محدد"
+            val operationTitle = audit?.title?.takeIf { it.isNotBlank() }
                 ?: notification.title.ifBlank { "عملية مخزنية" }
-            val operationDetails = audit?.details?.ifBlank { null }
+            val operationDetails = audit?.details?.takeIf { it.isNotBlank() }
                 ?: notification.body
-            val operationType = audit?.operationType?.ifBlank { null }
+            val operationType = audit?.operationType?.takeIf { it.isNotBlank() }
                 ?: notification.notificationType
 
             if (audit != null) {
