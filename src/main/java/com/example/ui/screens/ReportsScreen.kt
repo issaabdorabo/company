@@ -76,6 +76,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private fun adaptiveReportColumnWidth(text: String): androidx.compose.ui.unit.Dp =
+    (text.trim().length * 7.1f + 26f).dp.coerceIn(82.dp, 240.dp)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReportsScreen(
@@ -156,6 +159,7 @@ fun ReportsScreen(
     var warehouseDisplayMode by remember { mutableStateOf("HORIZONTAL") }
     var receiverDisplayMode by remember { mutableStateOf("HORIZONTAL") }
     var disburserDisplayMode by remember { mutableStateOf("HORIZONTAL") }
+    var pageOrientation by remember { mutableStateOf("PORTRAIT") }
 
     val reportData = remember(
         snapshot,
@@ -733,7 +737,13 @@ fun ReportsScreen(
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(text = dynamicReportTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("اتجاه ورقة التقرير", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        FilterChip(selected = pageOrientation == "PORTRAIT", onClick = { pageOrientation = "PORTRAIT" }, label = { Text("عمودي A4") })
+                        FilterChip(selected = pageOrientation == "LANDSCAPE", onClick = { pageOrientation = "LANDSCAPE" }, label = { Text("أفقي A4") })
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     val activeEntityCols = if (entitiesDisplayMode == "VERTICAL" && selectedBeneficiaryEntities.size > 1) selectedBeneficiaryEntities.toList() else emptyList()
                     val activeWarehouseCols = if (warehouseDisplayMode == "VERTICAL" && selectedWarehouseIds.size > 1) selectedWarehouseIds.mapNotNull { id -> warehouses.find { it.id == id }?.name } else emptyList()
@@ -762,7 +772,8 @@ fun ReportsScreen(
                                         ReportGenerator.ReportColumn.RECEIVER to receiverDisplayMode,
                                         ReportGenerator.ReportColumn.DISBURSER to disburserDisplayMode
                                     ),
-                                    columnEntityValues = activeDimensionColumns
+                                    columnEntityValues = activeDimensionColumns,
+                                    isLandscape = pageOrientation == "LANDSCAPE"
                                 )
                                 lastGeneratedPdfFile = file
                                 ReportGenerator.viewFile(context, file, "application/pdf")
@@ -792,7 +803,8 @@ fun ReportsScreen(
                                         ReportGenerator.ReportColumn.RECEIVER to receiverDisplayMode,
                                         ReportGenerator.ReportColumn.DISBURSER to disburserDisplayMode
                                     ),
-                                    columnEntityValues = activeDimensionColumns
+                                    columnEntityValues = activeDimensionColumns,
+                                    isLandscape = pageOrientation == "LANDSCAPE"
                                 )
                                 lastGeneratedPdfFile = file
                                 ReportGenerator.shareFile(context, file, "application/pdf", "مشاركة التقرير PDF")
@@ -869,6 +881,37 @@ fun ReportsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     val activeCols = ReportGenerator.ReportColumn.values().filter { selectedColumns.contains(it) }
+                    val previewColumnWidths = remember(reportData, activeCols) {
+                        activeCols.associateWith { col ->
+                            val values = reportData.map { row ->
+                                when (col) {
+                                    ReportGenerator.ReportColumn.SERIAL -> "0000"
+                                    ReportGenerator.ReportColumn.VOUCHER_NUMBER -> row.voucherNumber
+                                    ReportGenerator.ReportColumn.ITEM_NAME -> row.itemName
+                                    ReportGenerator.ReportColumn.ITEM_UNIT -> row.itemUnit
+                                    ReportGenerator.ReportColumn.WAREHOUSE -> row.warehouseName
+                                    ReportGenerator.ReportColumn.BENEFICIARY -> row.beneficiaryName
+                                    ReportGenerator.ReportColumn.RECEIVER -> row.receiverName
+                                    ReportGenerator.ReportColumn.DISBURSER -> row.disburserName
+                                    ReportGenerator.ReportColumn.VOUCHER_DATE -> row.voucherDate
+                                    ReportGenerator.ReportColumn.CURRENT_STOCK -> "%.0f".format(row.quantity)
+                                    ReportGenerator.ReportColumn.TOTAL_QUANTITY -> "%.0f".format(row.totalQuantity)
+                                    ReportGenerator.ReportColumn.MIN_STOCK -> "%.0f".format(row.minStockLevel)
+                                    ReportGenerator.ReportColumn.PURCHASE_PRICE -> "%.2f $".format(row.unitPrice)
+                                    ReportGenerator.ReportColumn.TOTAL_VALUE -> "%.2f $".format(row.totalValue)
+                                }
+                            }
+                            val longest = maxOf(col.titleAr.length, values.maxOfOrNull { it.length } ?: 0)
+                            val minWidth = when (col) {
+                                ReportGenerator.ReportColumn.SERIAL -> 48.dp
+                                ReportGenerator.ReportColumn.ITEM_NAME -> 110.dp
+                                ReportGenerator.ReportColumn.ITEM_UNIT -> 64.dp
+                                else -> 84.dp
+                            }
+                            val maxWidth = if (col == ReportGenerator.ReportColumn.ITEM_NAME) 260.dp else 220.dp
+                            (longest * 7.1f + 26f).dp.coerceIn(minWidth, maxWidth)
+                        }
+                    }
                     val activeEntityCols = if (entitiesDisplayMode == "VERTICAL" && selectedBeneficiaryEntities.size > 1) selectedBeneficiaryEntities.toList() else emptyList()
                     val activeWarehouseCols = if (warehouseDisplayMode == "VERTICAL" && selectedWarehouseIds.size > 1) selectedWarehouseIds.mapNotNull { id -> warehouses.find { it.id == id }?.name } else emptyList()
                     val activeReceiverCols = if (receiverDisplayMode == "VERTICAL" && selectedReceivers.size > 1) selectedReceivers.toList() else emptyList()
@@ -894,37 +937,22 @@ fun ReportsScreen(
                                         activeEntityCols.forEach { entName ->
                                             Text(
                                                 text = entName,
-                                                modifier = Modifier.width(130.dp).padding(horizontal = 4.dp),
+                                                modifier = Modifier.width(adaptiveReportColumnWidth(entName)).padding(horizontal = 4.dp),
                                                 style = MaterialTheme.typography.labelMedium,
                                                 fontWeight = FontWeight.Bold,
                                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                                 softWrap = true,
-                                                maxLines = 2
+                                                maxLines = 8
                                             )
                                         }
                                     } else if (col == ReportGenerator.ReportColumn.WAREHOUSE && activeWarehouseCols.isNotEmpty()) {
-                                        activeWarehouseCols.forEach { name -> Text(name, modifier = Modifier.width(110.dp).padding(horizontal = 4.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer, softWrap = true, maxLines = 2) }
+                                        activeWarehouseCols.forEach { name -> Text(name, modifier = Modifier.width(adaptiveReportColumnWidth(name)).padding(horizontal = 4.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer, softWrap = true, maxLines = 8) }
                                     } else if (col == ReportGenerator.ReportColumn.RECEIVER && activeReceiverCols.isNotEmpty()) {
-                                        activeReceiverCols.forEach { name -> Text(name, modifier = Modifier.width(105.dp).padding(horizontal = 4.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer, softWrap = true, maxLines = 2) }
+                                        activeReceiverCols.forEach { name -> Text(name, modifier = Modifier.width(adaptiveReportColumnWidth(name)).padding(horizontal = 4.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer, softWrap = true, maxLines = 8) }
                                     } else if (col == ReportGenerator.ReportColumn.DISBURSER && activeDisburserCols.isNotEmpty()) {
-                                        activeDisburserCols.forEach { name -> Text(name, modifier = Modifier.width(105.dp).padding(horizontal = 4.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer, softWrap = true, maxLines = 2) }
+                                        activeDisburserCols.forEach { name -> Text(name, modifier = Modifier.width(adaptiveReportColumnWidth(name)).padding(horizontal = 4.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer, softWrap = true, maxLines = 8) }
                                     } else {
-                                        val colWidth = when (col) {
-                                            ReportGenerator.ReportColumn.SERIAL -> 48.dp
-                                            ReportGenerator.ReportColumn.VOUCHER_NUMBER -> 110.dp
-                                            ReportGenerator.ReportColumn.ITEM_NAME -> 160.dp
-                                            ReportGenerator.ReportColumn.ITEM_UNIT -> 65.dp
-                                            ReportGenerator.ReportColumn.WAREHOUSE -> if (warehouseDisplayMode == "VERTICAL") 86.dp else 130.dp
-                                            ReportGenerator.ReportColumn.BENEFICIARY -> 130.dp
-                                            ReportGenerator.ReportColumn.RECEIVER -> if (receiverDisplayMode == "VERTICAL") 76.dp else 110.dp
-                                            ReportGenerator.ReportColumn.DISBURSER -> if (disburserDisplayMode == "VERTICAL") 76.dp else 110.dp
-                                            ReportGenerator.ReportColumn.VOUCHER_DATE -> 95.dp
-                                            ReportGenerator.ReportColumn.CURRENT_STOCK -> 80.dp
-                                            ReportGenerator.ReportColumn.TOTAL_QUANTITY -> 95.dp
-                                            ReportGenerator.ReportColumn.MIN_STOCK -> 75.dp
-                                            ReportGenerator.ReportColumn.PURCHASE_PRICE -> 80.dp
-                                            ReportGenerator.ReportColumn.TOTAL_VALUE -> 90.dp
-                                        }
+                                        val colWidth = previewColumnWidths[col] ?: 100.dp
                                         Text(
                                             text = col.titleAr,
                                             modifier = Modifier.width(colWidth).padding(horizontal = 4.dp),
@@ -932,7 +960,7 @@ fun ReportsScreen(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                                             softWrap = true,
-                                            maxLines = 2
+                                            maxLines = 8
                                         )
                                     }
                                 }
@@ -941,12 +969,12 @@ fun ReportsScreen(
                                     activeEntityCols.forEach { entName ->
                                         Text(
                                             text = entName,
-                                            modifier = Modifier.width(130.dp).padding(horizontal = 4.dp),
+                                            modifier = Modifier.width(adaptiveReportColumnWidth(entName)).padding(horizontal = 4.dp),
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                                             softWrap = true,
-                                            maxLines = 2
+                                            maxLines = 8
                                         )
                                     }
                                 }
@@ -970,35 +998,20 @@ fun ReportsScreen(
                                                 val displayVal = if (q != null && q > 0) "%.0f".format(q) else "-"
                                                 Text(
                                                     text = displayVal,
-                                                    modifier = Modifier.width(130.dp).padding(horizontal = 4.dp),
+                                                    modifier = Modifier.width(adaptiveReportColumnWidth(entName)).padding(horizontal = 4.dp),
                                                     style = MaterialTheme.typography.bodySmall,
                                                     softWrap = true,
-                                                    maxLines = 4
+                                                    maxLines = 8
                                                 )
                                             }
                                         } else if (col == ReportGenerator.ReportColumn.WAREHOUSE && activeWarehouseCols.isNotEmpty()) {
-                                            activeWarehouseCols.forEach { name -> Text(rowItem.warehouseQuantities[name]?.let { "%.0f".format(it) } ?: "-", modifier = Modifier.width(110.dp).padding(horizontal = 4.dp), style = MaterialTheme.typography.bodySmall, softWrap = true) }
+                                            activeWarehouseCols.forEach { name -> Text(rowItem.warehouseQuantities[name]?.let { "%.0f".format(it) } ?: "-", modifier = Modifier.width(adaptiveReportColumnWidth(name)).padding(horizontal = 4.dp), style = MaterialTheme.typography.bodySmall, softWrap = true) }
                                         } else if (col == ReportGenerator.ReportColumn.RECEIVER && activeReceiverCols.isNotEmpty()) {
-                                            activeReceiverCols.forEach { name -> Text(rowItem.receiverQuantities[name]?.let { "%.0f".format(it) } ?: "-", modifier = Modifier.width(105.dp).padding(horizontal = 4.dp), style = MaterialTheme.typography.bodySmall, softWrap = true) }
+                                            activeReceiverCols.forEach { name -> Text(rowItem.receiverQuantities[name]?.let { "%.0f".format(it) } ?: "-", modifier = Modifier.width(adaptiveReportColumnWidth(name)).padding(horizontal = 4.dp), style = MaterialTheme.typography.bodySmall, softWrap = true) }
                                         } else if (col == ReportGenerator.ReportColumn.DISBURSER && activeDisburserCols.isNotEmpty()) {
-                                            activeDisburserCols.forEach { name -> Text(rowItem.disburserQuantities[name]?.let { "%.0f".format(it) } ?: "-", modifier = Modifier.width(105.dp).padding(horizontal = 4.dp), style = MaterialTheme.typography.bodySmall, softWrap = true) }
+                                            activeDisburserCols.forEach { name -> Text(rowItem.disburserQuantities[name]?.let { "%.0f".format(it) } ?: "-", modifier = Modifier.width(adaptiveReportColumnWidth(name)).padding(horizontal = 4.dp), style = MaterialTheme.typography.bodySmall, softWrap = true) }
                                         } else {
-                                            val colWidth = when (col) {
-                                                ReportGenerator.ReportColumn.SERIAL -> 48.dp
-                                                ReportGenerator.ReportColumn.VOUCHER_NUMBER -> 110.dp
-                                                ReportGenerator.ReportColumn.ITEM_NAME -> 160.dp
-                                                ReportGenerator.ReportColumn.ITEM_UNIT -> 65.dp
-                                                ReportGenerator.ReportColumn.WAREHOUSE -> if (warehouseDisplayMode == "VERTICAL") 86.dp else 130.dp
-                                                ReportGenerator.ReportColumn.BENEFICIARY -> 130.dp
-                                                ReportGenerator.ReportColumn.RECEIVER -> if (receiverDisplayMode == "VERTICAL") 76.dp else 110.dp
-                                                ReportGenerator.ReportColumn.DISBURSER -> if (disburserDisplayMode == "VERTICAL") 76.dp else 110.dp
-                                                ReportGenerator.ReportColumn.VOUCHER_DATE -> 95.dp
-                                                ReportGenerator.ReportColumn.CURRENT_STOCK -> 80.dp
-                                                ReportGenerator.ReportColumn.TOTAL_QUANTITY -> 95.dp
-                                                ReportGenerator.ReportColumn.MIN_STOCK -> 75.dp
-                                                ReportGenerator.ReportColumn.PURCHASE_PRICE -> 80.dp
-                                                ReportGenerator.ReportColumn.TOTAL_VALUE -> 90.dp
-                                            }
+                                            val colWidth = previewColumnWidths[col] ?: 100.dp
                                             val text = when (col) {
                                                 ReportGenerator.ReportColumn.SERIAL -> "${index + 1}"
                                                 ReportGenerator.ReportColumn.VOUCHER_NUMBER -> rowItem.voucherNumber
@@ -1021,7 +1034,7 @@ fun ReportsScreen(
                                                 style = MaterialTheme.typography.bodySmall,
                                                 fontWeight = if (col == ReportGenerator.ReportColumn.ITEM_NAME) FontWeight.Bold else FontWeight.Normal,
                                                 softWrap = true,
-                                                maxLines = 4
+                                                maxLines = 8
                                             )
                                         }
                                     }
@@ -1032,10 +1045,10 @@ fun ReportsScreen(
                                             val displayVal = if (q != null && q > 0) "%.0f".format(q) else "-"
                                             Text(
                                                 text = displayVal,
-                                                modifier = Modifier.width(130.dp).padding(horizontal = 4.dp),
+                                                modifier = Modifier.width(adaptiveReportColumnWidth(entName)).padding(horizontal = 4.dp),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 softWrap = true,
-                                                maxLines = 4
+                                                maxLines = 8
                                             )
                                         }
                                     }
