@@ -357,7 +357,8 @@ class CloudCollaborationRepository {
         entities: List<CloudEntityUpsert>,
         cloudWarehouseIdByLocalId: Map<Long, String>,
         targetWarehouseLocalIds: Set<Long>,
-        includeGlobalRecords: Boolean
+        includeGlobalRecords: Boolean,
+        includeWarehouseDefinitions: Boolean = false
     ): JsonArray {
         val vouchersById = entities
             .filter { it.entityType == "voucher" }
@@ -392,6 +393,10 @@ class CloudCollaborationRepository {
             val scopes = warehouseScopes(entity).intersect(targetWarehouseLocalIds)
             if (scopes.isNotEmpty()) {
                 scopes.forEach { localWarehouseId -> encoded += entity to localWarehouseId }
+            } else if (includeWarehouseDefinitions && includeGlobalRecords &&
+                entity.entityType == "warehouse" && cloudWarehouseIdByLocalId.containsKey(entity.localId)
+            ) {
+                encoded += entity to entity.localId
             } else if (includeGlobalRecords && entity.entityType in globalTypes) {
                 encoded += entity to null
             }
