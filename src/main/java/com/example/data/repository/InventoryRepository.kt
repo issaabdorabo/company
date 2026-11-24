@@ -17,6 +17,7 @@ import com.example.data.model.ItemUnitSerialRecord
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
 import com.example.data.model.AppliedSyncOperation
+import com.example.data.model.CloudPendingSyncOperation
 import com.example.data.model.SmallerUnit
 import com.example.data.model.StockAdjustmentLog
 import com.example.data.model.Supplier
@@ -58,6 +59,7 @@ class InventoryRepository(
     private val itemUnitSerialDao = database.itemUnitSerialDao()
     private val auditLogDao = database.operationAuditLogDao()
     private val pendingSyncDao = database.pendingSyncOperationDao()
+    private val cloudPendingSyncDao = database.cloudPendingSyncOperationDao()
 
     val allWarehouses: Flow<List<Warehouse>> = warehouseDao.getAllWarehouses()
     val allItems: Flow<List<Item>> = itemDao.getAllItems()
@@ -1794,6 +1796,7 @@ class InventoryRepository(
     suspend fun clearAllUserData(preserveAuditLogs: Boolean = false) = withContext(Dispatchers.IO) {
         database.withTransaction {
             pendingSyncDao.clearAllPending()
+            cloudPendingSyncDao.clearAllPending()
             itemUnitSerialDao.clearAll()
             voucherDao.clearAllVoucherItems()
             voucherDao.clearAllVouchers()
@@ -1827,6 +1830,30 @@ class InventoryRepository(
 
     suspend fun clearPendingSyncOperations() = withContext(Dispatchers.IO) {
         pendingSyncDao.clearAllPending()
+    }
+
+    suspend fun enqueueCloudPendingSyncOperation(operation: CloudPendingSyncOperation) = withContext(Dispatchers.IO) {
+        cloudPendingSyncDao.enqueue(operation)
+    }
+
+    suspend fun getCloudPendingSyncOperations(): List<CloudPendingSyncOperation> = withContext(Dispatchers.IO) {
+        cloudPendingSyncDao.getPending()
+    }
+
+    suspend fun recordCloudPendingSyncFailure(operationId: String, error: String) = withContext(Dispatchers.IO) {
+        cloudPendingSyncDao.recordFailure(operationId, error.take(500))
+    }
+
+    suspend fun removeCloudPendingSyncOperation(operationId: String) = withContext(Dispatchers.IO) {
+        cloudPendingSyncDao.remove(operationId)
+    }
+
+    suspend fun clearCloudPendingSyncOperations() = withContext(Dispatchers.IO) {
+        cloudPendingSyncDao.clearAllPending()
+    }
+
+    suspend fun cloudPendingSyncCount(): Int = withContext(Dispatchers.IO) {
+        cloudPendingSyncDao.countPending()
     }
 
     suspend fun recordPendingSyncFailure(operationId: String, error: String) = withContext(Dispatchers.IO) {
