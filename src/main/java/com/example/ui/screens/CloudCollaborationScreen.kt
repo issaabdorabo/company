@@ -60,8 +60,8 @@ fun CloudCollaborationScreen(
     val isAuthenticated by viewModel.isAuthenticated.collectAsState()
     val userEmail by viewModel.userEmail.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
-    val workspaces by viewModel.workspaces.collectAsState()
     val activeWorkspace by viewModel.activeWorkspace.collectAsState()
+    val canCreateFirstWorkspace by viewModel.canCreateFirstWorkspace.collectAsState()
     val members by viewModel.members.collectAsState()
     val warehouses by viewModel.warehouses.collectAsState()
     val warehouseMemberships by viewModel.warehouseMemberships.collectAsState()
@@ -174,96 +174,154 @@ fun CloudCollaborationScreen(
 
             when (selectedTab) {
                 0 -> {
-                    Text("إنشاء مساحة عمل جديدة", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = workspaceName,
-                        onValueChange = { workspaceName = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("اسم المؤسسة أو مساحة العمل") },
-                        singleLine = true
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.createWorkspace(workspaceName)
-                            workspaceName = ""
-                        },
-                        enabled = !busy && workspaceName.trim().length >= 2,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("إنشاء مساحة عمل سحابية") }
-
-                    if (workspaces.isNotEmpty()) {
-                        Text("مساحات العمل المرتبطة بحسابك", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        workspaces.forEach { workspace ->
-                            FilterChip(
-                                selected = activeWorkspace?.id == workspace.id,
-                                onClick = { viewModel.selectWorkspace(workspace) },
-                                label = { Text(workspace.name) },
-                                enabled = !busy
+                    if (activeWorkspace == null) {
+                        if (canCreateFirstWorkspace) {
+                            Text(
+                                "إعداد مساحة العمل الرئيسية",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
                             )
+                            OutlinedTextField(
+                                value = workspaceName,
+                                onValueChange = { workspaceName = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("اسم المؤسسة") },
+                                singleLine = true
+                            )
+                            Button(
+                                onClick = {
+                                    viewModel.createWorkspace(workspaceName)
+                                    workspaceName = ""
+                                },
+                                enabled = !busy && workspaceName.trim().length >= 2,
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("إنشاء مساحة العمل الرئيسية") }
+                            Text(
+                                "يتم إنشاء مساحة واحدة فقط للتطبيق. بعد ذلك يضيف المسؤول بقية المستخدمين إليها.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "لم تتم إضافتك إلى مساحة العمل الرئيسية بعد",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "اطلب من المسؤول إضافة بريد Google الذي تستخدمه في التطبيق. لا تنشئ مساحة جديدة.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    OutlinedButton(
+                                        onClick = { viewModel.refresh() },
+                                        enabled = !busy,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("التحقق من الدعوة") }
+                                }
+                            }
                         }
                     }
 
                     activeWorkspace?.let { workspace ->
                         Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(workspace.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text("معرّف مساحة العمل: ${workspace.id}", style = MaterialTheme.typography.labelSmall)
-                                Text("الأعضاء: ${members.size} • المخازن المتاحة: ${warehouses.size}", style = MaterialTheme.typography.bodySmall)
-                                OutlinedTextField(
-                                    value = memberEmail,
-                                    onValueChange = { memberEmail = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("بريد حساب Google للمستخدم") },
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = memberDisplayName,
-                                    onValueChange = { memberDisplayName = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("اسم المستخدم (اختياري)") },
-                                    singleLine = true
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    FilterChip(
-                                        selected = memberRole == "SUBUSER",
-                                        onClick = { memberRole = "SUBUSER" },
-                                        label = { Text("مستخدم فرعي") }
-                                    )
-                                    FilterChip(
-                                        selected = memberRole == "MULTI_WAREHOUSE",
-                                        onClick = { memberRole = "MULTI_WAREHOUSE" },
-                                        label = { Text("متعدد المخازن") }
-                                    )
-                                }
-                                Button(
-                                    onClick = {
-                                        viewModel.addMember(memberEmail, memberDisplayName, memberRole)
-                                        memberEmail = ""
-                                        memberDisplayName = ""
-                                    },
-                                    enabled = !busy && memberEmail.contains("@"),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("إضافة المستخدم إلى مساحة العمل") }
+                            Column(
+                                Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(9.dp)
+                            ) {
                                 Text(
-                                    "يجب أن يكون المستخدم قد ربط حساب Google في التطبيق مرة واحدة على الأقل حتى يستطيع المسؤول إضافته.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    workspace.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    "الربط عن بُعد لا يحتاج إلى وجود الجهازين على شبكة Wi-Fi واحدة: أضف بريد المستخدم هنا، ثم يسجل دخوله بحساب Google نفسه ويختار مساحة العمل. لا ترسل عنوان IP أو كلمة مرور قاعدة البيانات عبر الإنترنت؛ المصادقة والصلاحيات تتمان من خلال حسابه المسجل.",
+                                    "مساحة العمل الموحدة لجميع المستخدمين والأجهزة",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
-                                HorizontalDivider()
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("تسجيل هذا الجهاز", fontWeight = FontWeight.SemiBold)
-                                    TextButton(onClick = { viewModel.registerCurrentDevice() }, enabled = !busy) {
-                                        Text("تسجيل / تحديث")
+                                Text(
+                                    "الأعضاء: ${members.size} • المخازن المتاحة: ${warehouses.size}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                if (workspace.ownerUserId == currentUserId) {
+                                    HorizontalDivider()
+                                    Text(
+                                        "إضافة مستخدم إلى المساحة المشتركة",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    OutlinedTextField(
+                                        value = memberEmail,
+                                        onValueChange = { memberEmail = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text("بريد حساب Google للمستخدم") },
+                                        singleLine = true
+                                    )
+                                    OutlinedTextField(
+                                        value = memberDisplayName,
+                                        onValueChange = { memberDisplayName = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text("اسم المستخدم (اختياري)") },
+                                        singleLine = true
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        FilterChip(
+                                            selected = memberRole == "SUBUSER",
+                                            onClick = { memberRole = "SUBUSER" },
+                                            label = { Text("مستخدم فرعي") }
+                                        )
+                                        FilterChip(
+                                            selected = memberRole == "MULTI_WAREHOUSE",
+                                            onClick = { memberRole = "MULTI_WAREHOUSE" },
+                                            label = { Text("متعدد المخازن") }
+                                        )
                                     }
+                                    Button(
+                                        onClick = {
+                                            viewModel.addMember(memberEmail, memberDisplayName, memberRole)
+                                            memberEmail = ""
+                                            memberDisplayName = ""
+                                        },
+                                        enabled = !busy && memberEmail.contains("@"),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("إضافة إلى مساحة العمل") }
+                                    Text(
+                                        "يجب أن يسجل المستخدم الدخول إلى التطبيق بحساب Google مرة واحدة أولاً. بعد إضافته ستظهر له مساحة العمل نفسها تلقائياً.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "يمكن إضافة المستخدمين عن بُعد؛ لا يلزم اتصالهم بشبكة Wi-Fi نفسها.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    HorizontalDivider()
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("تسجيل هذا الجهاز", fontWeight = FontWeight.SemiBold)
+                                        TextButton(
+                                            onClick = { viewModel.registerCurrentDevice() },
+                                            enabled = !busy
+                                        ) { Text("تسجيل / تحديث") }
+                                    }
+                                } else {
+                                    Text(
+                                        "أنت عضو في مساحة العمل المشتركة. يتولى المسؤول إضافة المستخدمين وإدارة الصلاحيات.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
@@ -277,7 +335,7 @@ fun CloudCollaborationScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) { Text("رفع بيانات المخازن الحالية إلى السحابة") }
                             Text(
-                                "هذه الخطوة تنشئ النسخة السحابية الأولى من قاعدة الجهاز الرئيسي. لا تبدأها من جهاز مستخدم فرعي.",
+                                "ارفع بيانات الجهاز الرئيسي مرة واحدة لبدء مشاركة المخازن مع بقية المستخدمين.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -286,11 +344,15 @@ fun CloudCollaborationScreen(
                             onClick = { viewModel.downloadCloudWorkspaceData() },
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text("تنزيل / تحديث بيانات المخازن من السحابة على هذا الجهاز") }
+                        ) { Text("مزامنة بيانات المخازن الآن") }
                     }
 
                     if (members.isNotEmpty()) {
-                        Text("أعضاء مساحة العمل", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text(
+                            "أعضاء مساحة العمل",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
                         members.forEach { member ->
                             MemberRow(
                                 member = member,
