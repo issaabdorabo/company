@@ -1511,7 +1511,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // 2. Item Operations
     fun saveItem(item: Item, onDone: () -> Unit = {}) {
-        runAuthorizedAction(action = if (item.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل دليل الأصناف") {
+        val action = if (item.id == 0L) {
+            DeviceAction.ADD_OR_MANAGE_CATALOG
+        } else {
+            DeviceAction.EDIT_CATALOG_ITEMS
+        }
+        runAuthorizedAction(
+            action = action,
+            deniedMessage = "لا تملك صلاحية إضافة أو تعديل دليل الأصناف"
+        ) {
             if (item.id == 0L) {
                 repository.insertItem(item)
                 _userMessage.emit("تمت إضافة الصنف بنجاح")
@@ -1521,23 +1529,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     notificationDetails = "تم إضافة الصنف (${item.name}) بالوحدة (${item.unit})"
                 )
             } else {
-                checkPermission(
+                repository.updateItem(item)
+                _userMessage.emit("تم تحديث بيانات الصنف بنجاح")
+                notifyAndPropagate(
                     action = DeviceAction.EDIT_CATALOG_ITEMS,
-                    onDenied = { viewModelScope.launch { _userMessage.emit("لا تملك صلاحية تعديل بيانات الصنف داخل الدليل") } }
-                ) {
-                    viewModelScope.launch {
-                        repository.updateItem(item)
-                        _userMessage.emit("تم تحديث بيانات الصنف بنجاح")
-                        notifyAndPropagate(
-                            action = DeviceAction.EDIT_CATALOG_ITEMS,
-                            notificationTitle = "تعديل بيانات صنف داخل الدليل",
-                            notificationDetails = "تم تحديث بيانات الصنف (${item.name})",
-                            targetItemIds = setOf(item.id)
-                        )
-                        onDone()
-                    }
-                }
-                return@launch
+                    notificationTitle = "تعديل بيانات صنف داخل الدليل",
+                    notificationDetails = "تم تحديث بيانات الصنف (${item.name})",
+                    targetItemIds = setOf(item.id)
+                )
             }
             onDone()
         }
@@ -2077,7 +2076,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveItemStatus(statusName: String, onDone: (Long) -> Unit = {}) {
         runAuthorizedAction(action = DeviceAction.ADD_OR_MANAGE_CATALOG, deniedMessage = "لا تملك صلاحية إضافة حالات الأصناف") {
             val trimmed = statusName.trim()
-            if (trimmed.isBlank()) return@launch
+            if (trimmed.isBlank()) return@runAuthorizedAction
             val id = repository.insertItemStatus(ItemStatus(name = trimmed))
             _userMessage.emit("تمت إضافة الحالة ($trimmed) بنجاح")
             notifyAndPropagate(
