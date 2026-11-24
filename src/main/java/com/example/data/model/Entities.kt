@@ -219,6 +219,31 @@ data class BackupRecord(
 )
 
 @Entity(
+    tableName = "pending_sync_operations",
+    indices = [Index(value = ["createdAt"])]
+)
+data class PendingSyncOperation(
+    @PrimaryKey val operationId: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val actionType: String,
+    val operationTitle: String,
+    val operationDetails: String,
+    val actorName: String,
+    val warehouseIdsJson: String,
+    val targetItemIdsJson: String,
+    val targetVoucherIdsJson: String,
+    val entitiesJson: String,
+    val attempts: Int = 0,
+    val lastError: String = ""
+)
+
+@Entity(tableName = "applied_sync_operations")
+data class AppliedSyncOperation(
+    @PrimaryKey val operationId: String,
+    val appliedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
     tableName = "operation_audit_logs",
     indices = [Index(value = ["timestamp"]), Index(value = ["actorName"]), Index(value = ["operationType"])]
 )
