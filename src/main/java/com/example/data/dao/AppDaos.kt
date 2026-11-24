@@ -521,6 +521,9 @@ interface PendingSyncOperationDao {
     @Query("SELECT COUNT(*) FROM pending_sync_operations")
     suspend fun countPending(): Int
 
+    @Query("DELETE FROM pending_sync_operations")
+    suspend fun clearAllPending()
+
     @Query("SELECT EXISTS(SELECT 1 FROM applied_sync_operations WHERE operationId = :operationId)")
     suspend fun wasApplied(operationId: String): Boolean
 
