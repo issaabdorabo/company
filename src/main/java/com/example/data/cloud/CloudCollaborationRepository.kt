@@ -12,7 +12,6 @@ import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.realtime
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
-import io.github.jan.supabase.postgrest.query.filter.eq
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -224,8 +223,11 @@ class CloudCollaborationRepository {
     suspend fun listMyWorkspaces(): List<CloudWorkspace> {
         val userId = currentUserIdOrNull() ?: error("يجب ربط حساب Google أولاً")
         val memberships = client.postgrest["workspace_members"].select {
+            filter {
             eq("user_id", userId)
             eq("is_active", true)
+        
+            }
         }.decodeList<CloudWorkspaceMember>()
 
         return memberships.mapNotNull { member ->
@@ -245,7 +247,10 @@ class CloudCollaborationRepository {
 
     suspend fun getWorkspace(workspaceId: String): CloudWorkspace =
         client.postgrest["workspaces"].select {
+            filter {
             eq("id", workspaceId)
+        
+            }
         }.decodeSingle<CloudWorkspace>()
 
     suspend fun registerDevice(
@@ -358,7 +363,10 @@ class CloudCollaborationRepository {
 
     suspend fun fetchCloudEntitySnapshotVersioned(workspaceId: String): CloudEntitySnapshot {
         val rows = client.postgrest["cloud_entity_records"].select {
+            filter {
             eq("workspace_id", workspaceId)
+        
+            }
         }.decodeList<CloudEntityRecordDto>()
         val signature = rows.maxOfOrNull { it.updatedAt }.orEmpty()
         val records = rows.sortedByDescending { it.updatedAt }
@@ -445,7 +453,10 @@ class CloudCollaborationRepository {
 
     suspend fun listWorkspaceMembers(workspaceId: String): List<CloudWorkspaceMember> =
         client.postgrest["workspace_members"].select {
+            filter {
             eq("workspace_id", workspaceId)
+        
+            }
         }.decodeList<CloudWorkspaceMember>()
 
     suspend fun addMemberByEmail(
@@ -468,12 +479,18 @@ class CloudCollaborationRepository {
 
     suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> =
         client.postgrest["warehouses"].select {
+            filter {
             eq("workspace_id", workspaceId)
+        
+            }
         }.decodeList<CloudWarehouse>()
 
     suspend fun listWarehouseMemberships(warehouseId: String): List<CloudWarehouseMembership> =
         client.postgrest["warehouse_memberships"].select {
+            filter {
             eq("warehouse_id", warehouseId)
+        
+            }
         }.decodeList<CloudWarehouseMembership>()
 
     suspend fun setWarehousePermissions(
@@ -497,7 +514,10 @@ class CloudCollaborationRepository {
 
     suspend fun listConversations(workspaceId: String): List<CloudConversation> =
         client.postgrest["conversations"].select {
+            filter {
             eq("workspace_id", workspaceId)
+        
+            }
         }.decodeList<CloudConversation>().sortedByDescending { it.createdAt }
 
     suspend fun createDirectConversation(workspaceId: String, otherUserId: String): String =
@@ -524,7 +544,10 @@ class CloudCollaborationRepository {
 
     suspend fun listMessages(conversationId: String): List<CloudMessage> =
         client.postgrest["messages"].select {
+            filter {
             eq("conversation_id", conversationId)
+        
+            }
         }.decodeList<CloudMessage>().sortedBy { it.createdAt }
 
     suspend fun sendMessage(conversationId: String, body: String): CloudMessage {
