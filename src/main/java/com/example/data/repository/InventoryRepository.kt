@@ -1793,6 +1793,7 @@ class InventoryRepository(
 
     suspend fun clearAllUserData(preserveAuditLogs: Boolean = false) = withContext(Dispatchers.IO) {
         database.withTransaction {
+            pendingSyncDao.clearAllPending()
             itemUnitSerialDao.clearAll()
             voucherDao.clearAllVoucherItems()
             voucherDao.clearAllVouchers()
@@ -1822,6 +1823,10 @@ class InventoryRepository(
 
     suspend fun getPendingSyncOperations(): List<PendingSyncOperation> = withContext(Dispatchers.IO) {
         pendingSyncDao.getPending()
+    }
+
+    suspend fun clearPendingSyncOperations() = withContext(Dispatchers.IO) {
+        pendingSyncDao.clearAllPending()
     }
 
     suspend fun recordPendingSyncFailure(operationId: String, error: String) = withContext(Dispatchers.IO) {
