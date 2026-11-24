@@ -237,6 +237,23 @@ data class PendingSyncOperation(
     val lastError: String = ""
 )
 
+@Entity(
+    tableName = "cloud_pending_sync_operations",
+    indices = [Index(value = ["createdAt"])]
+)
+data class CloudPendingSyncOperation(
+    @PrimaryKey val operationId: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val actionType: String,
+    val operationTitle: String,
+    val operationDetails: String,
+    val actorName: String,
+    val warehouseIdsJson: String,
+    val entitiesJson: String,
+    val attempts: Int = 0,
+    val lastError: String = ""
+)
+
 @Entity(tableName = "applied_sync_operations")
 data class AppliedSyncOperation(
     @PrimaryKey val operationId: String,
