@@ -291,23 +291,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
 
             val existingSnapshot = repository.fetchCloudEntitySnapshotVersioned(workspace.id)
             if (existingSnapshot.records.isEmpty()) {
-                val allEntities = localInventoryRepository.exportAllEntitiesForCloud()
-                val warehouseMap = _warehouses.value.mapNotNull { remote ->
-                    remote.localId?.let { localId -> localId to remote.id }
-                }.toMap()
-                val targetLocalIds = localWarehouses.map { it.id }.toSet()
-                val encoded = repository.encodeCloudEntityRecords(
-                    entities = allEntities,
-                    cloudWarehouseIdByLocalId = warehouseMap,
-                    targetWarehouseLocalIds = targetLocalIds,
-                    includeGlobalRecords = true
-                )
-                repository.seedWorkspaceSnapshot(workspace.id, deviceId, encoded)
-                val seeded = repository.fetchCloudEntitySnapshotVersioned(workspace.id)
-                if (seeded.updatedAtSignature.isNotBlank()) {
-                    preferences.saveCloudSnapshotSignature(seeded.updatedAtSignature)
-                }
-                _notice.value = "تم رفع بيانات المخازن الحالية إلى مساحة العمل السحابية لأول مرة."
+                _notice.value = "مساحة العمل جاهزة، ولم تُرفع بيانات المخازن بعد. راجع البيانات ثم اضغط (رفع بيانات هذا الجهاز) لبدء النسخ السحابي."
             } else {
                 val savedSignature = preferences.cloudSnapshotSignatureFlow.first()
                 if (savedSignature.isBlank() && localWarehouses.isEmpty()) {
@@ -342,6 +326,40 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         result.getOrElse { throw it }
         preferences.saveCloudSnapshotSignature(snapshot.updatedAtSignature)
         _notice.value = "تم تنزيل بيانات مساحة العمل من السحابة بنجاح."
+    }
+
+    fun uploadLocalInventoryToCloud() {
+        viewModelScope.launch {
+            runCloudAction("تعذر رفع بيانات المخازن") {
+                val workspace = _activeWorkspace.value ?: error("لا توجد مساحة عمل محددة")
+                val userId = repository.currentUserIdOrNull()
+                    ?: error("أعد تسجيل الدخول بحساب Google")
+                if (workspace.ownerUserId != userId) error("رفع قاعدة المخازن بالكامل متاح للمستخدم الرئيسي فقط")
+
+                val deviceId = preferences.cloudDeviceIdFlow.first()
+                if (deviceId.isBlank()) error("هذا الجهاز غير مسجل في مساحة العمل")
+                val localWarehouses = localInventoryRepository.allWarehouses.first()
+                localWarehouses.forEach { warehouse ->
+                    repository.ensureCloudWarehouse(workspace.id, warehouse.id, warehouse.name)
+                }
+                _warehouses.value = repository.listWarehouses(workspace.id)
+                val warehouseMap = _warehouses.value.mapNotNull { remote ->
+                    remote.localId?.let { localId -> localId to remote.id }
+                }.toMap()
+                val targetLocalIds = localWarehouses.map { it.id }.toSet()
+                val entities = localInventoryRepository.exportAllEntitiesForCloud()
+                val encoded = repository.encodeCloudEntityRecords(
+                    entities = entities,
+                    cloudWarehouseIdByLocalId = warehouseMap,
+                    targetWarehouseLocalIds = targetLocalIds,
+                    includeGlobalRecords = true
+                )
+                repository.seedWorkspaceSnapshot(workspace.id, deviceId, encoded)
+                val seeded = repository.fetchCloudEntitySnapshotVersioned(workspace.id)
+                preferences.saveCloudSnapshotSignature(seeded.updatedAtSignature)
+                _notice.value = "تم رفع ${seeded.records.size} سجلاً إلى مساحة العمل السحابية."
+            }
+        }
     }
 
     fun downloadCloudWorkspaceData() {
