@@ -4,8 +4,6 @@ import android.Manifest
 import android.accounts.Account
 import android.accounts.AccountManager
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -93,7 +91,6 @@ import com.example.ui.components.LocalBackupSelectorDialog
 import com.example.ui.components.RenameBackupDialog
 import com.example.ui.components.SimpleConfirmDialog
 import com.example.util.AppNotificationManager
-import com.example.util.CrashDiagnostics
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.InfoBlue
@@ -137,7 +134,6 @@ fun SettingsScreen(
     var supabaseAuthStatus by remember { mutableStateOf("جارٍ التحقق من حساب Supabase…") }
     var isSupabaseAuthenticated by remember { mutableStateOf(false) }
     var isSupabaseConnecting by remember { mutableStateOf(false) }
-    var hasCrashReport by remember { mutableStateOf(CrashDiagnostics.hasLastCrashReport(context)) }
 
     LaunchedEffect(Unit) {
         SupabaseAuthClient.client.auth.sessionStatus.collect { status ->
@@ -851,50 +847,6 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                    }
-                }
-            }
-        }
-
-        // Last uncaught crash report: copy it so the exact failing source line can be diagnosed.
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("crash_report_card"),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("تقرير آخر انهيار للتطبيق", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Text(
-                        if (hasCrashReport) {
-                            "تم حفظ تفاصيل آخر إغلاق مفاجئ. انسخ التقرير وأرسله هنا حتى نحدد السطر والسبب بدقة."
-                        } else {
-                            "لا يوجد تقرير انهيار محفوظ حالياً. إذا تكرر الإغلاق بعد تثبيت هذه النسخة، سيُحفظ السبب هنا تلقائياً."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(
-                        onClick = {
-                            val report = CrashDiagnostics.readLastCrashReport(context)
-                            if (report.isNullOrBlank()) {
-                                hasCrashReport = false
-                                Toast.makeText(context, "لا يوجد تقرير محفوظ", Toast.LENGTH_SHORT).show()
-                            } else {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("تقرير انهيار التطبيق", report))
-                                Toast.makeText(context, "تم نسخ تقرير الانهيار. الصقه في المحادثة.", Toast.LENGTH_LONG).show()
-                            }
-                        },
-                        enabled = hasCrashReport,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("نسخ تقرير الانهيار")
                     }
                 }
             }
