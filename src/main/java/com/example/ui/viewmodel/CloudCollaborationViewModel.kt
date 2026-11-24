@@ -10,6 +10,7 @@ import com.example.InventoryApp
 import com.example.data.cloud.CloudCollaborationRepository
 import com.example.data.cloud.CloudConversation
 import com.example.data.cloud.CloudMessage
+import com.example.data.cloud.CloudRegisteredUser
 import com.example.data.cloud.CloudWarehouse
 import com.example.data.cloud.CloudWarehouseMembership
 import com.example.data.cloud.CloudWorkspace
@@ -51,6 +52,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
 
     private val _members = MutableStateFlow<List<CloudWorkspaceMember>>(emptyList())
     val members: StateFlow<List<CloudWorkspaceMember>> = _members.asStateFlow()
+
+    private val _registeredUsers = MutableStateFlow<List<CloudRegisteredUser>>(emptyList())
+    val registeredUsers: StateFlow<List<CloudRegisteredUser>> = _registeredUsers.asStateFlow()
 
     private val _warehouses = MutableStateFlow<List<CloudWarehouse>>(emptyList())
     val warehouses: StateFlow<List<CloudWarehouse>> = _warehouses.asStateFlow()
@@ -94,6 +98,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                     _activeWorkspace.value = null
                     _currentUserId.value = ""
                     _members.value = emptyList()
+                    _registeredUsers.value = emptyList()
                     _warehouses.value = emptyList()
                     _conversations.value = emptyList()
                     _notice.value = "اربط حساب Google من الإعدادات أولاً لتفعيل التعاون السحابي."
@@ -186,6 +191,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 val workspace = _activeWorkspace.value ?: error("لا توجد مساحة عمل محددة")
                 repository.addMemberByEmail(workspace.id, email, role, displayName)
                 _members.value = repository.listWorkspaceMembers(workspace.id)
+                _registeredUsers.value = repository.listRegisteredWorkspaceUsers(workspace.id)
                 _notice.value = "تمت إضافة الحساب إلى مساحة العمل. امنحه صلاحيات المخازن من تبويب الصلاحيات."
             }
         }
@@ -415,6 +421,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
 
     private suspend fun loadWorkspaceContent(workspaceId: String) {
         _members.value = repository.listWorkspaceMembers(workspaceId)
+        _registeredUsers.value = if (_activeWorkspace.value?.ownerUserId == repository.currentUserIdOrNull()) {
+            repository.listRegisteredWorkspaceUsers(workspaceId)
+        } else emptyList()
         _warehouses.value = repository.listWarehouses(workspaceId)
         val membershipMap = LinkedHashMap<String, List<CloudWarehouseMembership>>()
         _warehouses.value.forEach { warehouse ->
@@ -460,7 +469,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
             ?: error("هذه المحادثة غير متاحة لهذا الحساب")
         messagesRealtimeJob?.cancel()
         _selectedConversation.value = conversation
-        _messages.value = repository.listMessages(conversationId)
+        _messages.value = emptyList()
         messagesRealtimeJob = viewModelScope.launch {
             repository.observeMessages(conversationId).collect {
                 runCatching {
@@ -489,7 +498,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         val raw = error.message ?: error.javaClass.simpleName
         return when {
             raw.contains("USER_NOT_REGISTERED", true) ->
-                "هذا البريد لم يسجل الدخول إلى التطبيق بعد. اطلب من المستخدم ربط حساب Google أولاً."
+                "هذا الحساب لم يسجل الدخول إلى التطبيق بعد. سيظهر تلقائياً بعد تسجيل الدخول بحساب Google."
+            raw.contains("CANNOT_ADD_SELF", true) ->
+                "لا يمكنك إضافة حسابك إلى مساحة العمل مرة أخرى."
             raw.contains("OWNER_REQUIRED", true) ->
                 "هذه العملية متاحة للمستخدم الرئيسي المسؤول عن مساحة العمل فقط."
             raw.contains("WORKSPACE_ALREADY_EXISTS_INVITE_REQUIRED", true) ->

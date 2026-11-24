@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.cloud.CloudConversation
 import com.example.data.cloud.CloudMessage
+import com.example.data.cloud.CloudRegisteredUser
 import com.example.data.cloud.CloudWarehouse
 import com.example.data.cloud.CloudWarehouseMembership
 import com.example.data.cloud.CloudWorkspaceMember
@@ -63,6 +64,7 @@ fun CloudCollaborationScreen(
     val activeWorkspace by viewModel.activeWorkspace.collectAsState()
     val canCreateFirstWorkspace by viewModel.canCreateFirstWorkspace.collectAsState()
     val members by viewModel.members.collectAsState()
+    val registeredUsers by viewModel.registeredUsers.collectAsState()
     val warehouses by viewModel.warehouses.collectAsState()
     val warehouseMemberships by viewModel.warehouseMemberships.collectAsState()
     val conversations by viewModel.conversations.collectAsState()
@@ -304,6 +306,32 @@ fun CloudCollaborationScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
+                                    if (registeredUsers.isNotEmpty()) {
+                                        HorizontalDivider()
+                                        Text("حسابات سجلت الدخول ويمكن إضافتها", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                        registeredUsers.forEach { account ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(account.displayName.ifBlank { account.email }, fontWeight = FontWeight.SemiBold)
+                                                    Text(account.email, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                                TextButton(
+                                                    onClick = { viewModel.addMember(account.email, account.displayName, "SUBUSER") },
+                                                    enabled = !busy
+                                                ) { Text("إضافة") }
+                                            }
+                                        }
+                                    } else {
+                                        Text(
+                                            "ستظهر هنا تلقائياً الحسابات التي تسجل الدخول إلى التطبيق بحساب Google ولم تُضف للمساحة بعد.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                     HorizontalDivider()
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),

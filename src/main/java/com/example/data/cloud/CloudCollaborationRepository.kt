@@ -49,6 +49,14 @@ data class CloudWorkspaceMember(
 )
 
 @Serializable
+data class CloudRegisteredUser(
+    @SerialName("user_id") val userId: String,
+    val email: String,
+    @SerialName("display_name") val displayName: String = "",
+    @SerialName("created_at") val createdAt: String = ""
+)
+
+@Serializable
 data class CloudWarehouse(
     val id: String,
     @SerialName("workspace_id") val workspaceId: String,
@@ -509,6 +517,12 @@ class CloudCollaborationRepository {
             }
         }.decodeList<CloudOperationAuditEntry>().sortedBy { it.createdAt }
 
+    suspend fun listRegisteredWorkspaceUsers(workspaceId: String): List<CloudRegisteredUser> =
+        client.postgrest.rpc(
+            "list_registered_workspace_users",
+            buildJsonObject { put("p_workspace", JsonPrimitive(workspaceId)) }
+        ).decodeList<CloudRegisteredUser>()
+
     suspend fun addMemberByEmail(
         workspaceId: String,
         email: String,
@@ -625,7 +639,9 @@ class CloudCollaborationRepository {
         val collector = launch {
             changes.collect { trySend(Unit).isSuccess }
         }
-        channel.subscribe()
+        channel.subscribe(blockUntilSubscribed = true)
+        // Signal initial history loading only after the websocket is subscribed.
+        trySend(Unit)
         awaitClose {
             collector.cancel()
             CoroutineScope(Dispatchers.IO).launch {

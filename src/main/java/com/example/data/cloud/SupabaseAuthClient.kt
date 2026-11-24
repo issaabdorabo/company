@@ -13,6 +13,7 @@ import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.providers.builtin.IDToken
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
+import io.ktor.client.plugins.HttpTimeout
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -29,6 +30,13 @@ object SupabaseAuthClient {
             supabaseUrl = BuildConfig.SUPABASE_URL,
             supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         ) {
+            httpConfig {
+                install(HttpTimeout) {
+                    requestTimeoutMillis = 30_000L
+                    connectTimeoutMillis = 15_000L
+                    socketTimeoutMillis = 30_000L
+                }
+            }
             install(Auth)
             install(Postgrest)
             install(Realtime)
