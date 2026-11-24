@@ -2935,10 +2935,17 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun saveSerials(serials: List<ItemUnitSerialRecord>, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
-            val changed = findChangedSerialRecords(serials)
-            val saved = repository.saveSerialsAndReturn(serials)
-            _userMessage.emit(if (changed.isEmpty()) "لا توجد تغييرات جديدة لحفظها" else "تم حفظ الأرقام المميزة والحالات بنجاح")
+        val changed = findChangedSerialRecords(serials)
+        runAuthorizedAction(
+            action = DeviceAction.EDIT_SERIALS,
+            warehouseIds = changed.map { it.warehouseId }.toSet(),
+            deniedMessage = "لا تملك صلاحية تحديث الأرقام التسلسلية أو الحالات أو الملاحظات في هذا المخزن"
+        ) {
+            repository.saveSerialsAndReturn(serials)
+            _userMessage.emit(
+                if (changed.isEmpty()) "لا توجد تغييرات جديدة لحفظها"
+                else "تم حفظ الأرقام المميزة والحالات والملاحظات بنجاح"
+            )
             if (changed.isNotEmpty()) {
                 notifyAndPropagate(
                     action = DeviceAction.EDIT_SERIALS,
