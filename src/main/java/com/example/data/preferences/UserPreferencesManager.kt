@@ -73,6 +73,7 @@ class UserPreferencesManager(private val context: Context) {
         val KEY_CLOUD_WORKSPACE_ID = stringPreferencesKey("cloud_workspace_id")
         val KEY_CLOUD_WORKSPACE_NAME = stringPreferencesKey("cloud_workspace_name")
         val KEY_CLOUD_DEVICE_ID = stringPreferencesKey("cloud_device_id")
+        val KEY_CLOUD_SNAPSHOT_SIGNATURE = stringPreferencesKey("cloud_snapshot_signature")
     }
 
     val themeFlow: Flow<AppTheme> = context.dataStore.data.map { prefs ->
@@ -173,6 +174,10 @@ class UserPreferencesManager(private val context: Context) {
 
     val cloudDeviceIdFlow: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[KEY_CLOUD_DEVICE_ID] ?: ""
+    }
+
+    val cloudSnapshotSignatureFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_CLOUD_SNAPSHOT_SIGNATURE] ?: ""
     }
 
     val devicePermissionsFlow: Flow<DevicePermissions> = context.dataStore.data.map { prefs ->
@@ -320,7 +325,12 @@ class UserPreferencesManager(private val context: Context) {
             prefs[KEY_CLOUD_WORKSPACE_ID] = ""
             prefs[KEY_CLOUD_WORKSPACE_NAME] = ""
             prefs[KEY_CLOUD_DEVICE_ID] = ""
+            prefs[KEY_CLOUD_SNAPSHOT_SIGNATURE] = ""
         }
+    }
+
+    suspend fun saveCloudSnapshotSignature(signature: String) {
+        context.dataStore.edit { prefs -> prefs[KEY_CLOUD_SNAPSHOT_SIGNATURE] = signature }
     }
 
     suspend fun getOrCreateInstallationId(): String {
