@@ -249,6 +249,11 @@ fun CloudCollaborationScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Text(
+                                    "الربط عن بُعد لا يحتاج إلى وجود الجهازين على شبكة Wi-Fi واحدة: أضف بريد المستخدم هنا، ثم يسجل دخوله بحساب Google نفسه ويختار مساحة العمل. لا ترسل عنوان IP أو كلمة مرور قاعدة البيانات عبر الإنترنت؛ المصادقة والصلاحيات تتمان من خلال حسابه المسجل.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                                 HorizontalDivider()
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
