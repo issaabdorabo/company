@@ -17,6 +17,7 @@ import com.example.data.dao.ItemUnitDao
 import com.example.data.dao.ItemUnitSerialDao
 import com.example.data.dao.OperationAuditLogDao
 import com.example.data.dao.PendingSyncOperationDao
+import com.example.data.dao.CloudPendingSyncOperationDao
 import com.example.data.dao.SmallerUnitDao
 import com.example.data.dao.StockAdjustmentDao
 import com.example.data.dao.SupplierDao
@@ -34,6 +35,7 @@ import com.example.data.model.ItemUnitSerialRecord
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
 import com.example.data.model.AppliedSyncOperation
+import com.example.data.model.CloudPendingSyncOperation
 import com.example.data.model.SmallerUnit
 import com.example.data.model.StockAdjustmentLog
 import com.example.data.model.Supplier
@@ -79,9 +81,10 @@ class DatabaseConverters {
         ItemUnitSerialRecord::class,
         OperationAuditLog::class,
         PendingSyncOperation::class,
-        AppliedSyncOperation::class
+        AppliedSyncOperation::class,
+        CloudPendingSyncOperation::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
@@ -102,6 +105,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun itemUnitSerialDao(): ItemUnitSerialDao
     abstract fun operationAuditLogDao(): OperationAuditLogDao
     abstract fun pendingSyncOperationDao(): PendingSyncOperationDao
+    abstract fun cloudPendingSyncOperationDao(): CloudPendingSyncOperationDao
 
     companion object {
         @Volatile
@@ -318,6 +322,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `cloud_pending_sync_operations` (" +
+                        "`operationId` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                        "`actionType` TEXT NOT NULL, `operationTitle` TEXT NOT NULL, " +
+                        "`operationDetails` TEXT NOT NULL, `actorName` TEXT NOT NULL, " +
+                        "`warehouseIdsJson` TEXT NOT NULL, `entitiesJson` TEXT NOT NULL, " +
+                        "`attempts` INTEGER NOT NULL, `lastError` TEXT NOT NULL, " +
+                        "PRIMARY KEY(`operationId`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_cloud_pending_sync_operations_createdAt` ON `cloud_pending_sync_operations` (`createdAt`)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -335,7 +354,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_7_8,
                         MIGRATION_8_9,
                         MIGRATION_9_10,
-                        MIGRATION_10_11
+                        MIGRATION_10_11,
+                        MIGRATION_11_12
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
