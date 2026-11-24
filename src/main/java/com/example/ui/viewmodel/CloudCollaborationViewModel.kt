@@ -186,6 +186,13 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         canEdit: Boolean,
         canEditInventory: Boolean,
         canDeleteItem: Boolean,
+        canEditIssueVoucher: Boolean,
+        canDeleteIssueVoucher: Boolean,
+        canEditSupplyVoucher: Boolean,
+        canDeleteSupplyVoucher: Boolean,
+        canAddItems: Boolean,
+        canEditCatalogItems: Boolean,
+        canBackup: Boolean,
         makeDedicated: Boolean
     ) {
         viewModelScope.launch {
@@ -201,6 +208,13 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                     put("canEdit", canEdit)
                     put("canEditInventory", canEditInventory)
                     put("canDeleteItem", canDeleteItem)
+                    put("canEditIssueVoucher", canEditIssueVoucher)
+                    put("canDeleteIssueVoucher", canDeleteIssueVoucher)
+                    put("canEditSupplyVoucher", canEditSupplyVoucher)
+                    put("canDeleteSupplyVoucher", canDeleteSupplyVoucher)
+                    put("canAddItems", canAddItems)
+                    put("canEditCatalogItems", canEditCatalogItems)
+                    put("canBackup", canBackup)
                 }
                 repository.setWarehousePermissions(
                     workspace.id, warehouseId, userId, permissions, makeDedicated
