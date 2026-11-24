@@ -343,6 +343,13 @@ fun CloudCollaborationScreen(
                                         canEdit = permissions.canEdit,
                                         canEditInventory = permissions.canEditInventory,
                                         canDeleteItem = permissions.canDeleteItem,
+                                        canEditIssueVoucher = permissions.canEditIssueVoucher,
+                                        canDeleteIssueVoucher = permissions.canDeleteIssueVoucher,
+                                        canEditSupplyVoucher = permissions.canEditSupplyVoucher,
+                                        canDeleteSupplyVoucher = permissions.canDeleteSupplyVoucher,
+                                        canAddItems = permissions.canAddItems,
+                                        canEditCatalogItems = permissions.canEditCatalogItems,
+                                        canBackup = permissions.canBackup,
                                         makeDedicated = dedicated
                                     )
                                 }
@@ -425,7 +432,14 @@ private data class EditableWarehousePermissions(
     val canReports: Boolean,
     val canEdit: Boolean,
     val canEditInventory: Boolean,
-    val canDeleteItem: Boolean
+    val canDeleteItem: Boolean,
+    val canEditIssueVoucher: Boolean,
+    val canDeleteIssueVoucher: Boolean,
+    val canEditSupplyVoucher: Boolean,
+    val canDeleteSupplyVoucher: Boolean,
+    val canAddItems: Boolean,
+    val canEditCatalogItems: Boolean,
+    val canBackup: Boolean
 )
 
 private fun CloudWarehouseMembership?.permission(key: String): Boolean =
@@ -471,6 +485,13 @@ private fun WarehousePermissionEditor(
     var canEdit by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEdit")) }
     var canEditInventory by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditInventory")) }
     var canDeleteItem by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canDeleteItem")) }
+    var canEditIssueVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditIssueVoucher")) }
+    var canDeleteIssueVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canDeleteIssueVoucher")) }
+    var canEditSupplyVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditSupplyVoucher")) }
+    var canDeleteSupplyVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canDeleteSupplyVoucher")) }
+    var canAddItems by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canAddItems")) }
+    var canEditCatalogItems by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditCatalogItems")) }
+    var canBackup by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canBackup")) }
     var dedicated by remember(warehouse.id, member.userId, access) { mutableStateOf(false) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -498,13 +519,29 @@ private fun WarehousePermissionEditor(
                 PermissionToggle("تعديل المخزون", canEditInventory, enabled) { canEditInventory = it; if (it) canView = true }
                 PermissionToggle("حذف صنف", canDeleteItem, enabled) { canDeleteItem = it; if (it) canView = true }
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                PermissionToggle("تعديل سند صرف/تحويل", canEditIssueVoucher, enabled) { canEditIssueVoucher = it; if (it) canView = true }
+                PermissionToggle("حذف سند صرف/تحويل", canDeleteIssueVoucher, enabled) { canDeleteIssueVoucher = it; if (it) canView = true }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                PermissionToggle("تعديل سند توريد", canEditSupplyVoucher, enabled) { canEditSupplyVoucher = it; if (it) canView = true }
+                PermissionToggle("حذف سند توريد", canDeleteSupplyVoucher, enabled) { canDeleteSupplyVoucher = it; if (it) canView = true }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                PermissionToggle("إضافة أصناف ودليل", canAddItems, enabled) { canAddItems = it; if (it) canView = true }
+                PermissionToggle("تعديل دليل الأصناف", canEditCatalogItems, enabled) { canEditCatalogItems = it; if (it) canView = true }
+            }
+            PermissionToggle("نسخ احتياطي واستعادة", canBackup, enabled) { canBackup = it }
             PermissionToggle("تخصيص هذا المخزن لهذا المستخدم", dedicated, enabled) { dedicated = it }
             Button(
                 onClick = {
                     onSave(
                         EditableWarehousePermissions(
                             canView, canInward, canDisburse, canTransfer, canAdjust,
-                            canReports, canEdit, canEditInventory, canDeleteItem
+                            canReports, canEdit, canEditInventory, canDeleteItem,
+                            canEditIssueVoucher, canDeleteIssueVoucher,
+                            canEditSupplyVoucher, canDeleteSupplyVoucher,
+                            canAddItems, canEditCatalogItems, canBackup
                         ),
                         dedicated
                     )
