@@ -2375,11 +2375,28 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch { _userMessage.emit("صلاحية النسخ الاحتياطي والتصدير غير ممنوحة من المستخدم الرئيسي") }
     }
 
+    private suspend fun attachDeviceBackupMetadata(record: BackupRecord): BackupRecord {
+        val metadata = org.json.JSONObject().put(
+            "linkedSubDevices",
+            org.json.JSONArray(preferences.exportLinkedDevicesBackupJson())
+        )
+        return repository.attachBackupMetadata(record, metadata)
+    }
+
+    private suspend fun restoreDeviceBackupMetadata(rawJson: String) {
+        val backup = org.json.JSONObject(rawJson)
+        val devices = backup.optJSONArray("linkedSubDevices") ?: return
+        if (preferences.isMainDeviceFlow.first()) {
+            preferences.restoreLinkedDevicesBackupJson(devices.toString())
+        }
+    }
+
     fun createBackup(name: String) {
         if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
         viewModelScope.launch {
             try {
-                repository.createBackup(name, isCloud = false, accountEmail = "")
+                val record = repository.createBackup(name, isCloud = false, accountEmail = "")
+                attachDeviceBackupMetadata(record)
                 notificationManager.notifyOperation(
                     title = "إنشاء نسخة احتياطية محلية",
                     details = "تم حفظ النسخة ($name) بنجاح"
@@ -2395,7 +2412,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         check(mayUseBackups()) { "صلاحية تصدير JSON غير ممنوحة من المستخدم الرئيسي" }
         val dateStr = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.getDefault()).format(Date())
         val record = repository.createBackup("تصدير_$dateStr", isCloud = false, accountEmail = "")
-        return record.backupJson
+        return attachDeviceBackupMetadata(record).backupJson
     }
 
     fun importBackupJsonFromFile(rawJson: String) {
@@ -2406,6 +2423,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 val ok = repository.restoreBackupReplacingExisting(rawJson)
                 if (ok) {
+                    restoreDeviceBackupMetadata(rawJson)
                     notifyAndPropagate(
                         action = DeviceAction.BACKUP_RESTORE,
                         notificationTitle = "استعادة نسخة من ملف",
@@ -2432,6 +2450,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 val ok = repository.restoreBackupReplacingExisting(record.backupJson)
                 if (ok) {
+                    restoreDeviceBackupMetadata(record.backupJson)
                     notifyAndPropagate(
                         action = DeviceAction.BACKUP_RESTORE,
                         notificationTitle = "استعادة نسخة احتياطية",
@@ -2657,7 +2676,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _cloudAuthError.value = null
             try {
                 val cleanName = name.trim().ifBlank { "نسخة_سحابية" }
-                val snapshot = repository.buildCloudBackupSnapshot(cleanName, email)
+                val rawSnapshot = repository.buildCloudBackupSnapshot(cleanName, email)
+                val snapshot = attachDeviceBackupMetadata(rawSnapshot)
                 val currentOrg = preferences.orgNameFlow.first()
 
                 val res = executeWithGoogleToken(
@@ -2769,6 +2789,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 jsonRes.onSuccess { rawJson ->
                     val ok = repository.restoreBackupReplacingExisting(rawJson)
                     if (ok) {
+                        restoreDeviceBackupMetadata(rawJson)
                         notifyAndPropagate(
                             action = DeviceAction.BACKUP_RESTORE,
                             notificationTitle = "استعادة نسخة سحابية",
