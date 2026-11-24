@@ -131,6 +131,11 @@ private data class CheckCloudWarehouseAccessParams(
     @SerialName("p_warehouse_ids") val warehouseIds: List<String>
 )
 
+data class CloudEntitySnapshot(
+    val records: List<CloudEntityRecord>,
+    val updatedAtSignature: String
+)
+
 @Serializable
 private data class CloudEntityRecordDto(
     val id: String,
@@ -325,11 +330,15 @@ class CloudCollaborationRepository {
         }
     ).decodeSingle<Boolean>()
 
-    suspend fun fetchCloudEntitySnapshot(workspaceId: String): List<CloudEntityRecord> {
+    suspend fun fetchCloudEntitySnapshot(workspaceId: String): List<CloudEntityRecord> =
+        fetchCloudEntitySnapshotVersioned(workspaceId).records
+
+    suspend fun fetchCloudEntitySnapshotVersioned(workspaceId: String): CloudEntitySnapshot {
         val rows = client.postgrest["cloud_entity_records"].select {
             eq("workspace_id", workspaceId)
         }.decodeList<CloudEntityRecordDto>()
-        return rows.sortedByDescending { it.updatedAt }
+        val signature = rows.maxOfOrNull { it.updatedAt }.orEmpty()
+        val records = rows.sortedByDescending { it.updatedAt }
             .distinctBy { it.documentId }
             .map { row ->
                 CloudEntityRecord(
@@ -341,6 +350,7 @@ class CloudCollaborationRepository {
                     isDeleted = row.isDeleted
                 )
             }
+        return CloudEntitySnapshot(records, signature)
     }
 
     fun encodeCloudEntityRecords(
