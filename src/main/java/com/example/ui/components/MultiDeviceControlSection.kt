@@ -11,8 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -87,7 +85,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MultiDeviceControlSection(
     viewModel: InventoryViewModel
@@ -612,10 +609,9 @@ fun MultiDeviceControlSection(
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
+                            // Use stable Column layout primitives here. FlowRow was compiled
+                            // against a newer Foundation ABI than the one packaged in the APK.
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 PermissionBadge("الاطلاع والتقارير", true)
                                 PermissionBadge("إضافة أصناف ومخازن", devicePermissions.canAddItems)
                                 PermissionBadge("تسجيل الوارد", devicePermissions.canInward)
