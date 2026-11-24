@@ -1142,6 +1142,891 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         true
     }
 
+    // 1. Warehouse Operations
+    fun saveWarehouse(warehouse: Warehouse, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            if (warehouse.id == 0L) {
+                repository.insertWarehouse(warehouse)
+                _userMessage.emit("تمت إضافة المخزن بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                    notificationTitle = "إضافة مخزن جديد",
+                    notificationDetails = "تم إضافة المخزن (${warehouse.name}) — أمين المخزن: ${warehouse.managerName}"
+                )
+            } else {
+                runAuthorizedAction(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    warehouseIds = setOf(warehouse.id),
+                    deniedMessage = "لا تملك صلاحية تعديل هذا المخزن"
+                ) {
+                    repository.updateWarehouse(warehouse)
+                    _userMessage.emit("تم تحديث بيانات المخزن بنجاح")
+                    notifyAndPropagate(
+                        action = DeviceAction.EDIT_OR_DELETE,
+                        notificationTitle = "تعديل بيانات مخزن",
+                        notificationDetails = "تم تحديث بيانات المخزن (${warehouse.name})",
+                        warehouseIds = setOf(warehouse.id)
+                    )
+                    onDone()
+                }
+                return@launch
+            }
+            onDone()
+        }
+    }
+
+    suspend fun checkWarehouseHasStock(warehouseId: Long): Boolean {
+        return repository.warehouseHasStock(warehouseId)
+    }
+
+    fun deleteWarehouse(warehouse: Warehouse) {
+        runAuthorizedAction(
+            action = DeviceAction.EDIT_OR_DELETE,
+            warehouseIds = setOf(warehouse.id),
+            deniedMessage = "لا تملك صلاحية حذف هذا المخزن"
+        ) {
+            repository.deleteWarehouse(warehouse)
+            _userMessage.emit("تم حذف المخزن نهائياً")
+            notifyAndPropagate(
+                action = DeviceAction.EDIT_OR_DELETE,
+                notificationTitle = "حذف مخزن",
+                notificationDetails = "تم حذف المخزن (${warehouse.name}) من النظام",
+                warehouseIds = setOf(warehouse.id)
+            )
+        }
+    }
+
+    fun addItemDirectlyToWarehouse(
+        warehouseId: Long,
+        itemId: Long,
+        quantity: Double,
+        minStockAlert: Double,
+        onDone: () -> Unit
+    ) {
+        runAuthorizedAction(
+            action = DeviceAction.EDIT_INVENTORY,
+            warehouseIds = setOf(warehouseId),
+            deniedMessage = "لا تملك صلاحية إضافة أصناف إلى هذا المخزن"
+        ) {
+            val warehouseName = warehouses.value.find { it.id == warehouseId }?.name ?: "مخزن"
+            val itemName = items.value.find { it.id == itemId }?.name ?: "صنف"
+            repository.addItemDirectlyToWarehouse(warehouseId, itemId, quantity, minStockAlert)
+            _userMessage.emit("تمت إضافة الصنف داخل المخزن بنجاح")
+            notifyAndPropagate(
+                action = DeviceAction.EDIT_INVENTORY,
+                notificationTitle = "إضافة صنف لمخزن",
+                notificationDetails = "تم إضافة ($itemName) إلى ($warehouseName) بكمية ${quantity.toInt()}",
+                warehouseIds = setOf(warehouseId),
+                targetItemIds = setOf(itemId)
+            )
+            onDone()
+        }
+    }
+
+    fun removeItemFromWarehouse(
+        warehouseId: Long,
+        itemId: Long,
+        onDone: () -> Unit = {}
+    ) {
+        runAuthorizedAction(
+            action = DeviceAction.EDIT_INVENTORY,
+            warehouseIds = setOf(warehouseId),
+            deniedMessage = "لا تملك صلاحية حذف الأصناف من هذا المخزن"
+        ) {
+            val warehouseName = warehouses.value.find { it.id == warehouseId }?.name ?: "مخزن"
+            val itemName = items.value.find { it.id == itemId }?.name ?: "صنف"
+            repository.removeItemFromWarehouse(warehouseId, itemId)
+            _userMessage.emit("تم حذف الصنف نهائياً من هذا المخزن")
+            notifyAndPropagate(
+                action = DeviceAction.EDIT_INVENTORY,
+                notificationTitle = "حذف صنف من مخزن",
+                notificationDetails = "تم إزالة ($itemName) نهائياً من ($warehouseName)",
+                warehouseIds = setOf(warehouseId),
+                targetItemIds = setOf(itemId)
+            )
+            onDone()
+        }
+    }
+
+    fun updateWarehouseItemMinStock(
+        warehouseId: Long,
+        itemId: Long,
+        customMinStock: Double,
+        onDone: () -> Unit = {}
+    ) {
+        runAuthorizedAction(
+            action = DeviceAction.ADJUST_STOCK,
+            warehouseIds = setOf(warehouseId),
+            deniedMessage = "لا تملك صلاحية تعديل حدود المخزون في هذا المخزن"
+        ) {
+            val itemName = items.value.find { it.id == itemId }?.name ?: "صنف"
+            repository.updateWarehouseItemMinStock(warehouseId, itemId, customMinStock)
+            _userMessage.emit("تم تحديث حد إعادة الطلب الخاص بالمخزن")
+            notifyAndPropagate(
+                action = DeviceAction.ADJUST_STOCK,
+                notificationTitle = "تحديث حد إعادة الطلب",
+                notificationDetails = "تم تعديل حد الطلب للصنف ($itemName) إلى ${customMinStock.toInt()}",
+                warehouseIds = setOf(warehouseId),
+                targetItemIds = setOf(itemId)
+            )
+            onDone()
+        }
+    }
+
+    // 2. Item Operations
+    fun saveItem(item: Item, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            if (item.id == 0L) {
+                repository.insertItem(item)
+                _userMessage.emit("تمت إضافة الصنف بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                    notificationTitle = "إضافة صنف جديد",
+                    notificationDetails = "تم إضافة الصنف (${item.name}) بالوحدة (${item.unit})"
+                )
+            } else {
+                checkPermission(
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
+                    onDenied = { viewModelScope.launch { _userMessage.emit("لا تملك صلاحية تعديل بيانات الصنف داخل الدليل") } }
+                ) {
+                    viewModelScope.launch {
+                        repository.updateItem(item)
+                        _userMessage.emit("تم تحديث بيانات الصنف بنجاح")
+                        notifyAndPropagate(
+                            action = DeviceAction.EDIT_CATALOG_ITEMS,
+                            notificationTitle = "تعديل بيانات صنف داخل الدليل",
+                            notificationDetails = "تم تحديث بيانات الصنف (${item.name})",
+                            targetItemIds = setOf(item.id)
+                        )
+                        onDone()
+                    }
+                }
+                return@launch
+            }
+            onDone()
+        }
+    }
+
+    suspend fun checkItemHasTransactions(itemId: Long): Boolean {
+        return repository.itemHasTransactions(itemId)
+    }
+
+    fun deleteItem(item: Item) {
+        val itemWarehouseIds = stockSnapshot.value?.warehouseItemStocks.orEmpty().filter { it.itemId == item.id }.map { it.warehouseId }.toSet()
+        runAuthorizedAction(DeviceAction.DELETE_ITEM, warehouseIds = itemWarehouseIds, deniedMessage = "لا تملك صلاحية حذف هذا الصنف من المخازن المرتبطة به") {
+            repository.deleteItem(item)
+            _userMessage.emit("تم حذف الصنف نهائياً")
+            notifyAndPropagate(
+                action = DeviceAction.DELETE_ITEM,
+                notificationTitle = "حذف صنف",
+                notificationDetails = "تم حذف الصنف (${item.name}) من الدليل",
+                warehouseIds = itemWarehouseIds,
+                targetItemIds = setOf(item.id)
+            )
+        }
+    }
+
+    // 3. Stock Adjustment inside Warehouse
+    fun adjustWarehouseStock(
+        warehouseId: Long,
+        itemId: Long,
+        newQuantity: Double,
+        reasonNote: String,
+        onDone: () -> Unit
+    ) {
+        runAuthorizedAction(
+            action = DeviceAction.ADJUST_STOCK,
+            warehouseIds = setOf(warehouseId),
+            deniedMessage = "لا تملك صلاحية تسوية المخزون في هذا المخزن"
+        ) {
+            val warehouseName = warehouses.value.find { it.id == warehouseId }?.name ?: "مخزن"
+            val itemName = items.value.find { it.id == itemId }?.name ?: "صنف"
+            repository.adjustWarehouseStock(warehouseId, itemId, newQuantity, reasonNote)
+            _userMessage.emit("تم تعديل كمية المخزون وتوثيق السبب بنجاح")
+            notifyAndPropagate(
+                action = DeviceAction.ADJUST_STOCK,
+                notificationTitle = "تسوية وتعديل مخزون",
+                notificationDetails = "تم تعديل رصيد ($itemName) في ($warehouseName) إلى ${newQuantity.toInt()} — السبب: $reasonNote",
+                warehouseIds = setOf(warehouseId),
+                targetItemIds = setOf(itemId)
+            )
+            onDone()
+        }
+    }
+
+    // 4. Beneficiary Operations
+    fun saveBeneficiary(beneficiary: Beneficiary, onDone: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val id = if (beneficiary.id == 0L) {
+                val newId = repository.insertBeneficiary(beneficiary)
+                _userMessage.emit("تمت إضافة الجهة المستفيدة بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                    notificationTitle = "إضافة جهة مستفيدة",
+                    notificationDetails = "تمت إضافة الجهة المستفيدة (${beneficiary.name})"
+                )
+                newId
+            } else {
+                repository.updateBeneficiary(beneficiary)
+                _userMessage.emit("تم تحديث بيانات الجهة المستفيدة")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل جهة مستفيدة",
+                    notificationDetails = "تم تحديث بيانات (${beneficiary.name})"
+                )
+                beneficiary.id
+            }
+            onDone(id)
+        }
+    }
+
+    suspend fun checkBeneficiaryHasTransactions(name: String, id: Long): Boolean {
+        return repository.checkBeneficiaryHasTransactions(name, id)
+    }
+
+    fun deleteBeneficiary(beneficiary: Beneficiary, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val success = repository.deleteBeneficiarySafely(beneficiary)
+            if (success) {
+                _userMessage.emit("تم حذف الجهة المستفيدة بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "حذف جهة مستفيدة",
+                    notificationDetails = "تم حذف (${beneficiary.name})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن حذف الجهة المستفيدة لوجود حركات صرف سابقة مرتبطة بها!")
+            }
+            onResult(success)
+        }
+    }
+
+    // 5. Supplier Operations
+    fun saveSupplier(supplier: Supplier, onDone: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val id = if (supplier.id == 0L) {
+                val newId = repository.insertSupplier(supplier)
+                _userMessage.emit("تمت إضافة المورد بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                    notificationTitle = "إضافة مورد جديد",
+                    notificationDetails = "تمت إضافة المورد (${supplier.name})"
+                )
+                newId
+            } else {
+                repository.updateSupplier(supplier)
+                _userMessage.emit("تم تحديث بيانات المورد")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تحديث بيانات مورد",
+                    notificationDetails = "تم تعديل بيانات المورد (${supplier.name})"
+                )
+                supplier.id
+            }
+            onDone(id)
+        }
+    }
+
+    suspend fun checkSupplierHasTransactions(supplierName: String): Boolean {
+        return repository.checkSupplierHasTransactions(supplierName)
+    }
+
+    fun deleteSupplier(supplier: Supplier, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val success = repository.deleteSupplierSafely(supplier)
+            if (success) {
+                _userMessage.emit("تم حذف المورد بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "حذف مورد",
+                    notificationDetails = "تم حذف المورد (${supplier.name})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن حذف المورد لوجود عمليات سابقة مرتبطة به!")
+            }
+            onResult(success)
+        }
+    }
+
+    fun updateSupplierName(oldName: String, newName: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            val supp = suppliers.value.find { it.name == oldName }
+            if (supp != null) {
+                repository.updateSupplier(supp.copy(name = newName.trim()))
+                _userMessage.emit("تم تعديل اسم المورد بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل اسم مورد",
+                    notificationDetails = "تم تغيير اسم المورد من ($oldName) إلى (${newName.trim()})"
+                )
+            }
+            onDone()
+        }
+    }
+
+    // 6. WarehouseParty Operations (Receivers / Disbursers)
+    fun saveParty(party: WarehouseParty, onDone: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val id = if (party.id == 0L) {
+                val newId = repository.insertParty(party)
+                _userMessage.emit("تمت إضافة الاسم بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                    notificationTitle = "إضافة مستلم / قائم بالصرف",
+                    notificationDetails = "تمت إضافة (${party.name})"
+                )
+                newId
+            } else {
+                repository.updateParty(party)
+                _userMessage.emit("تم تحديث البيانات")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تحديث مستلم / قائم بالصرف",
+                    notificationDetails = "تم تحديث بيانات (${party.name})"
+                )
+                party.id
+            }
+            onDone(id)
+        }
+    }
+
+    suspend fun checkPartyHasTransactions(name: String): Boolean {
+        return repository.checkPartyHasTransactions(name)
+    }
+
+    fun deleteParty(party: WarehouseParty, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val success = repository.deletePartySafely(party)
+            if (success) {
+                _userMessage.emit("تم الحذف بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "حذف مستلم / قائم بالصرف",
+                    notificationDetails = "تم حذف (${party.name})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن الحذف لوجود عمليات سابقة مرتبطة بالاسم!")
+            }
+            onResult(success)
+        }
+    }
+
+    fun updatePartyName(oldName: String, newName: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            val pty = parties.value.find { it.name == oldName }
+            if (pty != null) {
+                repository.updateParty(pty.copy(name = newName.trim()))
+                _userMessage.emit("تم تعديل الاسم بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل اسم مستلم / قائم بالصرف",
+                    notificationDetails = "تم تعديل الاسم من ($oldName) إلى (${newName.trim()})"
+                )
+            }
+            onDone()
+        }
+    }
+
+    // 7. Categories, Package Units, Smaller Units & Item Statuses Operations
+    fun saveCategory(category: ItemCategory, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            if (category.id == 0L) {
+                repository.insertCategory(category)
+                notifyAndPropagate(
+                    action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                    notificationTitle = "إضافة فئة / تصنيف",
+                    notificationDetails = "تمت إضافة الفئة (${category.name})"
+                )
+            } else {
+                repository.updateCategory(category)
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل فئة / تصنيف",
+                    notificationDetails = "تم تحديث الفئة (${category.name})"
+                )
+            }
+            _userMessage.emit("تم حفظ التصنيف")
+            onDone()
+        }
+    }
+
+    suspend fun checkCategoryHasOperations(categoryName: String): Boolean {
+        return repository.checkCategoryHasOperations(categoryName)
+    }
+
+    fun updateCategorySafely(
+        category: ItemCategory,
+        newName: String,
+        newNotes: String = category.notes,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val ok = repository.updateCategorySafely(category, newName, newNotes)
+            if (ok) {
+                _userMessage.emit("تم تعديل الفئة بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل فئة / تصنيف",
+                    notificationDetails = "تم تعديل الفئة إلى (${newName.trim()})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن تعديل الفئة (${category.name}) لوجود أصناف أو عمليات مرتبطة بها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    fun deleteCategory(category: ItemCategory) {
+        deleteCategorySafely(category)
+    }
+
+    fun deleteCategorySafely(category: ItemCategory, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = repository.deleteCategorySafely(category)
+            if (ok) {
+                _userMessage.emit("تم حذف التصنيف بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "حذف فئة / تصنيف",
+                    notificationDetails = "تم حذف الفئة (${category.name})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن حذف الفئة (${category.name}) لوجود أصناف أو عمليات مرتبطة بها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    fun saveUnit(unit: ItemUnit, onDone: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val id = if (unit.id == 0L) {
+                repository.insertUnit(unit)
+            } else {
+                repository.updateUnit(unit)
+                unit.id
+            }
+            _userMessage.emit("تم حفظ وحدة القياس بنجاح")
+            notifyAndPropagate(
+                action = if (unit.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_OR_DELETE,
+                notificationTitle = if (unit.id == 0L) "إضافة وحدة قياس" else "تعديل وحدة قياس",
+                notificationDetails = "الوحدة (${unit.name}) — ${unit.smallerUnitsCount.toInt()} ${unit.smallerUnit}"
+            )
+            onDone(id)
+        }
+    }
+
+    fun saveUnit(unitName: String, onDone: (Long) -> Unit = {}) {
+        saveUnit(ItemUnit(name = unitName), onDone)
+    }
+
+    fun updateUnitSafely(unit: ItemUnit, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = repository.updateUnitSafely(unit)
+            if (ok) {
+                _userMessage.emit("تم تعديل وحدة القياس بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل وحدة قياس",
+                    notificationDetails = "تم تحديث الوحدة (${unit.name})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن تعديل الوحدة لوجود أصناف أو حركات مرتبطة بها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    fun updateUnitName(unitId: Long, newName: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            repository.updateUnitName(unitId, newName)
+            _userMessage.emit("تم تعديل اسم الوحدة بنجاح")
+            notifyAndPropagate(
+                action = DeviceAction.EDIT_OR_DELETE,
+                notificationTitle = "تعديل اسم وحدة",
+                notificationDetails = "تم تعديل اسم الوحدة إلى (${newName.trim()})"
+            )
+            onDone()
+        }
+    }
+
+    suspend fun checkUnitHasTransactions(unitName: String): Boolean {
+        return repository.checkUnitHasTransactions(unitName)
+    }
+
+    fun deleteUnit(unit: ItemUnit, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val success = repository.deleteUnitSafely(unit)
+            if (success) {
+                _userMessage.emit("تم حذف الوحدة بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "حذف وحدة قياس",
+                    notificationDetails = "تم حذف الوحدة (${unit.name})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن حذف الوحدة لأنها مرتبطة بأصناف أو حركات توريد وصرف سابقة!")
+            }
+            onResult(success)
+        }
+    }
+
+    // Hierarchical & Parent-Scoped Smaller/Medium Units Operations
+    fun saveHierarchicalUnit(
+        existingUnit: ItemUnit?,
+        largeName: String,
+        hasMediumUnit: Boolean,
+        mediumName: String,
+        mediumPerLarge: Double,
+        smallName: String,
+        smallCountInParent: Double,
+        smallCapacity: Double,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val res = repository.saveHierarchicalUnit(
+                existingUnit = existingUnit,
+                largeName = largeName,
+                hasMediumUnit = hasMediumUnit,
+                mediumName = mediumName,
+                mediumPerLarge = mediumPerLarge,
+                smallName = smallName,
+                smallCountInParent = smallCountInParent,
+                smallCapacity = smallCapacity
+            )
+            res.onSuccess {
+                val summary = if (hasMediumUnit) {
+                    "$largeName ← $mediumName (${mediumPerLarge.toInt()}) ← $smallName (${smallCountInParent.toInt()})"
+                } else {
+                    "$largeName ← $smallName (${smallCountInParent.toInt()})"
+                }
+                _userMessage.emit("تم حفظ نظام وحدات القياس بنجاح")
+                notifyAndPropagate(
+                    action = if (existingUnit == null) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = if (existingUnit == null) "إضافة وحدة قياس هرمية" else "تعديل وحدة قياس",
+                    notificationDetails = summary
+                )
+                onResult(true, null)
+            }.onFailure { err ->
+                val msg = err.localizedMessage ?: "تعذر حفظ وحدة القياس"
+                _userMessage.emit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    fun addChildUnitToLargeUnit(
+        parentUnit: ItemUnit,
+        unitLevel: String,
+        name: String,
+        countInParent: Double,
+        capacity: Double,
+        mediumUnitName: String = "",
+        onDone: (Long) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val id = repository.addChildUnitToLargeUnit(
+                parentUnit = parentUnit,
+                unitLevel = unitLevel,
+                name = name,
+                countInParent = countInParent,
+                capacity = capacity,
+                mediumUnitName = mediumUnitName
+            )
+            val levelLabel = if (unitLevel == "MEDIUM") "متوسطة" else "صغرى"
+            _userMessage.emit("تمت إضافة الوحدة الـ$levelLabel ($name) تحت (${parentUnit.name}) بنجاح")
+            notifyAndPropagate(
+                action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                notificationTitle = "إضافة وحدة $levelLabel تابعة",
+                notificationDetails = "${parentUnit.name} ← ${name.trim()} (${countInParent.toInt()})"
+            )
+            onDone(id)
+        }
+    }
+
+    suspend fun checkChildUnitHasOperations(child: SmallerUnit): Boolean {
+        return repository.checkChildUnitHasOperations(child)
+    }
+
+    fun updateChildUnitSafely(
+        existing: SmallerUnit,
+        newName: String,
+        newCountInParent: Double,
+        newCapacity: Double,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val ok = repository.updateChildUnitSafely(existing, newName, newCountInParent, newCapacity)
+            if (ok) {
+                val levelLabel = if (existing.unitLevel == "MEDIUM") "المتوسطة" else "الصغرى"
+                _userMessage.emit("تم تعديل الوحدة $levelLabel بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل وحدة $levelLabel",
+                    notificationDetails = "${existing.parentUnitName.ifBlank { "وحدة" }}: (${existing.name}) إلى (${newName.trim()})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن تعديل الوحدة (${existing.name}) تحت (${existing.parentUnitName}) لوجود أصناف أو عمليات مرتبطة بها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    fun deleteChildUnitSafely(unit: SmallerUnit, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = repository.deleteSmallerUnitSafely(unit)
+            if (ok) {
+                val levelLabel = if (unit.unitLevel == "MEDIUM") "المتوسطة" else "الصغرى"
+                _userMessage.emit("تم حذف الوحدة $levelLabel (${unit.name}) بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "حذف وحدة $levelLabel",
+                    notificationDetails = "تم حذف (${unit.name}) التابعة لـ (${unit.parentUnitName})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن حذف الوحدة (${unit.name}) تحت (${unit.parentUnitName}) لوجود أصناف أو عمليات مرتبطة بها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    // Smaller Units Operations
+    fun saveSmallerUnit(unit: SmallerUnit, onDone: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val id = repository.insertSmallerUnit(unit)
+            _userMessage.emit("تمت إضافة الوحدة الصغرى (${unit.name}) بنجاح")
+            notifyAndPropagate(
+                action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                notificationTitle = "إضافة وحدة صغرى",
+                notificationDetails = "تمت إضافة (${unit.name}) بسعة ${unit.capacity.toInt()}"
+            )
+            onDone(id)
+        }
+    }
+
+    suspend fun checkSmallerUnitHasOperations(name: String): Boolean {
+        return repository.checkSmallerUnitHasOperations(name)
+    }
+
+    suspend fun checkSmallerUnitUsedByPackageUnit(name: String): Boolean {
+        return repository.checkSmallerUnitUsedByPackageUnit(name)
+    }
+
+    fun updateSmallerUnitSafely(
+        existing: SmallerUnit,
+        newName: String,
+        newCapacity: Double,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val ok = repository.updateSmallerUnitSafely(existing, newName, newCapacity)
+            if (ok) {
+                _userMessage.emit("تم تعديل الوحدة الصغرى بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل وحدة صغرى",
+                    notificationDetails = "تم تعديل (${existing.name}) إلى (${newName.trim()})"
+                )
+            } else {
+                _userMessage.emit("لا يمكن تعديل الوحدة الصغرى (${existing.name}) لوجود أصناف أو عمليات مرتبطة بها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    fun deleteSmallerUnitSafely(unit: SmallerUnit, onResult: (Boolean) -> Unit = {}) {
+        deleteChildUnitSafely(unit, onResult)
+    }
+
+    // Item Status Operations
+    fun saveItemStatus(statusName: String, onDone: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val trimmed = statusName.trim()
+            if (trimmed.isBlank()) return@launch
+            val id = repository.insertItemStatus(ItemStatus(name = trimmed))
+            _userMessage.emit("تمت إضافة الحالة ($trimmed) بنجاح")
+            notifyAndPropagate(
+                action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                notificationTitle = "إضافة حالة صنف جديدة",
+                notificationDetails = "تمت إضافة الحالة ($trimmed)"
+            )
+            onDone(id)
+        }
+    }
+
+    suspend fun checkItemStatusHasOperations(statusName: String): Boolean {
+        return repository.checkItemStatusHasOperations(statusName)
+    }
+
+    fun updateItemStatusSafely(
+        existing: ItemStatus,
+        newName: String,
+        warehouseId: Long? = null,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        runAuthorizedAction(
+            action = DeviceAction.EDIT_OR_DELETE,
+            warehouseIds = setOfNotNull(warehouseId),
+            deniedMessage = "لا تملك صلاحية تعديل حالات الأصناف في هذا المخزن"
+        ) {
+            val ok = repository.updateItemStatusSafely(existing, newName)
+            if (ok) {
+                _userMessage.emit("تم تعديل الحالة بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "تعديل حالة صنف",
+                    notificationDetails = "تم تعديل الحالة من (${existing.name}) إلى (${newName.trim()})",
+                    warehouseIds = setOfNotNull(warehouseId)
+                )
+            } else {
+                _userMessage.emit("لا يمكن تعديل الحالة (${existing.name}) لوجود عمليات أو وحدات مرقمة تستخدمها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    fun deleteItemStatusSafely(
+        status: ItemStatus,
+        warehouseId: Long? = null,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        runAuthorizedAction(
+            action = DeviceAction.EDIT_OR_DELETE,
+            warehouseIds = setOfNotNull(warehouseId),
+            deniedMessage = "لا تملك صلاحية حذف حالات الأصناف في هذا المخزن"
+        ) {
+            val ok = repository.deleteItemStatusSafely(status)
+            if (ok) {
+                _userMessage.emit("تم حذف الحالة (${status.name}) بنجاح")
+                notifyAndPropagate(
+                    action = DeviceAction.EDIT_OR_DELETE,
+                    notificationTitle = "حذف حالة صنف",
+                    notificationDetails = "تم حذف الحالة (${status.name})",
+                    warehouseIds = setOfNotNull(warehouseId)
+                )
+            } else {
+                _userMessage.emit("لا يمكن حذف الحالة (${status.name}) لوجود عمليات أو وحدات مرقمة تستخدمها!")
+            }
+            onResult(ok)
+        }
+    }
+
+    suspend fun validateInwardVoucherUpdate(
+        voucherId: Long,
+        destWarehouseId: Long,
+        items: List<VoucherItem>
+    ): Pair<Boolean, String?> {
+        return repository.validateInwardVoucherUpdate(voucherId, destWarehouseId, items)
+    }
+
+    // 8. Sequential Voucher Number Generator
+    suspend fun getNextVoucherNumber(type: VoucherType, warehouseId: Long? = null): String {
+        return repository.generateNextVoucherNumber(type, warehouseId)
+    }
+
+    // 9. Voucher Operations
+    fun saveVoucher(
+        voucher: Voucher,
+        items: List<VoucherItem>,
+        onDone: () -> Unit = {}
+    ) {
+        val warehouseIds = setOfNotNull(voucher.sourceWarehouseId, voucher.destinationWarehouseId)
+        val action = if (voucher.id != 0L) when (voucher.voucherType) {
+            VoucherType.DISBURSEMENT, VoucherType.TRANSFER -> DeviceAction.EDIT_ISSUE_VOUCHER
+            VoucherType.INWARD -> DeviceAction.EDIT_SUPPLY_VOUCHER
+        } else when (voucher.voucherType) {
+            VoucherType.INWARD -> DeviceAction.INWARD
+            VoucherType.TRANSFER -> DeviceAction.TRANSFER
+            VoucherType.DISBURSEMENT -> DeviceAction.DISBURSEMENT
+        }
+        runAuthorizedAction(
+            action = action,
+            warehouseIds = warehouseIds,
+            deniedMessage = "لا تملك صلاحية تنفيذ هذه العملية في المخزن المحدد"
+        ) {
+            val numberingWarehouseId = when (voucher.voucherType) {
+                VoucherType.INWARD -> voucher.destinationWarehouseId
+                VoucherType.TRANSFER, VoucherType.DISBURSEMENT -> voucher.sourceWarehouseId
+            }
+            val savedVoucher = if (voucher.id == 0L) {
+                voucher.copy(
+                    voucherNumber = repository.generateNextVoucherNumber(voucher.voucherType, numberingWarehouseId),
+                    createdBy = userName.value.ifBlank { "مستخدم التطبيق" },
+                    deviceName = if (isMainDevice.value) "الجهاز الرئيسي" else deviceName.value.ifBlank { "الجهاز الفرعي" },
+                    numberingWarehouseId = numberingWarehouseId
+                )
+            } else {
+                voucher.copy(
+                    createdBy = voucher.createdBy.ifBlank { userName.value.ifBlank { "مستخدم التطبيق" } },
+                    deviceName = voucher.deviceName.ifBlank { if (isMainDevice.value) "الجهاز الرئيسي" else deviceName.value.ifBlank { "الجهاز الفرعي" } },
+                    numberingWarehouseId = voucher.numberingWarehouseId ?: numberingWarehouseId
+                )
+            }
+            repository.saveVoucherWithItems(savedVoucher, items)
+            val actionName = when (voucher.voucherType) {
+                VoucherType.INWARD -> "التوريد"
+                VoucherType.TRANSFER -> "التحويل المخزني"
+                VoucherType.DISBURSEMENT -> "أمر الصرف"
+            }
+            val totalQty = items.sumOf { it.quantity }.toInt()
+            val itemSummary = items.take(2).joinToString("، ") { it.itemName }
+            val notifTitle = if (voucher.id == 0L) {
+                "عملية $actionName (${savedVoucher.voucherNumber})"
+            } else {
+                "تعديل سند $actionName (${savedVoucher.voucherNumber})"
+            }
+            val notifDetails = "الأصناف: $itemSummary • إجمالي الكمية: $totalQty"
+            _userMessage.emit("تم حفظ $actionName بنجاح")
+            notifyAndPropagate(
+                action = action,
+                notificationTitle = notifTitle,
+                notificationDetails = notifDetails,
+                warehouseIds = warehouseIds,
+                targetVoucherIds = if (voucher.id != 0L) setOf(voucher.id) else emptySet()
+            )
+            onDone()
+        }
+    }
+
+    fun deleteVoucher(voucherId: Long, warehouseIds: Set<Long> = emptySet(), voucherType: VoucherType = VoucherType.INWARD) {
+        val deleteAction = when (voucherType) {
+            VoucherType.INWARD -> DeviceAction.DELETE_SUPPLY_VOUCHER
+            VoucherType.DISBURSEMENT, VoucherType.TRANSFER -> DeviceAction.DELETE_ISSUE_VOUCHER
+        }
+        runAuthorizedAction(
+            action = deleteAction,
+            warehouseIds = warehouseIds,
+            deniedMessage = "لا تملك صلاحية حذف السند في هذا المخزن"
+        ) {
+            repository.deleteVoucher(voucherId)
+            _userMessage.emit("تم حذف السند بنجاح")
+            notifyAndPropagate(
+                action = deleteAction,
+                notificationTitle = "حذف سند مخزني",
+                notificationDetails = "تم حذف السند وعكس أرصدة المخزون المرتبطة به",
+                warehouseIds = warehouseIds,
+                targetVoucherIds = setOf(voucherId)
+            )
+        }
+    }
+
+    fun removeAttachment(voucherId: Long, warehouseIds: Set<Long> = emptySet()) {
+        runAuthorizedAction(
+            action = DeviceAction.EDIT_OR_DELETE,
+            warehouseIds = warehouseIds,
+            deniedMessage = "لا تملك صلاحية حذف المرفقات في هذا المخزن"
+        ) {
+            repository.removeVoucherAttachment(voucherId)
+            _userMessage.emit("تم حذف المرفق بنجاح")
+            notifyAndPropagate(
+                action = DeviceAction.EDIT_OR_DELETE,
+                notificationTitle = "حذف مرفق سند",
+                notificationDetails = "تمت إزالة الملف المرفق من السند",
+                warehouseIds = warehouseIds
+            )
+        }
+    }
+
+
     private fun mayUseBackups(): Boolean = devicePermissions.value.isMainDevice || devicePermissions.value.canBackup
 
     private fun emitBackupPermissionDenied() {
