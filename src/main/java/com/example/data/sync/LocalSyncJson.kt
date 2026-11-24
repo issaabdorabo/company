@@ -132,6 +132,27 @@ object LocalSyncJson {
         return arr
     }
 
+    fun upsertsFromJsonArray(arr: JSONArray?): List<CloudEntityUpsert> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val docId = obj.optString("id")
+                val entityType = obj.optString("entityType")
+                if (docId.isBlank() || entityType.isBlank()) continue
+                add(
+                    CloudEntityUpsert(
+                        docId = docId,
+                        entityType = entityType,
+                        localId = obj.optLong("localId", 0L),
+                        payload = jsonObjectToMap(obj.optJSONObject("payload")),
+                        isDeleted = obj.optBoolean("isDeleted", false)
+                    )
+                )
+            }
+        }
+    }
+
     fun recordsFromJsonArray(arr: JSONArray?, workspaceCode: String = ""): List<CloudEntityRecord> {
         if (arr == null) return emptyList()
         val result = ArrayList<CloudEntityRecord>(arr.length())
