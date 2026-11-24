@@ -32,6 +32,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
     private val _userEmail = MutableStateFlow("")
     val userEmail: StateFlow<String> = _userEmail.asStateFlow()
 
+    private val _currentUserId = MutableStateFlow("")
+    val currentUserId: StateFlow<String> = _currentUserId.asStateFlow()
+
     private val _isAuthenticated = MutableStateFlow(false)
     val isAuthenticated: StateFlow<Boolean> = _isAuthenticated.asStateFlow()
 
@@ -78,10 +81,12 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
             try {
                 val uid = repository.currentUserIdOrNull()
                 _isAuthenticated.value = !uid.isNullOrBlank()
+                _currentUserId.value = uid.orEmpty()
                 _userEmail.value = repository.currentUserEmailOrNull().orEmpty()
                 if (uid.isNullOrBlank()) {
                     _workspaces.value = emptyList()
                     _activeWorkspace.value = null
+                    _currentUserId.value = ""
                     _members.value = emptyList()
                     _warehouses.value = emptyList()
                     _conversations.value = emptyList()
