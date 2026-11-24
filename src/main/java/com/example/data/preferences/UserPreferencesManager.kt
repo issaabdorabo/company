@@ -68,6 +68,11 @@ class UserPreferencesManager(private val context: Context) {
         val KEY_LAST_CLOUD_BACKUP_EMAIL = stringPreferencesKey("last_cloud_backup_email")
         val KEY_LAST_CLOUD_BACKUP_NAME = stringPreferencesKey("last_cloud_backup_name")
         val KEY_SAVED_CLOUD_EMAILS_JSON = stringPreferencesKey("saved_cloud_emails_json")
+
+        // Supabase collaboration identity (separate from the local Wi-Fi pairing workspace).
+        val KEY_CLOUD_WORKSPACE_ID = stringPreferencesKey("cloud_workspace_id")
+        val KEY_CLOUD_WORKSPACE_NAME = stringPreferencesKey("cloud_workspace_name")
+        val KEY_CLOUD_DEVICE_ID = stringPreferencesKey("cloud_device_id")
     }
 
     val themeFlow: Flow<AppTheme> = context.dataStore.data.map { prefs ->
@@ -156,6 +161,18 @@ class UserPreferencesManager(private val context: Context) {
 
     val savedCloudEmailsFlow: Flow<List<String>> = context.dataStore.data.map { prefs ->
         parseSavedEmails(prefs[KEY_SAVED_CLOUD_EMAILS_JSON] ?: "[]")
+    }
+
+    val cloudWorkspaceIdFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_CLOUD_WORKSPACE_ID] ?: ""
+    }
+
+    val cloudWorkspaceNameFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_CLOUD_WORKSPACE_NAME] ?: ""
+    }
+
+    val cloudDeviceIdFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_CLOUD_DEVICE_ID] ?: ""
     }
 
     val devicePermissionsFlow: Flow<DevicePermissions> = context.dataStore.data.map { prefs ->
@@ -282,6 +299,27 @@ class UserPreferencesManager(private val context: Context) {
             if (timestampMillis > 0L) {
                 prefs[KEY_LAST_CLOUD_BACKUP_AT] = timestampMillis
             }
+        }
+    }
+
+    suspend fun saveCloudWorkspace(workspaceId: String, workspaceName: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_CLOUD_WORKSPACE_ID] = workspaceId.trim()
+            prefs[KEY_CLOUD_WORKSPACE_NAME] = workspaceName.trim()
+            // A device record is scoped to its workspace. Register it again after switching.
+            prefs[KEY_CLOUD_DEVICE_ID] = ""
+        }
+    }
+
+    suspend fun saveCloudDeviceId(deviceId: String) {
+        context.dataStore.edit { prefs -> prefs[KEY_CLOUD_DEVICE_ID] = deviceId.trim() }
+    }
+
+    suspend fun clearCloudWorkspace() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_CLOUD_WORKSPACE_ID] = ""
+            prefs[KEY_CLOUD_WORKSPACE_NAME] = ""
+            prefs[KEY_CLOUD_DEVICE_ID] = ""
         }
     }
 
