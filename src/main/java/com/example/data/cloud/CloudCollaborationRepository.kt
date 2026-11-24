@@ -269,15 +269,20 @@ class CloudCollaborationRepository {
         )
     }
 
-    suspend fun ensureCloudWarehouse(workspaceId: String, localId: Long, name: String): String =
-        client.postgrest.rpc(
-            "ensure_cloud_warehouse",
-            buildJsonObject {
-                put("p_workspace", JsonPrimitive(workspaceId))
-                put("p_local_id", JsonPrimitive(localId))
-                put("p_name", JsonPrimitive(name))
-            }
-        ).decodeSingle<String>()
+    suspend fun ensureCloudWarehouse(
+        workspaceId: String,
+        localId: Long,
+        name: String,
+        data: JsonObject = JsonObject(emptyMap())
+    ): String = client.postgrest.rpc(
+        "ensure_cloud_warehouse",
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_local_id", JsonPrimitive(localId))
+            put("p_name", JsonPrimitive(name))
+            put("p_data", data)
+        }
+    ).decodeSingle<String>()
 
     suspend fun seedWorkspaceSnapshot(
         workspaceId: String,
@@ -357,8 +362,7 @@ class CloudCollaborationRepository {
         entities: List<CloudEntityUpsert>,
         cloudWarehouseIdByLocalId: Map<Long, String>,
         targetWarehouseLocalIds: Set<Long>,
-        includeGlobalRecords: Boolean,
-        includeWarehouseDefinitions: Boolean = false
+        includeGlobalRecords: Boolean
     ): JsonArray {
         val vouchersById = entities
             .filter { it.entityType == "voucher" }
@@ -393,10 +397,6 @@ class CloudCollaborationRepository {
             val scopes = warehouseScopes(entity).intersect(targetWarehouseLocalIds)
             if (scopes.isNotEmpty()) {
                 scopes.forEach { localWarehouseId -> encoded += entity to localWarehouseId }
-            } else if (includeWarehouseDefinitions && includeGlobalRecords &&
-                entity.entityType == "warehouse" && cloudWarehouseIdByLocalId.containsKey(entity.localId)
-            ) {
-                encoded += entity to entity.localId
             } else if (includeGlobalRecords && entity.entityType in globalTypes) {
                 encoded += entity to null
             }
