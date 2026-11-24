@@ -2988,18 +2988,20 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun saveSerials(serials: List<ItemUnitSerialRecord>, onDone: () -> Unit = {}) {
-        val changed = findChangedSerialRecords(serials)
-        runAuthorizedAction(
-            action = DeviceAction.EDIT_SERIALS,
-            warehouseIds = changed.map { it.warehouseId }.toSet(),
-            deniedMessage = "لا تملك صلاحية تحديث الأرقام التسلسلية أو الحالات أو الملاحظات في هذا المخزن"
-        ) {
-            repository.saveSerialsAndReturn(serials)
-            _userMessage.emit(
-                if (changed.isEmpty()) "لا توجد تغييرات جديدة لحفظها"
-                else "تم حفظ الأرقام المميزة والحالات والملاحظات بنجاح"
-            )
-            if (changed.isNotEmpty()) {
+        viewModelScope.launch {
+            val changed = findChangedSerialRecords(serials)
+            if (changed.isEmpty()) {
+                _userMessage.emit("لا توجد تغييرات جديدة لحفظها")
+                onDone()
+                return@launch
+            }
+            runAuthorizedAction(
+                action = DeviceAction.EDIT_SERIALS,
+                warehouseIds = changed.map { it.warehouseId }.toSet(),
+                deniedMessage = "لا تملك صلاحية تحديث الأرقام التسلسلية أو الحالات أو الملاحظات في هذا المخزن"
+            ) {
+                repository.saveSerialsAndReturn(serials)
+                _userMessage.emit("تم حفظ الأرقام المميزة والحالات والملاحظات بنجاح")
                 notifyAndPropagate(
                     action = DeviceAction.EDIT_SERIALS,
                     notificationTitle = "تحديث الأرقام التسلسلية والحالات والملاحظات",
@@ -3007,8 +3009,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     warehouseIds = changed.map { it.warehouseId }.toSet(),
                     targetItemIds = changed.map { it.itemId }.toSet()
                 )
+                onDone()
             }
-            onDone()
         }
     }
 
