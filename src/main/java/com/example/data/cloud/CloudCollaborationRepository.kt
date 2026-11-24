@@ -1,6 +1,10 @@
 package com.example.data.cloud
 
 import io.github.jan.supabase.auth.auth
+import com.example.data.sync.LocalSyncJson
+import com.example.data.cloud.CloudEntityRecord
+import com.example.data.cloud.CloudEntityUpsert
+import org.json.JSONObject
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.filter.eq
 import io.github.jan.supabase.postgrest.result.decodeList
@@ -15,7 +19,13 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 
 @Serializable
@@ -84,6 +94,53 @@ data class CloudMessage(
     val body: String,
     val attachmentPath: String? = null,
     val createdAt: String
+)
+
+@Serializable
+private data class EnsureCloudWarehouseParams(
+    @SerialName("p_workspace") val workspace: String,
+    @SerialName("p_local_id") val localId: Long,
+    @SerialName("p_name") val name: String
+)
+
+@Serializable
+private data class SeedCloudSnapshotParams(
+    @SerialName("p_workspace") val workspace: String,
+    @SerialName("p_device") val device: String,
+    @SerialName("p_records") val records: JsonArray
+)
+
+@Serializable
+private data class PushCloudSnapshotParams(
+    @SerialName("p_workspace") val workspace: String,
+    @SerialName("p_device") val device: String,
+    @SerialName("p_client_operation_id") val clientOperationId: String,
+    @SerialName("p_operation_type") val operationType: String,
+    @SerialName("p_warehouse_ids") val warehouseIds: List<String>,
+    @SerialName("p_title") val title: String,
+    @SerialName("p_details") val details: String,
+    @SerialName("p_records") val records: JsonArray
+)
+
+@Serializable
+private data class CheckCloudWarehouseAccessParams(
+    @SerialName("p_workspace") val workspace: String,
+    @SerialName("p_device") val device: String,
+    @SerialName("p_operation_type") val operationType: String,
+    @SerialName("p_warehouse_ids") val warehouseIds: List<String>
+)
+
+@Serializable
+private data class CloudEntityRecordDto(
+    val id: String,
+    val workspaceId: String,
+    val warehouseId: String? = null,
+    val documentId: String,
+    val entityType: String,
+    val localId: Long,
+    val payload: JsonObject,
+    val isDeleted: Boolean = false,
+    val updatedAt: String
 )
 
 @Serializable
@@ -201,6 +258,144 @@ class CloudCollaborationRepository {
             "heartbeat_device",
             HeartbeatDeviceParams(deviceId, appState)
         )
+    }
+
+    suspend fun ensureCloudWarehouse(workspaceId: String, localId: Long, name: String): String =
+        client.postgrest.rpc(
+            "ensure_cloud_warehouse",
+            EnsureCloudWarehouseParams(workspaceId, localId, name)
+        ).decodeSingle<String>()
+
+    suspend fun seedWorkspaceSnapshot(
+        workspaceId: String,
+        deviceId: String,
+        records: JsonArray
+    ): Int = client.postgrest.rpc(
+        "seed_cloud_workspace_snapshot",
+        SeedCloudSnapshotParams(workspaceId, deviceId, records)
+    ).decodeSingle<Int>()
+
+    suspend fun pushCloudSnapshot(
+        workspaceId: String,
+        deviceId: String,
+        clientOperationId: String,
+        operationType: String,
+        warehouseIds: Set<String>,
+        title: String,
+        details: String,
+        records: JsonArray
+    ): String = client.postgrest.rpc(
+        "push_cloud_entity_snapshot",
+        PushCloudSnapshotParams(
+            workspace = workspaceId,
+            device = deviceId,
+            clientOperationId = clientOperationId,
+            operationType = operationType,
+            warehouseIds = warehouseIds.toList(),
+            title = title,
+            details = details,
+            records = records
+        )
+    ).decodeSingle<String>()
+
+    suspend fun checkCloudWarehouseAccess(
+        workspaceId: String,
+        deviceId: String,
+        operationType: String,
+        warehouseIds: Set<String>
+    ): Boolean = client.postgrest.rpc(
+        "check_cloud_warehouse_access",
+        CheckCloudWarehouseAccessParams(
+            workspace = workspaceId,
+            device = deviceId,
+            operationType = operationType,
+            warehouseIds = warehouseIds.toList()
+        )
+    ).decodeSingle<Boolean>()
+
+    suspend fun fetchCloudEntitySnapshot(workspaceId: String): List<CloudEntityRecord> {
+        val rows = client.postgrest["cloud_entity_records"].select {
+            eq("workspace_id", workspaceId)
+        }.decodeList<CloudEntityRecordDto>()
+        return rows.sortedByDescending { it.updatedAt }
+            .distinctBy { it.documentId }
+            .map { row ->
+                CloudEntityRecord(
+                    id = row.documentId,
+                    workspaceId = row.workspaceId,
+                    entityType = row.entityType,
+                    localId = row.localId,
+                    payload = LocalSyncJson.jsonObjectToMap(JSONObject(row.payload.toString())),
+                    isDeleted = row.isDeleted
+                )
+            }
+    }
+
+    fun encodeCloudEntityRecords(
+        entities: List<CloudEntityUpsert>,
+        cloudWarehouseIdByLocalId: Map<Long, String>,
+        targetWarehouseLocalIds: Set<Long>,
+        includeGlobalRecords: Boolean
+    ): JsonArray {
+        val vouchersById = entities
+            .filter { it.entityType == "voucher" }
+            .associateBy { it.localId }
+
+        fun number(value: Any?): Long? = (value as? Number)?.toLong()
+        fun warehouseScopes(entity: CloudEntityUpsert): Set<Long> = when (entity.entityType) {
+            "warehouse" -> setOf(entity.localId)
+            "association", "adjustment", "serial" ->
+                setOfNotNull(number(entity.payload["warehouseId"]))
+            "voucher" -> setOfNotNull(
+                number(entity.payload["sourceWarehouseId"]),
+                number(entity.payload["destinationWarehouseId"])
+            )
+            "voucher_item" -> {
+                val voucherId = number(entity.payload["voucherId"])
+                val voucher = voucherId?.let { vouchersById[it] }
+                if (voucher == null) emptySet() else setOfNotNull(
+                    number(voucher.payload["sourceWarehouseId"]),
+                    number(voucher.payload["destinationWarehouseId"])
+                )
+            }
+            else -> emptySet()
+        }
+
+        val globalTypes = setOf(
+            "item", "beneficiary", "supplier", "party", "category",
+            "unit", "smaller_unit", "item_status"
+        )
+        val encoded = mutableListOf<Pair<CloudEntityUpsert, Long?>>()
+        entities.forEach { entity ->
+            val scopes = warehouseScopes(entity).intersect(targetWarehouseLocalIds)
+            if (scopes.isNotEmpty()) {
+                scopes.forEach { localWarehouseId -> encoded += entity to localWarehouseId }
+            } else if (includeGlobalRecords && entity.entityType in globalTypes) {
+                encoded += entity to null
+            }
+        }
+
+        return buildJsonArray {
+            encoded.forEach { (entity, localWarehouseId) ->
+                val cloudWarehouseId = localWarehouseId?.let { cloudWarehouseIdByLocalId[it] }
+                if (localWarehouseId != null && cloudWarehouseId == null) {
+                    error("لا يوجد ربط سحابي للمخزن المحلي رقم $localWarehouseId")
+                }
+                add(
+                    buildJsonObject {
+                        put("document_id", JsonPrimitive(entity.docId))
+                        put("entity_type", JsonPrimitive(entity.entityType))
+                        put("local_id", JsonPrimitive(entity.localId))
+                        put("warehouse_id", cloudWarehouseId?.let(::JsonPrimitive) ?: JsonNull)
+                        put(
+                            "payload",
+                            Json.parseToJsonElement(LocalSyncJson.mapToJsonObject(entity.payload).toString())
+                        )
+                        put("is_deleted", JsonPrimitive(entity.isDeleted))
+                    }
+                )
+            }
+        }
     }
 
     suspend fun listWorkspaceMembers(workspaceId: String): List<CloudWorkspaceMember> =
