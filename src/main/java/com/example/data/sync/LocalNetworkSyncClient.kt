@@ -189,11 +189,13 @@ class LocalNetworkSyncClient {
         actorName: String = "",
         warehouseIds: Set<Long> = emptySet(),
         targetItemIds: Set<Long> = emptySet(),
-        targetVoucherIds: Set<Long> = emptySet()
+        targetVoucherIds: Set<Long> = emptySet(),
+        clientOperationId: String = java.util.UUID.randomUUID().toString()
     ): Result<Long> = withContext(Dispatchers.IO) {
         runCatching {
             val baseUrl = normalizeBaseUrl(rawHost)
             val payload = JSONObject().apply {
+                put("clientOperationId", clientOperationId)
                 put("actionType", actionType)
                 put("operationTitle", operationTitle)
                 put("operationDetails", operationDetails)
