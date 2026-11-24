@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,6 +60,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -151,7 +153,10 @@ fun TransactionsScreen(
             val v = vWithItems.voucher
             // A linked sub-device sees only vouchers created by this device; device/user
             // filters are intentionally reserved for the main device.
-            val matchesOwnDevice = isMainDevice || v.deviceName.ifBlank { "الجهاز الرئيسي" } == currentDeviceName.ifBlank { "الجهاز الفرعي" }
+            val sourceDeviceName = v.deviceName.ifBlank { "الجهاز الرئيسي" }
+            val matchesOwnDevice = isMainDevice ||
+                sourceDeviceName == currentDeviceName.ifBlank { "الجهاز الفرعي" } ||
+                sourceDeviceName == "الجهاز الرئيسي"
             val matchesType = selectedTypeFilter == null || v.voucherType == selectedTypeFilter
             val matchesWarehouse = selectedWarehouseFilterId == null ||
                 v.sourceWarehouseId == selectedWarehouseFilterId ||
@@ -167,7 +172,11 @@ fun TransactionsScreen(
                 vWithItems.items.any { it.itemName.contains(searchQuery, ignoreCase = true) }
 
             matchesOwnDevice && matchesType && matchesWarehouse && (if (isMainDevice) matchesDevice else true) && matchesSearch
-        }
+        }.sortedByDescending { it.voucher.createdAt }
+    }
+    val transactionsListState = rememberLazyListState()
+    LaunchedEffect(filteredVouchers.firstOrNull()?.voucher?.id) {
+        if (filteredVouchers.isNotEmpty()) transactionsListState.animateScrollToItem(0)
     }
 
     Scaffold { padding ->
@@ -355,6 +364,7 @@ fun TransactionsScreen(
             } else {
                 val dateFormat = SimpleDateFormat("yyyy/MM/dd", Locale.getDefault())
                 LazyColumn(
+                    state = transactionsListState,
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
