@@ -339,7 +339,17 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val pendingPushMutex = Mutex()
     private val cloudPushMutex = Mutex()
 
+    private val cloudAuthorizationEnabled = MutableStateFlow(false)
+
     init {
+        viewModelScope.launch {
+            combine(
+                preferences.cloudWorkspaceIdFlow,
+                preferences.cloudDeviceIdFlow
+            ) { workspaceId, deviceId ->
+                workspaceId.isNotBlank() && deviceId.isNotBlank()
+            }.collect { cloudAuthorizationEnabled.value = it }
+        }
         startMultiDeviceCoordinator()
         startCloudOutboxCoordinator()
     }
@@ -442,6 +452,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         if (perms.isKicked) {
             _kickedAlertMessage.value = "تم إيقاف وطرد هذا الجهاز من الجهاز الرئيسي."
             onDenied()
+            return
+        }
+
+        // For a cloud-registered device, Supabase is the authoritative permission source.
+        // runAuthorizedAction performs the server-side permission check before each write.
+        if (cloudAuthorizationEnabled.value) {
+            onAllowed()
             return
         }
 
@@ -1489,7 +1506,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // 2. Item Operations
     fun saveItem(item: Item, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = if (item.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل دليل الأصناف") {
             if (item.id == 0L) {
                 repository.insertItem(item)
                 _userMessage.emit("تمت إضافة الصنف بنجاح")
@@ -1570,7 +1587,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // 4. Beneficiary Operations
     fun saveBeneficiary(beneficiary: Beneficiary, onDone: (Long) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = if (beneficiary.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل الجهات المستفيدة") {
             val id = if (beneficiary.id == 0L) {
                 val newId = repository.insertBeneficiary(beneficiary)
                 _userMessage.emit("تمت إضافة الجهة المستفيدة بنجاح")
@@ -1584,7 +1601,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 repository.updateBeneficiary(beneficiary)
                 _userMessage.emit("تم تحديث بيانات الجهة المستفيدة")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل جهة مستفيدة",
                     notificationDetails = "تم تحديث بيانات (${beneficiary.name})"
                 )
@@ -1599,12 +1616,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteBeneficiary(beneficiary: Beneficiary, onResult: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية حذف الجهات المستفيدة") {
             val success = repository.deleteBeneficiarySafely(beneficiary)
             if (success) {
                 _userMessage.emit("تم حذف الجهة المستفيدة بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "حذف جهة مستفيدة",
                     notificationDetails = "تم حذف (${beneficiary.name})"
                 )
@@ -1617,7 +1634,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // 5. Supplier Operations
     fun saveSupplier(supplier: Supplier, onDone: (Long) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = if (supplier.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل الموردين") {
             val id = if (supplier.id == 0L) {
                 val newId = repository.insertSupplier(supplier)
                 _userMessage.emit("تمت إضافة المورد بنجاح")
@@ -1631,7 +1648,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 repository.updateSupplier(supplier)
                 _userMessage.emit("تم تحديث بيانات المورد")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تحديث بيانات مورد",
                     notificationDetails = "تم تعديل بيانات المورد (${supplier.name})"
                 )
@@ -1646,12 +1663,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteSupplier(supplier: Supplier, onResult: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية حذف الموردين") {
             val success = repository.deleteSupplierSafely(supplier)
             if (success) {
                 _userMessage.emit("تم حذف المورد بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "حذف مورد",
                     notificationDetails = "تم حذف المورد (${supplier.name})"
                 )
@@ -1663,13 +1680,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun updateSupplierName(oldName: String, newName: String, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية تعديل أسماء الموردين") {
             val supp = suppliers.value.find { it.name == oldName }
             if (supp != null) {
                 repository.updateSupplier(supp.copy(name = newName.trim()))
                 _userMessage.emit("تم تعديل اسم المورد بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل اسم مورد",
                     notificationDetails = "تم تغيير اسم المورد من ($oldName) إلى (${newName.trim()})"
                 )
@@ -1680,7 +1697,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // 6. WarehouseParty Operations (Receivers / Disbursers)
     fun saveParty(party: WarehouseParty, onDone: (Long) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = if (party.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل الأسماء") {
             val id = if (party.id == 0L) {
                 val newId = repository.insertParty(party)
                 _userMessage.emit("تمت إضافة الاسم بنجاح")
@@ -1694,7 +1711,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 repository.updateParty(party)
                 _userMessage.emit("تم تحديث البيانات")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تحديث مستلم / قائم بالصرف",
                     notificationDetails = "تم تحديث بيانات (${party.name})"
                 )
@@ -1709,12 +1726,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteParty(party: WarehouseParty, onResult: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية حذف الأسماء") {
             val success = repository.deletePartySafely(party)
             if (success) {
                 _userMessage.emit("تم الحذف بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "حذف مستلم / قائم بالصرف",
                     notificationDetails = "تم حذف (${party.name})"
                 )
@@ -1726,13 +1743,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun updatePartyName(oldName: String, newName: String, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية تعديل الأسماء") {
             val pty = parties.value.find { it.name == oldName }
             if (pty != null) {
                 repository.updateParty(pty.copy(name = newName.trim()))
                 _userMessage.emit("تم تعديل الاسم بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل اسم مستلم / قائم بالصرف",
                     notificationDetails = "تم تعديل الاسم من ($oldName) إلى (${newName.trim()})"
                 )
@@ -1743,7 +1760,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // 7. Categories, Package Units, Smaller Units & Item Statuses Operations
     fun saveCategory(category: ItemCategory, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = if (category.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل التصنيفات") {
             if (category.id == 0L) {
                 repository.insertCategory(category)
                 notifyAndPropagate(
@@ -1754,7 +1771,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             } else {
                 repository.updateCategory(category)
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل فئة / تصنيف",
                     notificationDetails = "تم تحديث الفئة (${category.name})"
                 )
@@ -1774,12 +1791,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         newNotes: String = category.notes,
         onResult: (Boolean) -> Unit = {}
     ) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية تعديل التصنيفات") {
             val ok = repository.updateCategorySafely(category, newName, newNotes)
             if (ok) {
                 _userMessage.emit("تم تعديل الفئة بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل فئة / تصنيف",
                     notificationDetails = "تم تعديل الفئة إلى (${newName.trim()})"
                 )
@@ -1795,12 +1812,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteCategorySafely(category: ItemCategory, onResult: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية حذف التصنيفات") {
             val ok = repository.deleteCategorySafely(category)
             if (ok) {
                 _userMessage.emit("تم حذف التصنيف بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "حذف فئة / تصنيف",
                     notificationDetails = "تم حذف الفئة (${category.name})"
                 )
@@ -1812,7 +1829,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun saveUnit(unit: ItemUnit, onDone: (Long) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = if (unit.id == 0L) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل وحدات القياس") {
             val id = if (unit.id == 0L) {
                 repository.insertUnit(unit)
             } else {
@@ -1834,12 +1851,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun updateUnitSafely(unit: ItemUnit, onResult: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية تعديل وحدات القياس") {
             val ok = repository.updateUnitSafely(unit)
             if (ok) {
                 _userMessage.emit("تم تعديل وحدة القياس بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل وحدة قياس",
                     notificationDetails = "تم تحديث الوحدة (${unit.name})"
                 )
@@ -1851,11 +1868,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun updateUnitName(unitId: Long, newName: String, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية تعديل أسماء وحدات القياس") {
             repository.updateUnitName(unitId, newName)
             _userMessage.emit("تم تعديل اسم الوحدة بنجاح")
             notifyAndPropagate(
-                action = DeviceAction.EDIT_OR_DELETE,
+                action = DeviceAction.EDIT_CATALOG_ITEMS,
                 notificationTitle = "تعديل اسم وحدة",
                 notificationDetails = "تم تعديل اسم الوحدة إلى (${newName.trim()})"
             )
@@ -1868,12 +1885,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteUnit(unit: ItemUnit, onResult: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية حذف وحدات القياس") {
             val success = repository.deleteUnitSafely(unit)
             if (success) {
                 _userMessage.emit("تم حذف الوحدة بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "حذف وحدة قياس",
                     notificationDetails = "تم حذف الوحدة (${unit.name})"
                 )
@@ -1896,7 +1913,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         smallCapacity: Double,
         onResult: (Boolean, String?) -> Unit = { _, _ -> }
     ) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = if (existingUnit == null) DeviceAction.ADD_OR_MANAGE_CATALOG else DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية إضافة أو تعديل وحدات القياس") {
             val res = repository.saveHierarchicalUnit(
                 existingUnit = existingUnit,
                 largeName = largeName,
@@ -1937,7 +1954,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         mediumUnitName: String = "",
         onDone: (Long) -> Unit = {}
     ) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.ADD_OR_MANAGE_CATALOG, deniedMessage = "لا تملك صلاحية إضافة وحدة تابعة") {
             val id = repository.addChildUnitToLargeUnit(
                 parentUnit = parentUnit,
                 unitLevel = unitLevel,
@@ -1968,13 +1985,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         newCapacity: Double,
         onResult: (Boolean) -> Unit = {}
     ) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية تعديل الوحدات التابعة") {
             val ok = repository.updateChildUnitSafely(existing, newName, newCountInParent, newCapacity)
             if (ok) {
                 val levelLabel = if (existing.unitLevel == "MEDIUM") "المتوسطة" else "الصغرى"
                 _userMessage.emit("تم تعديل الوحدة $levelLabel بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل وحدة $levelLabel",
                     notificationDetails = "${existing.parentUnitName.ifBlank { "وحدة" }}: (${existing.name}) إلى (${newName.trim()})"
                 )
@@ -1992,7 +2009,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val levelLabel = if (unit.unitLevel == "MEDIUM") "المتوسطة" else "الصغرى"
                 _userMessage.emit("تم حذف الوحدة $levelLabel (${unit.name}) بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "حذف وحدة $levelLabel",
                     notificationDetails = "تم حذف (${unit.name}) التابعة لـ (${unit.parentUnitName})"
                 )
@@ -2005,7 +2022,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // Smaller Units Operations
     fun saveSmallerUnit(unit: SmallerUnit, onDone: (Long) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.ADD_OR_MANAGE_CATALOG, deniedMessage = "لا تملك صلاحية إضافة وحدة صغرى") {
             val id = repository.insertSmallerUnit(unit)
             _userMessage.emit("تمت إضافة الوحدة الصغرى (${unit.name}) بنجاح")
             notifyAndPropagate(
@@ -2031,12 +2048,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         newCapacity: Double,
         onResult: (Boolean) -> Unit = {}
     ) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "لا تملك صلاحية تعديل الوحدات الصغرى") {
             val ok = repository.updateSmallerUnitSafely(existing, newName, newCapacity)
             if (ok) {
                 _userMessage.emit("تم تعديل الوحدة الصغرى بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل وحدة صغرى",
                     notificationDetails = "تم تعديل (${existing.name}) إلى (${newName.trim()})"
                 )
@@ -2053,7 +2070,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     // Item Status Operations
     fun saveItemStatus(statusName: String, onDone: (Long) -> Unit = {}) {
-        viewModelScope.launch {
+        runAuthorizedAction(action = DeviceAction.ADD_OR_MANAGE_CATALOG, deniedMessage = "لا تملك صلاحية إضافة حالات الأصناف") {
             val trimmed = statusName.trim()
             if (trimmed.isBlank()) return@launch
             val id = repository.insertItemStatus(ItemStatus(name = trimmed))
@@ -2078,7 +2095,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         onResult: (Boolean) -> Unit = {}
     ) {
         runAuthorizedAction(
-            action = DeviceAction.EDIT_OR_DELETE,
+            action = DeviceAction.EDIT_CATALOG_ITEMS,
             warehouseIds = setOfNotNull(warehouseId),
             deniedMessage = "لا تملك صلاحية تعديل حالات الأصناف في هذا المخزن"
         ) {
@@ -2086,7 +2103,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (ok) {
                 _userMessage.emit("تم تعديل الحالة بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "تعديل حالة صنف",
                     notificationDetails = "تم تعديل الحالة من (${existing.name}) إلى (${newName.trim()})",
                     warehouseIds = setOfNotNull(warehouseId)
@@ -2104,7 +2121,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         onResult: (Boolean) -> Unit = {}
     ) {
         runAuthorizedAction(
-            action = DeviceAction.EDIT_OR_DELETE,
+            action = DeviceAction.EDIT_CATALOG_ITEMS,
             warehouseIds = setOfNotNull(warehouseId),
             deniedMessage = "لا تملك صلاحية حذف حالات الأصناف في هذا المخزن"
         ) {
@@ -2112,7 +2129,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (ok) {
                 _userMessage.emit("تم حذف الحالة (${status.name}) بنجاح")
                 notifyAndPropagate(
-                    action = DeviceAction.EDIT_OR_DELETE,
+                    action = DeviceAction.EDIT_CATALOG_ITEMS,
                     notificationTitle = "حذف حالة صنف",
                     notificationDetails = "تم حذف الحالة (${status.name})",
                     warehouseIds = setOfNotNull(warehouseId)
