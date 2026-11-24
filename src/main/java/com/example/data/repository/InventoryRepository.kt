@@ -15,6 +15,8 @@ import com.example.data.model.ItemStockInfo
 import com.example.data.model.ItemUnit
 import com.example.data.model.ItemUnitSerialRecord
 import com.example.data.model.OperationAuditLog
+import com.example.data.model.PendingSyncOperation
+import com.example.data.model.AppliedSyncOperation
 import com.example.data.model.SmallerUnit
 import com.example.data.model.StockAdjustmentLog
 import com.example.data.model.Supplier
@@ -55,6 +57,7 @@ class InventoryRepository(
     private val warehouseItemAssociationDao = database.warehouseItemAssociationDao()
     private val itemUnitSerialDao = database.itemUnitSerialDao()
     private val auditLogDao = database.operationAuditLogDao()
+    private val pendingSyncDao = database.pendingSyncOperationDao()
 
     val allWarehouses: Flow<List<Warehouse>> = warehouseDao.getAllWarehouses()
     val allItems: Flow<List<Item>> = itemDao.getAllItems()
@@ -1811,6 +1814,30 @@ class InventoryRepository(
         File(context.filesDir, "attachments").deleteRecursively()
         File(context.filesDir, "item_attachments").deleteRecursively()
         File(context.cacheDir, "backups").deleteRecursively()
+    }
+
+    suspend fun enqueuePendingSyncOperation(operation: PendingSyncOperation) = withContext(Dispatchers.IO) {
+        pendingSyncDao.enqueue(operation)
+    }
+
+    suspend fun getPendingSyncOperations(): List<PendingSyncOperation> = withContext(Dispatchers.IO) {
+        pendingSyncDao.getPending()
+    }
+
+    suspend fun recordPendingSyncFailure(operationId: String, error: String) = withContext(Dispatchers.IO) {
+        pendingSyncDao.recordFailure(operationId, error.take(500))
+    }
+
+    suspend fun removePendingSyncOperation(operationId: String) = withContext(Dispatchers.IO) {
+        pendingSyncDao.remove(operationId)
+    }
+
+    suspend fun hasAppliedSyncOperation(operationId: String): Boolean = withContext(Dispatchers.IO) {
+        pendingSyncDao.wasApplied(operationId)
+    }
+
+    suspend fun markSyncOperationApplied(operationId: String) = withContext(Dispatchers.IO) {
+        pendingSyncDao.markApplied(AppliedSyncOperation(operationId = operationId))
     }
 
     suspend fun recordOperation(log: OperationAuditLog) = withContext(Dispatchers.IO) {
