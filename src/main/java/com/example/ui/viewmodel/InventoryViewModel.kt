@@ -542,7 +542,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val localWarehouses = repository.allWarehouses.first()
         if (workspace.ownerUserId == currentUserId) {
             localWarehouses.forEach { warehouse ->
-                cloudCollaborationRepo.ensureCloudWarehouse(workspaceId, warehouse.id, warehouse.name)
+                cloudCollaborationRepo.ensureCloudWarehouse(workspaceId, warehouse)
             }
         }
         return cloudCollaborationRepo.listWarehouses(workspaceId)
@@ -1221,8 +1221,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 targetWarehouseLocalIds = localWarehouseIds,
                 includeGlobalRecords = isOwner ||
                     operation.actionType == DeviceAction.ADD_OR_MANAGE_CATALOG.name ||
-                    operation.actionType == DeviceAction.EDIT_CATALOG_ITEMS.name,
-                includeWarehouseDefinitions = isOwner
+                    operation.actionType == DeviceAction.EDIT_CATALOG_ITEMS.name
             )
 
             val result = runCatching {
