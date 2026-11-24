@@ -851,25 +851,54 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Re-enable a previously kicked device without deleting its identity, permissions or audit history. */
+    /** Re-enable the device while issuing a fresh one-time pairing password. */
     fun reactivateSubDevice(slotId: String) {
         viewModelScope.launch {
             if (!requireMainDeviceForDeviceManagement()) return@launch
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
-            if (idx >= 0) {
-                val previous = current[idx]
-                current[idx] = previous.copy(
-                    isKicked = false,
-                    isClaimed = false,
-                    boundInstallationId = "",
-                    sessionToken = UUID.randomUUID().toString(),
-                    updatedAt = System.currentTimeMillis()
+            if (idx < 0) return@launch
+
+            val previous = current[idx]
+            val workspaceCode = preferences.ensureWorkspaceCode()
+            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
+            val hostAddress = LocalNetworkSyncServer.getLocalLanIpAddresses().firstOrNull() ?: "192.168.43.1"
+            val hostDisplay = "$hostAddress:${if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT}"
+            val oneTimePassword = SecurityUtils.generateUniqueDevicePassword(10)
+            val passwordSalt = SecurityUtils.generateSalt()
+            val passwordHash = SecurityUtils.hashPassword(oneTimePassword, passwordSalt)
+
+            current[idx] = previous.copy(
+                passwordSalt = passwordSalt,
+                passwordHash = passwordHash,
+                isKicked = false,
+                isClaimed = false,
+                boundInstallationId = "",
+                sessionToken = UUID.randomUUID().toString(),
+                updatedAt = System.currentTimeMillis()
+            )
+            preferences.saveLinkedSubDevices(current)
+            preferences.incrementSyncRevision()
+
+            val credentials = CreatedDeviceCredentials(
+                deviceSlotId = previous.id,
+                deviceName = previous.deviceName,
+                workspaceCode = workspaceCode,
+                hostAddress = hostDisplay,
+                plainPassword = oneTimePassword
+            )
+            _sessionPairingCredentials.value = _sessionPairingCredentials.value + (previous.id to credentials)
+            _createdDeviceCredentials.value = credentials
+            repository.recordOperation(
+                OperationAuditLog(
+                    actorName = userName.value.ifBlank { "المسؤول" },
+                    deviceName = "الجهاز الرئيسي",
+                    operationType = "REACTIVATE_DEVICE",
+                    title = "إعادة تفعيل جهاز فرعي",
+                    details = "تمت إعادة تفعيل الجهاز (${previous.deviceName}) وإصدار كلمة مرور جديدة للربط مع الاحتفاظ بصلاحياته."
                 )
-                preferences.saveLinkedSubDevices(current)
-                preferences.incrementSyncRevision()
-                _userMessage.emit("تمت إعادة تفعيل ${previous.deviceName} مع الاحتفاظ بصلاحياته وسجلات عملياته. أعد ربط الجهاز باستخدام كلمة مروره السابقة.")
-            }
+            )
+            _userMessage.emit("تمت إعادة تفعيل ${previous.deviceName}. تظهر الآن كلمة مرور جديدة في نافذة بيانات الربط؛ لن تعمل كلمة المرور القديمة.")
         }
     }
 
