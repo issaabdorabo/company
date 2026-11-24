@@ -11,6 +11,8 @@ import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.providers.builtin.IDToken
+import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.realtime.Realtime
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -28,6 +30,8 @@ object SupabaseAuthClient {
             supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         ) {
             install(Auth)
+            install(Postgrest)
+            install(Realtime)
         }
     }
 
