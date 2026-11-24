@@ -573,7 +573,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         requestedIds: Set<Long>
     ): Set<Long> {
         if (requestedIds.isNotEmpty()) return requestedIds
-        if (action != DeviceAction.ADD_OR_MANAGE_CATALOG && action != DeviceAction.EDIT_CATALOG_ITEMS) {
+        if (action !in setOf(
+                DeviceAction.ADD_OR_MANAGE_CATALOG,
+                DeviceAction.EDIT_CATALOG_ITEMS,
+                DeviceAction.BACKUP_RESTORE
+            )
+        ) {
             return requestedIds
         }
         val userId = cloudCollaborationRepo.currentUserIdOrNull()
@@ -581,10 +586,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
         if (workspace.ownerUserId == userId) return emptySet()
 
-        val requiredPermission = if (action == DeviceAction.EDIT_CATALOG_ITEMS) {
-            "canEditCatalogItems"
-        } else {
-            "canAddItems"
+        val requiredPermission = when (action) {
+            DeviceAction.EDIT_CATALOG_ITEMS -> "canEditCatalogItems"
+            DeviceAction.BACKUP_RESTORE -> "canBackup"
+            else -> "canAddItems"
         }
         val remoteWarehouses = cloudCollaborationRepo.listWarehouses(workspaceId)
         return remoteWarehouses.mapNotNull { warehouse ->
@@ -2833,6 +2838,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     suspend fun saveSerialsAndGet(serials: List<ItemUnitSerialRecord>): List<ItemUnitSerialRecord> {
         val changed = findChangedSerialRecords(serials)
+        if (changed.isNotEmpty() && cloudAuthorizationEnabled.value) {
+            validateCloudWarehousePermission(
+                DeviceAction.EDIT_SERIALS,
+                changed.map { it.warehouseId }.toSet()
+            )
+        }
         val saved = repository.saveSerialsAndReturn(serials)
         if (changed.isNotEmpty()) {
             notifyAndPropagate(
