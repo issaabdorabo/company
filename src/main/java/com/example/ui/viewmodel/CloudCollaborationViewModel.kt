@@ -96,6 +96,8 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                     return@launch
                 }
 
+                // Clear an old sign-in warning once the current Supabase session is valid.
+                _notice.value = null
                 val available = repository.listMyWorkspaces()
                 _workspaces.value = available
                 if (available.isEmpty()) {
