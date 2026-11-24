@@ -1051,13 +1051,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 return@launch
             }
 
-            val host = preferences.mainHostUrlFlow.first()
-            val token = preferences.subSessionTokenFlow.first()
-            if (host.isBlank() || token.isBlank()) {
-                _lastSyncError.value = "بيانات الجهاز الرئيسي غير متاحة؛ تم الاحتفاظ بالعملية محلياً."
-                return@launch
-            }
-
             try {
                 // Persist the exact post-operation snapshot and metadata before attempting any
                 // network request. A process death or lost response will not lose the operation.
@@ -1074,8 +1067,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 )
                 repository.enqueuePendingSyncOperation(operation)
 
-                if (!flushPendingSubDeviceSyncOperations()) {
-                    _lastSyncError.value = "تم حفظ العملية في قائمة المزامنة وستُرسل عند عودة اتصال الجهاز الرئيسي."
+                val host = preferences.mainHostUrlFlow.first()
+                val token = preferences.subSessionTokenFlow.first()
+                if (host.isBlank() || token.isBlank() || !flushPendingSubDeviceSyncOperations()) {
+                    _lastSyncError.value = "تم حفظ العملية في قائمة المزامنة وستُرسل عند توفر اتصال الجهاز الرئيسي."
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
