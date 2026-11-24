@@ -25,6 +25,7 @@ import com.example.data.model.ItemUnitSerialRecord
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
 import com.example.data.model.AppliedSyncOperation
+import com.example.data.model.CloudPendingSyncOperation
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -529,4 +530,25 @@ interface PendingSyncOperationDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun markApplied(receipt: AppliedSyncOperation)
+}
+
+@Dao
+interface CloudPendingSyncOperationDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun enqueue(operation: CloudPendingSyncOperation)
+
+    @Query("SELECT * FROM cloud_pending_sync_operations ORDER BY createdAt ASC")
+    suspend fun getPending(): List<CloudPendingSyncOperation>
+
+    @Query("UPDATE cloud_pending_sync_operations SET attempts = attempts + 1, lastError = :error WHERE operationId = :operationId")
+    suspend fun recordFailure(operationId: String, error: String)
+
+    @Query("DELETE FROM cloud_pending_sync_operations WHERE operationId = :operationId")
+    suspend fun remove(operationId: String)
+
+    @Query("DELETE FROM cloud_pending_sync_operations")
+    suspend fun clearAllPending()
+
+    @Query("SELECT COUNT(*) FROM cloud_pending_sync_operations")
+    suspend fun countPending(): Int
 }
