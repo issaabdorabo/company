@@ -11,6 +11,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.InventoryApp
 import com.example.data.cloud.CloudBackupItem
+import com.example.data.cloud.CloudCollaborationRepository
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
 import com.example.data.cloud.DeviceRole
@@ -30,6 +31,7 @@ import com.example.data.model.ItemUnit
 import com.example.data.model.ItemUnitSerialRecord
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
+import com.example.data.model.CloudPendingSyncOperation
 import com.example.data.model.ItemStockInfo
 import com.example.data.model.SmallerUnit
 import com.example.data.model.Supplier
@@ -74,6 +76,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val repository = app.repository
     private val preferences = app.preferencesManager
     private val cloudBackupRepo = app.cloudBackupRepository
+    private val cloudCollaborationRepo = CloudCollaborationRepository()
     private val notificationManager = AppNotificationManager(application)
 
     private val syncClient = LocalNetworkSyncClient()
@@ -331,11 +334,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
 
     private var subSyncJob: Job? = null
+    private var cloudOutboxJob: Job? = null
     private val subSyncMutex = Mutex()
     private val pendingPushMutex = Mutex()
+    private val cloudPushMutex = Mutex()
 
     init {
         startMultiDeviceCoordinator()
+        startCloudOutboxCoordinator()
     }
 
     private fun startMultiDeviceCoordinator() {
@@ -384,6 +390,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         subSyncJob?.cancel()
+        cloudOutboxJob?.cancel()
         syncServer.stop()
     }
 
@@ -514,8 +521,53 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             warehouseIds = warehouseIds,
             onDenied = { viewModelScope.launch { _userMessage.emit(deniedMessage) } }
         ) {
-            viewModelScope.launch { operation() }
+            viewModelScope.launch {
+                try {
+                    validateCloudWarehousePermission(action, warehouseIds)
+                    operation()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    val detail = error.localizedMessage ?: error.javaClass.simpleName
+                    _userMessage.emit("تم منع العملية عبر صلاحيات السحابة: $detail")
+                }
+            }
         }
+    }
+
+    private suspend fun resolveCloudWarehouseMap(workspaceId: String): Map<Long, String> {
+        val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
+        val currentUserId = cloudCollaborationRepo.currentUserIdOrNull()
+            ?: error("يجب تسجيل الدخول إلى حساب Google")
+        val localWarehouses = repository.allWarehouses.first()
+        if (workspace.ownerUserId == currentUserId) {
+            localWarehouses.forEach { warehouse ->
+                cloudCollaborationRepo.ensureCloudWarehouse(workspaceId, warehouse.id, warehouse.name)
+            }
+        }
+        return cloudCollaborationRepo.listWarehouses(workspaceId)
+            .mapNotNull { remote -> remote.localId?.let { it to remote.id } }
+            .toMap()
+    }
+
+    private suspend fun validateCloudWarehousePermission(
+        action: DeviceAction,
+        localWarehouseIds: Set<Long>
+    ) {
+        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+        if (workspaceId.isBlank()) return
+        val deviceId = preferences.cloudDeviceIdFlow.first()
+        if (deviceId.isBlank()) error("لم يتم تسجيل هذا الجهاز في مساحة العمل السحابية بعد")
+        val cloudWarehouseMap = resolveCloudWarehouseMap(workspaceId)
+        val cloudWarehouseIds = localWarehouseIds.map { localId ->
+            cloudWarehouseMap[localId] ?: error("المخزن المحلي رقم $localId غير مربوط بمساحة العمل السحابية")
+        }.toSet()
+        cloudCollaborationRepo.checkCloudWarehouseAccess(
+            workspaceId = workspaceId,
+            deviceId = deviceId,
+            operationType = action.name,
+            warehouseIds = cloudWarehouseIds
+        )
     }
 
     // Multi-Device Setup & Controls
@@ -1035,6 +1087,124 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             targetItemIds = targetItemIds,
             targetVoucherIds = targetVoucherIds
         )
+        propagateCloudDataChange(
+            action = action,
+            operationTitle = notificationTitle,
+            operationDetails = notificationDetails,
+            warehouseIds = warehouseIds
+        )
+    }
+
+    private fun propagateCloudDataChange(
+        action: DeviceAction? = null,
+        operationTitle: String,
+        operationDetails: String,
+        warehouseIds: Set<Long>
+    ) {
+        viewModelScope.launch {
+            val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+            if (workspaceId.isBlank()) return@launch
+            try {
+                val operation = CloudPendingSyncOperation(
+                    operationId = UUID.randomUUID().toString(),
+                    actionType = action?.name ?: "GENERAL",
+                    operationTitle = operationTitle,
+                    operationDetails = operationDetails,
+                    actorName = userName.value,
+                    warehouseIdsJson = JSONArray(warehouseIds.toList()).toString(),
+                    entitiesJson = LocalSyncJson.upsertsToJsonArray(repository.exportAllEntitiesForCloud()).toString()
+                )
+                repository.enqueueCloudPendingSyncOperation(operation)
+                if (!flushCloudPendingSyncOperations()) {
+                    _lastSyncError.value = "تم حفظ العملية في طابور السحابة؛ ستُرفع عند عودة الاتصال."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _lastSyncError.value = "تعذر حفظ العملية في طابور السحابة: ${error.localizedMessage ?: "خطأ غير معروف"}"
+            }
+        }
+    }
+
+    private fun startCloudOutboxCoordinator() {
+        cloudOutboxJob?.cancel()
+        cloudOutboxJob = viewModelScope.launch {
+            while (isActive) {
+                runCatching { flushCloudPendingSyncOperations() }
+                delay(15_000L)
+            }
+        }
+    }
+
+    private suspend fun flushCloudPendingSyncOperations(): Boolean = cloudPushMutex.withLock {
+        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+        val deviceId = preferences.cloudDeviceIdFlow.first()
+        if (workspaceId.isBlank()) return@withLock true
+        if (deviceId.isBlank() || cloudCollaborationRepo.currentUserIdOrNull().isNullOrBlank()) {
+            return@withLock false
+        }
+
+        val pending = repository.getCloudPendingSyncOperations()
+        if (pending.isEmpty()) return@withLock true
+
+        val cloudWorkspace = cloudCollaborationRepo.getWorkspace(workspaceId)
+        val isOwner = cloudWorkspace.ownerUserId == cloudCollaborationRepo.currentUserIdOrNull()
+        val warehouseMap = resolveCloudWarehouseMap(workspaceId)
+
+        for (operation in pending) {
+            val localWarehouseIds = longIdsFromJson(operation.warehouseIdsJson)
+            val missing = localWarehouseIds.filterNot { warehouseMap.containsKey(it) }
+            if (missing.isNotEmpty()) {
+                repository.recordCloudPendingSyncFailure(
+                    operation.operationId,
+                    "المخازن التالية غير مربوطة سحابياً: ${missing.joinToString()}"
+                )
+                _lastSyncError.value = "تعذر رفع عملية سحابية لعدم ربط أحد المخازن."
+                return@withLock false
+            }
+
+            val entities = runCatching {
+                LocalSyncJson.upsertsFromJsonArray(JSONArray(operation.entitiesJson))
+            }.getOrElse { error ->
+                repository.recordCloudPendingSyncFailure(
+                    operation.operationId,
+                    "تعذر قراءة لقطة العملية: ${error.localizedMessage}"
+                )
+                return@withLock false
+            }
+            val cloudWarehouseIds = localWarehouseIds.map { warehouseMap.getValue(it) }.toSet()
+            val records = cloudCollaborationRepo.encodeCloudEntityRecords(
+                entities = entities,
+                cloudWarehouseIdByLocalId = warehouseMap,
+                targetWarehouseLocalIds = localWarehouseIds,
+                includeGlobalRecords = isOwner
+            )
+
+            val result = runCatching {
+                cloudCollaborationRepo.pushCloudSnapshot(
+                    workspaceId = workspaceId,
+                    deviceId = deviceId,
+                    clientOperationId = operation.operationId,
+                    operationType = operation.actionType,
+                    warehouseIds = cloudWarehouseIds,
+                    title = operation.operationTitle,
+                    details = operation.operationDetails,
+                    records = records
+                )
+            }
+            result.onSuccess {
+                repository.removeCloudPendingSyncOperation(operation.operationId)
+                _lastSyncError.value = null
+            }.onFailure { error ->
+                repository.recordCloudPendingSyncFailure(
+                    operation.operationId,
+                    error.localizedMessage ?: error.javaClass.simpleName
+                )
+                _lastSyncError.value = error.localizedMessage ?: "تعذر رفع عملية إلى السحابة"
+                return@withLock false
+            }
+        }
+        true
     }
 
     private fun propagateDataChange(
