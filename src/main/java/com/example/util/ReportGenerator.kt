@@ -74,10 +74,13 @@ object ReportGenerator {
         customColumnTitles: Map<ReportColumn, String> = emptyMap(),
         columnOrder: List<ReportColumn>? = null,
         columnDisplayModes: Map<ReportColumn, String> = emptyMap(),
-        columnEntityValues: Map<ReportColumn, List<String>> = emptyMap()
+        columnEntityValues: Map<ReportColumn, List<String>> = emptyMap(),
+        isLandscape: Boolean = false
     ): File {
         val pdfDocument = PdfDocument()
-        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 portrait
+        val pageWidth = if (isLandscape) 842f else 595f
+        val pageHeight = if (isLandscape) 595f else 842f
+        val pageInfo = PdfDocument.PageInfo.Builder(pageWidth.toInt(), pageHeight.toInt(), 1).create()
         val page = pdfDocument.startPage(pageInfo)
         val canvas: Canvas = page.canvas
 
@@ -88,7 +91,6 @@ object ReportGenerator {
         val dateFormat = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
         val currentDate = dateFormat.format(Date())
 
-        val pageWidth = 595f
         val margin = 24f
         val contentWidth = pageWidth - (margin * 2)
 
@@ -195,27 +197,29 @@ object ReportGenerator {
 
         var currentY = 112f
 
-        // Table Header Background
-        paint.color = Color.rgb(241, 245, 249)
-        canvas.drawRect(margin, currentY - 16f, pageWidth - margin, currentY + 8f, paint)
-
-        // Table Header Text
-        paint.color = Color.rgb(15, 23, 42)
+        // Wrap column titles instead of truncating long Arabic headings.
         paint.textSize = 9.5f
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        val headerLines = pdfCols.mapIndexed { index, colDef ->
+            val maxChars = ((colWidths[index] - 8f) / 4.8f).toInt().coerceAtLeast(3)
+            wrapPdfText(colDef.title, maxChars, 5)
+        }
+        val headerLineCount = (headerLines.maxOfOrNull { it.size } ?: 1).coerceAtLeast(1)
+        val headerHeight = headerLineCount * 11f + 9f
+        paint.color = Color.rgb(241, 245, 249)
+        canvas.drawRoundRect(margin, currentY - 13f, pageWidth - margin, currentY + headerHeight - 4f, 4f, 4f, paint)
+        paint.color = Color.rgb(15, 23, 42)
         paint.textAlign = Paint.Align.RIGHT
-
         var cumRightX = pageWidth - margin
-        pdfCols.forEachIndexed { index, colDef ->
-            val w = colWidths[index]
+        pdfCols.forEachIndexed { index, _ ->
             val rightX = cumRightX - 4f
-            val maxHeaderChars = (w / 5.0f).toInt().coerceAtLeast(3)
-            val headerText = if (colDef.title.length > maxHeaderChars) colDef.title.take(maxHeaderChars - 1) + "." else colDef.title
-            canvas.drawText(headerText, rightX, currentY, paint)
-            cumRightX -= w
+            headerLines[index].forEachIndexed { lineIndex, line ->
+                canvas.drawText(line, rightX, currentY + lineIndex * 11f, paint)
+            }
+            cumRightX -= colWidths[index]
         }
 
-        currentY += 22f
+        currentY += headerHeight + 8f
 
         // 3. Table Rows
         paint.textSize = 9f
@@ -226,11 +230,11 @@ object ReportGenerator {
                 val maxChars = ((colWidths[colIndex] - 8f) / 4.8f).toInt().coerceAtLeast(3)
                 col.getValue(row, rowIndex).split("\n").flatMap { part ->
                     if (part.length <= maxChars) listOf(part) else part.chunked(maxChars)
-                }.ifEmpty { listOf("") }.take(4)
+                }.ifEmpty { listOf("") }.take(8)
             }
             val lineCount = (cellLines.maxOfOrNull { it.size } ?: 1).coerceAtLeast(1)
             val rowHeight = maxOf(19f, lineCount * 10f + 7f)
-            if (currentY + rowHeight > 790f) return@forEachIndexed
+            if (currentY + rowHeight > pageHeight - 52f) return@forEachIndexed
 
             if (rowIndex % 2 == 1) {
                 paint.color = Color.rgb(248, 250, 252)
@@ -254,18 +258,18 @@ object ReportGenerator {
 
         // 4. Bottom Margin Footer
         paint.color = Color.rgb(226, 232, 240)
-        canvas.drawLine(margin, 810f, pageWidth - margin, 810f, paint)
+        canvas.drawLine(margin, pageHeight - 32f, pageWidth - margin, pageHeight - 32f, paint)
 
         paint.color = Color.rgb(100, 116, 139)
         paint.textSize = 9f
 
         // Right side footer: User Name
         paint.textAlign = Paint.Align.RIGHT
-        canvas.drawText("المستخدم: $appUserName", pageWidth - margin, 826f, paint)
+        canvas.drawText("المستخدم: $appUserName", pageWidth - margin, pageHeight - 16f, paint)
 
         // Left side footer: Developer Credit
         paint.textAlign = Paint.Align.LEFT
-        canvas.drawText("طور بواسطة عيسى عبدربه 771438740", margin, 826f, paint)
+        canvas.drawText("طور بواسطة عيسى عبدربه 771438740", margin, pageHeight - 16f, paint)
 
         pdfDocument.finishPage(page)
 
@@ -283,6 +287,25 @@ object ReportGenerator {
         return file
     }
 
+
+    private fun wrapPdfText(value: String, maxChars: Int, maxLines: Int): List<String> {
+        val output = mutableListOf<String>()
+        value.split("\n").forEach { part ->
+            var remaining = part.trim()
+            if (remaining.isEmpty()) {
+                output.add("")
+            } else {
+                while (remaining.length > maxChars && output.size < maxLines) {
+                    val preferredBreak = remaining.lastIndexOf(' ', maxChars).takeIf { it >= maxChars / 2 }
+                    val breakAt = preferredBreak ?: maxChars
+                    output.add(remaining.substring(0, breakAt).trim())
+                    remaining = remaining.substring(breakAt).trim()
+                }
+                if (output.size < maxLines) output.add(remaining)
+            }
+        }
+        return output.take(maxLines).ifEmpty { listOf("") }
+    }
 
     data class ChartEntry(val label: String, val value: Double)
 
