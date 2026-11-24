@@ -6,11 +6,11 @@ import com.example.data.cloud.CloudEntityRecord
 import com.example.data.cloud.CloudEntityUpsert
 import org.json.JSONObject
 import io.github.jan.supabase.postgrest.postgrest
-import io.github.jan.supabase.postgrest.query.filter.eq
-import io.github.jan.supabase.postgrest.result.decodeList
-import io.github.jan.supabase.postgrest.result.decodeSingle
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.postgresChangeFlow
+import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.realtime
+import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -230,7 +230,7 @@ class CloudCollaborationRepository {
         require(cleanName.length in 2..100) { "اسم مساحة العمل يجب أن يكون بين حرفين و100 حرف" }
         val workspaceId = client.postgrest.rpc(
             "create_workspace",
-            CreateWorkspaceParams(cleanName)
+            buildJsonObject { put("p_name", JsonPrimitive(cleanName)) }
         ).decodeSingle<String>()
         return getWorkspace(workspaceId)
     }
@@ -246,24 +246,31 @@ class CloudCollaborationRepository {
         stableFingerprint: String
     ): String = client.postgrest.rpc(
         "register_cloud_device",
-        RegisterCloudDeviceParams(
-            workspace = workspaceId,
-            deviceName = deviceName.trim().ifBlank { "جهاز Android" },
-            fingerprint = stableFingerprint
-        )
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_device_name", JsonPrimitive(deviceName.trim().ifBlank { "جهاز Android" }))
+            put("p_device_fingerprint", JsonPrimitive(stableFingerprint))
+        }
     ).decodeSingle<String>()
 
     suspend fun heartbeat(deviceId: String, appState: String = "FOREGROUND") {
         client.postgrest.rpc(
             "heartbeat_device",
-            HeartbeatDeviceParams(deviceId, appState)
+            buildJsonObject {
+                put("p_device", JsonPrimitive(deviceId))
+                put("p_app_state", JsonPrimitive(appState))
+            }
         )
     }
 
     suspend fun ensureCloudWarehouse(workspaceId: String, localId: Long, name: String): String =
         client.postgrest.rpc(
             "ensure_cloud_warehouse",
-            EnsureCloudWarehouseParams(workspaceId, localId, name)
+            buildJsonObject {
+                put("p_workspace", JsonPrimitive(workspaceId))
+                put("p_local_id", JsonPrimitive(localId))
+                put("p_name", JsonPrimitive(name))
+            }
         ).decodeSingle<String>()
 
     suspend fun seedWorkspaceSnapshot(
@@ -272,7 +279,11 @@ class CloudCollaborationRepository {
         records: JsonArray
     ): Int = client.postgrest.rpc(
         "seed_cloud_workspace_snapshot",
-        SeedCloudSnapshotParams(workspaceId, deviceId, records)
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_device", JsonPrimitive(deviceId))
+            put("p_records", records)
+        }
     ).decodeSingle<Int>()
 
     suspend fun pushCloudSnapshot(
@@ -286,16 +297,16 @@ class CloudCollaborationRepository {
         records: JsonArray
     ): String = client.postgrest.rpc(
         "push_cloud_entity_snapshot",
-        PushCloudSnapshotParams(
-            workspace = workspaceId,
-            device = deviceId,
-            clientOperationId = clientOperationId,
-            operationType = operationType,
-            warehouseIds = warehouseIds.toList(),
-            title = title,
-            details = details,
-            records = records
-        )
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_device", JsonPrimitive(deviceId))
+            put("p_client_operation_id", JsonPrimitive(clientOperationId))
+            put("p_operation_type", JsonPrimitive(operationType))
+            put("p_warehouse_ids", buildJsonArray { warehouseIds.forEach { add(JsonPrimitive(it)) } })
+            put("p_title", JsonPrimitive(title))
+            put("p_details", JsonPrimitive(details))
+            put("p_records", records)
+        }
     ).decodeSingle<String>()
 
     suspend fun checkCloudWarehouseAccess(
@@ -305,12 +316,12 @@ class CloudCollaborationRepository {
         warehouseIds: Set<String>
     ): Boolean = client.postgrest.rpc(
         "check_cloud_warehouse_access",
-        CheckCloudWarehouseAccessParams(
-            workspace = workspaceId,
-            device = deviceId,
-            operationType = operationType,
-            warehouseIds = warehouseIds.toList()
-        )
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_device", JsonPrimitive(deviceId))
+            put("p_operation_type", JsonPrimitive(operationType))
+            put("p_warehouse_ids", buildJsonArray { warehouseIds.forEach { add(JsonPrimitive(it)) } })
+        }
     ).decodeSingle<Boolean>()
 
     suspend fun fetchCloudEntitySnapshot(workspaceId: String): List<CloudEntityRecord> {
@@ -412,12 +423,12 @@ class CloudCollaborationRepository {
         require(email.trim().contains("@")) { "أدخل بريداً إلكترونياً صحيحاً" }
         return client.postgrest.rpc(
             "add_workspace_member_by_email",
-            AddWorkspaceMemberParams(
-                workspace = workspaceId,
-                email = email.trim(),
-                role = role,
-                displayName = displayName.trim()
-            )
+            buildJsonObject {
+                put("p_workspace", JsonPrimitive(workspaceId))
+                put("p_email", JsonPrimitive(email.trim()))
+                put("p_role", JsonPrimitive(role))
+                put("p_display_name", JsonPrimitive(displayName.trim()))
+            }
         ).decodeSingle<String>()
     }
 
@@ -440,13 +451,13 @@ class CloudCollaborationRepository {
     ) {
         client.postgrest.rpc(
             "grant_warehouse_membership",
-            GrantWarehouseMembershipParams(
-                workspace = workspaceId,
-                warehouse = warehouseId,
-                user = userId,
-                permissions = permissions,
-                makeDedicated = makeDedicated
-            )
+            buildJsonObject {
+                put("p_workspace", JsonPrimitive(workspaceId))
+                put("p_warehouse", JsonPrimitive(warehouseId))
+                put("p_user", JsonPrimitive(userId))
+                put("p_permissions", permissions)
+                put("p_make_dedicated", JsonPrimitive(makeDedicated))
+            }
         )
     }
 
@@ -458,7 +469,10 @@ class CloudCollaborationRepository {
     suspend fun createDirectConversation(workspaceId: String, otherUserId: String): String =
         client.postgrest.rpc(
             "create_direct_conversation",
-            CreateDirectConversationParams(workspaceId, otherUserId)
+            buildJsonObject {
+                put("p_workspace", JsonPrimitive(workspaceId))
+                put("p_other_user", JsonPrimitive(otherUserId))
+            }
         ).decodeSingle<String>()
 
     suspend fun createWarehouseConversation(
@@ -467,7 +481,11 @@ class CloudCollaborationRepository {
         title: String
     ): String = client.postgrest.rpc(
         "create_warehouse_conversation",
-        CreateWarehouseConversationParams(workspaceId, warehouseId, title)
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_warehouse", JsonPrimitive(warehouseId))
+            put("p_title", JsonPrimitive(title))
+        }
     ).decodeSingle<String>()
 
     suspend fun listMessages(conversationId: String): List<CloudMessage> =
@@ -482,19 +500,20 @@ class CloudCollaborationRepository {
         }
         return client.postgrest.rpc(
             "send_message",
-            SendMessageParams(
-                conversation = conversationId,
-                clientMessageId = UUID.randomUUID().toString(),
-                body = cleanBody
-            )
+            buildJsonObject {
+                put("p_conversation", JsonPrimitive(conversationId))
+                put("p_client_message_id", JsonPrimitive(UUID.randomUUID().toString()))
+                put("p_body", JsonPrimitive(cleanBody))
+                put("p_attachment_path", JsonNull)
+            }
         ).decodeSingle<CloudMessage>()
     }
 
     fun observeMessages(conversationId: String): Flow<Unit> = callbackFlow {
-        val channel = client.realtime.createChannel("cloud-chat-$conversationId")
+        val channel = client.realtime.channel("cloud-chat-$conversationId")
         val changes = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
             table = "messages"
-            filter = "conversation_id=eq.$conversationId"
+            filter("conversation_id", FilterOperator.EQ, conversationId)
         }
         val collector = launch {
             changes.collect { trySend(Unit).isSuccess }
