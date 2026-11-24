@@ -439,6 +439,9 @@ interface BackupDao {
     @Query("UPDATE backups SET name = :newName WHERE id = :id")
     suspend fun renameBackup(id: Long, newName: String)
 
+    @Query("UPDATE backups SET backupJson = :backupJson, sizeBytes = :sizeBytes WHERE id = :id")
+    suspend fun updateBackupPayload(id: Long, backupJson: String, sizeBytes: Long)
+
     @Query("DELETE FROM backups WHERE id = :id")
     suspend fun deleteBackupById(id: Long)
 
