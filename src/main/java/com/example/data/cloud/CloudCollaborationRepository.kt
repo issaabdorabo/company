@@ -34,68 +34,94 @@ import java.util.UUID
 data class CloudWorkspace(
     val id: String,
     val name: String,
-    val ownerUserId: String,
-    val createdAt: String
+    @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("created_at") val createdAt: String
 )
 
 @Serializable
 data class CloudWorkspaceMember(
-    val workspaceId: String,
-    val userId: String,
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("user_id") val userId: String,
     val role: String,
-    val displayName: String = "",
+    @SerialName("display_name") val displayName: String = "",
     val email: String = "",
-    val isActive: Boolean = true
+    @SerialName("is_active") val isActive: Boolean = true
 )
 
 @Serializable
 data class CloudWarehouse(
     val id: String,
-    val workspaceId: String,
-    val localId: Long? = null,
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("local_id") val localId: Long? = null,
     val name: String,
-    val updatedAt: String = ""
+    @SerialName("updated_at") val updatedAt: String = ""
 )
 
 @Serializable
 data class CloudWarehouseMembership(
-    val warehouseId: String,
-    val userId: String,
+    @SerialName("warehouse_id") val warehouseId: String,
+    @SerialName("user_id") val userId: String,
     val permissions: JsonObject
 )
 
 @Serializable
 data class CloudDevice(
     val id: String,
-    val workspaceId: String,
-    val userId: String,
-    val deviceName: String,
-    val deviceFingerprint: String,
-    val isRevoked: Boolean = false,
-    val lastSeenAt: String? = null,
-    val createdAt: String = ""
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("user_id") val userId: String,
+    @SerialName("device_name") val deviceName: String,
+    @SerialName("device_fingerprint") val deviceFingerprint: String,
+    @SerialName("is_revoked") val isRevoked: Boolean = false,
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
+    @SerialName("created_at") val createdAt: String = ""
 )
 
 @Serializable
 data class CloudConversation(
     val id: String,
-    val workspaceId: String,
-    val conversationType: String,
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("conversation_type") val conversationType: String,
     val title: String = "",
-    val warehouseId: String? = null,
-    val createdBy: String,
-    val createdAt: String
+    @SerialName("warehouse_id") val warehouseId: String? = null,
+    @SerialName("created_by") val createdBy: String,
+    @SerialName("created_at") val createdAt: String
 )
 
 @Serializable
 data class CloudMessage(
     val id: String,
-    val conversationId: String,
-    val senderUserId: String,
-    val clientMessageId: String,
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("sender_user_id") val senderUserId: String,
+    @SerialName("client_message_id") val clientMessageId: String,
     val body: String,
-    val attachmentPath: String? = null,
-    val createdAt: String
+    @SerialName("attachment_path") val attachmentPath: String? = null,
+    @SerialName("created_at") val createdAt: String
+)
+
+@Serializable
+data class CloudUserNotification(
+    val id: String,
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("recipient_user_id") val recipientUserId: String,
+    @SerialName("notification_type") val notificationType: String,
+    val title: String,
+    val body: String,
+    @SerialName("related_operation_id") val relatedOperationId: String? = null,
+    @SerialName("read_at") val readAt: String? = null,
+    @SerialName("created_at") val createdAt: String
+)
+
+@Serializable
+data class CloudOperationAuditEntry(
+    val id: String,
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("operation_id") val operationId: String? = null,
+    @SerialName("actor_user_id") val actorUserId: String,
+    @SerialName("device_name") val deviceName: String = "",
+    @SerialName("operation_type") val operationType: String,
+    val title: String,
+    val details: String = "",
+    @SerialName("created_at") val createdAt: String
 )
 
 @Serializable
@@ -454,10 +480,31 @@ class CloudCollaborationRepository {
     suspend fun listWorkspaceMembers(workspaceId: String): List<CloudWorkspaceMember> =
         client.postgrest["workspace_members"].select {
             filter {
-            eq("workspace_id", workspaceId)
-        
+                eq("workspace_id", workspaceId)
             }
         }.decodeList<CloudWorkspaceMember>()
+
+    /**
+     * RLS restricts this result to notifications addressed to the signed-in user.
+     * The workspace filter keeps the polling query scoped to the active collaboration space.
+     */
+    suspend fun listMyOperationNotifications(workspaceId: String): List<CloudUserNotification> =
+        client.postgrest["user_notifications"].select {
+            filter {
+                eq("workspace_id", workspaceId)
+            }
+        }.decodeList<CloudUserNotification>().sortedBy { it.createdAt }
+
+    /**
+     * Database RLS limits audit entries to the workspace owner or users assigned to
+     * the warehouses referenced by each operation.
+     */
+    suspend fun listAllowedOperationAuditEntries(workspaceId: String): List<CloudOperationAuditEntry> =
+        client.postgrest["operation_audit_logs"].select {
+            filter {
+                eq("workspace_id", workspaceId)
+            }
+        }.decodeList<CloudOperationAuditEntry>().sortedBy { it.createdAt }
 
     suspend fun addMemberByEmail(
         workspaceId: String,
