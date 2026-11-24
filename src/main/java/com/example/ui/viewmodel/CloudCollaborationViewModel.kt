@@ -43,6 +43,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
     private val _workspaces = MutableStateFlow<List<CloudWorkspace>>(emptyList())
     val workspaces: StateFlow<List<CloudWorkspace>> = _workspaces.asStateFlow()
 
+    private val _canCreateFirstWorkspace = MutableStateFlow(false)
+    val canCreateFirstWorkspace: StateFlow<Boolean> = _canCreateFirstWorkspace.asStateFlow()
+
     private val _activeWorkspace = MutableStateFlow<CloudWorkspace?>(null)
     val activeWorkspace: StateFlow<CloudWorkspace?> = _activeWorkspace.asStateFlow()
 
@@ -87,6 +90,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 _userEmail.value = repository.currentUserEmailOrNull().orEmpty()
                 if (uid.isNullOrBlank()) {
                     _workspaces.value = emptyList()
+                    _canCreateFirstWorkspace.value = false
                     _activeWorkspace.value = null
                     _currentUserId.value = ""
                     _members.value = emptyList()
@@ -101,16 +105,26 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 val available = repository.listMyWorkspaces()
                 _workspaces.value = available
                 if (available.isEmpty()) {
+                    _canCreateFirstWorkspace.value = repository.canCreateFirstWorkspace()
                     _activeWorkspace.value = null
                     _members.value = emptyList()
                     _warehouses.value = emptyList()
                     _conversations.value = emptyList()
-                    _notice.value = "لا توجد مساحة عمل مرتبطة بهذا الحساب. أنشئ مساحة جديدة أو اطلب من المسؤول إضافتك ببريد حساب Google."
+                    _notice.value = if (_canCreateFirstWorkspace.value) {
+                        "هذه أول مرة يتم فيها إعداد التطبيق السحابي. أنشئ مساحة العمل الرئيسية مرة واحدة."
+                    } else {
+                        "مساحة العمل الرئيسية موجودة بالفعل. اطلب من المسؤول إضافة بريد Google الخاص بك؛ لا تنشئ مساحة أخرى."
+                    }
                     return@launch
                 }
 
+                _canCreateFirstWorkspace.value = false
+                // The app uses one shared workspace. Prefer the owner's workspace if
+                // legacy memberships are returned while an older client is still active.
                 val savedId = preferences.cloudWorkspaceIdFlow.first()
-                val selected = available.firstOrNull { it.id == savedId } ?: available.first()
+                val selected = available.firstOrNull { it.id == savedId }
+                    ?: available.firstOrNull { it.ownerUserId == uid }
+                    ?: available.first()
                 if (selected.id != savedId) preferences.saveCloudWorkspace(selected.id, selected.name)
                 _activeWorkspace.value = selected
                 loadWorkspaceContent(selected.id)
@@ -132,8 +146,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 val workspace = repository.createWorkspace(name)
                 preferences.saveCloudWorkspace(workspace.id, workspace.name)
                 _activeWorkspace.value = workspace
+                _canCreateFirstWorkspace.value = false
                 refreshAfterWorkspaceChange(workspace)
-                _notice.value = "تم إنشاء مساحة العمل السحابية بنجاح."
+                _notice.value = "تم إعداد مساحة العمل الرئيسية المشتركة بنجاح."
             }
         }
     }
@@ -477,6 +492,8 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 "هذا البريد لم يسجل الدخول إلى التطبيق بعد. اطلب من المستخدم ربط حساب Google أولاً."
             raw.contains("OWNER_REQUIRED", true) ->
                 "هذه العملية متاحة للمستخدم الرئيسي المسؤول عن مساحة العمل فقط."
+            raw.contains("WORKSPACE_ALREADY_EXISTS_INVITE_REQUIRED", true) ->
+                "مساحة العمل الرئيسية موجودة بالفعل. اطلب من المسؤول إضافتك بدلاً من إنشاء مساحة جديدة."
             raw.contains("WAREHOUSE_ACCESS_DENIED", true) ->
                 "لا يملك الحساب صلاحية الوصول إلى المخزن المحدد."
             raw.contains("DEVICE_REVOKED", true) ->
