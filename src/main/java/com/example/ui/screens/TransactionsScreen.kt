@@ -299,6 +299,33 @@ fun TransactionsScreen(
                 }
             }
 
+            if (warehouses.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("فلترة حسب المخزن", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedWarehouseFilterId == null,
+                            onClick = { selectedWarehouseFilterId = null },
+                            label = { Text("كل المخازن") }
+                        )
+                    }
+                    items(warehouses, key = { it.id }) { warehouse ->
+                        FilterChip(
+                            selected = selectedWarehouseFilterId == warehouse.id,
+                            onClick = {
+                                selectedWarehouseFilterId =
+                                    if (selectedWarehouseFilterId == warehouse.id) null else warehouse.id
+                            },
+                            label = { Text(warehouse.name) }
+                        )
+                    }
+                }
+            }
+
             if (isMainDevice) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text("فلترة حسب المستخدمين والأجهزة المرتبطة", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
