@@ -1175,6 +1175,24 @@ class InventoryRepository(
         record.copy(id = id)
     }
 
+    suspend fun attachBackupMetadata(record: BackupRecord, metadata: JSONObject): BackupRecord = withContext(Dispatchers.IO) {
+        val json = JSONObject(record.backupJson)
+        val keys = metadata.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            json.put(key, metadata.get(key))
+        }
+        val fullJson = json.toString(2)
+        val updated = record.copy(
+            backupJson = fullJson,
+            sizeBytes = fullJson.toByteArray(Charsets.UTF_8).size.toLong()
+        )
+        if (record.id > 0L) {
+            backupDao.updateBackupPayload(updated.id, updated.backupJson, updated.sizeBytes)
+        }
+        updated
+    }
+
     suspend fun buildCloudBackupSnapshot(name: String, accountEmail: String): BackupRecord = withContext(Dispatchers.IO) {
         buildBackupRecord(name = name, isCloud = true, accountEmail = accountEmail, compactJson = true)
     }
@@ -1204,6 +1222,7 @@ class InventoryRepository(
         val associations = warehouseItemAssociationDao.getAllAssociationsList()
         val adjustments = adjustmentDao.getAllLogs()
         val serials = itemUnitSerialDao.getAllSerialsList()
+        val operationLogs = auditLogDao.getAllList()
 
         val json = JSONObject()
         json.put("appName", "مخزني الذكي")
@@ -1439,6 +1458,20 @@ class InventoryRepository(
             })
         }
         json.put("itemUnitSerials", serArr)
+
+        val operationLogsArray = JSONArray()
+        operationLogs.forEach { log ->
+            operationLogsArray.put(JSONObject().apply {
+                put("id", log.id)
+                put("timestamp", log.timestamp)
+                put("actorName", log.actorName)
+                put("deviceName", log.deviceName)
+                put("operationType", log.operationType)
+                put("title", log.title)
+                put("details", log.details)
+            })
+        }
+        json.put("operationAuditLogs", operationLogsArray)
 
         val jsonString = if (compactJson) json.toString() else json.toString(2)
         val bytes = jsonString.toByteArray(Charsets.UTF_8)
@@ -1756,6 +1789,26 @@ class InventoryRepository(
                     }
                     if (serList.isNotEmpty()) {
                         itemUnitSerialDao.insertOrUpdateSerials(serList)
+                    }
+                }
+
+                // Restore the saved operation history when the backup contains it.
+                val operationLogsArray = json.optJSONArray("operationAuditLogs")
+                if (operationLogsArray != null) {
+                    auditLogDao.clearAll()
+                    for (index in 0 until operationLogsArray.length()) {
+                        val obj = operationLogsArray.getJSONObject(index)
+                        auditLogDao.insert(
+                            OperationAuditLog(
+                                id = obj.optLong("id", 0L),
+                                timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                                actorName = obj.optString("actorName", "مستخدم غير محدد"),
+                                deviceName = obj.optString("deviceName", "الجهاز الرئيسي"),
+                                operationType = obj.optString("operationType", "GENERAL"),
+                                title = obj.optString("title", "عملية مستعادة"),
+                                details = obj.optString("details", "")
+                            )
+                        )
                     }
                 }
             }
