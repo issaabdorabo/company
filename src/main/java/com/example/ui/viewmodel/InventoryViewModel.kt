@@ -1257,6 +1257,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (preferences.hasSeenCloudNotification(notification.id)) return@forEach
 
             val audit = notification.relatedOperationId?.let(auditByOperationId::get)
+            // Keep the notification pending until its RLS-authorized audit row is available;
+            // this prevents a transient audit-query failure from losing the history entry.
+            if (!notification.relatedOperationId.isNullOrBlank() && audit == null) return@forEach
             val member = audit?.let { membersByUserId[it.actorUserId] }
             val actorName = member?.displayName?.takeIf { it.isNotBlank() }
                 ?: member?.email?.takeIf { it.isNotBlank() }
