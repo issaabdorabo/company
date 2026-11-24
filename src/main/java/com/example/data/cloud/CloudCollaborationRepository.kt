@@ -2,6 +2,7 @@ package com.example.data.cloud
 
 import io.github.jan.supabase.auth.auth
 import com.example.data.sync.LocalSyncJson
+import com.example.data.model.Warehouse
 import com.example.data.cloud.CloudEntityRecord
 import com.example.data.cloud.CloudEntityUpsert
 import org.json.JSONObject
@@ -283,6 +284,22 @@ class CloudCollaborationRepository {
             put("p_data", data)
         }
     ).decodeSingle<String>()
+
+    suspend fun ensureCloudWarehouse(workspaceId: String, warehouse: Warehouse): String =
+        ensureCloudWarehouse(
+            workspaceId = workspaceId,
+            localId = warehouse.id,
+            name = warehouse.name,
+            data = buildJsonObject {
+                put("id", JsonPrimitive(warehouse.id))
+                put("name", JsonPrimitive(warehouse.name))
+                put("location", JsonPrimitive(warehouse.location))
+                put("managerName", JsonPrimitive(warehouse.managerName))
+                put("phone", JsonPrimitive(warehouse.phone))
+                put("notes", JsonPrimitive(warehouse.notes))
+                put("createdAt", JsonPrimitive(warehouse.createdAt))
+            }
+        )
 
     suspend fun seedWorkspaceSnapshot(
         workspaceId: String,
