@@ -519,6 +519,39 @@ class UserPreferencesManager(private val context: Context) {
         }
     }
 
+    /**
+     * Export linked-device identities and permissions without preserving active session tokens.
+     * Password hashes remain salted; every restored device must pair again.
+     */
+    suspend fun exportLinkedDevicesBackupJson(): String {
+        val raw = context.dataStore.data.first()[KEY_LINKED_DEVICES_JSON] ?: "[]"
+        val devices = runCatching { JSONArray(raw) }.getOrDefault(JSONArray())
+        for (index in 0 until devices.length()) {
+            val device = devices.optJSONObject(index) ?: continue
+            device.put("sessionToken", UUID.randomUUID().toString())
+            device.put("boundInstallationId", "")
+            device.put("isClaimed", false)
+        }
+        return devices.toString()
+    }
+
+    suspend fun restoreLinkedDevicesBackupJson(rawJson: String) {
+        val devices = JSONArray(rawJson)
+        for (index in 0 until devices.length()) {
+            val device = devices.optJSONObject(index)
+                ?: error("بيانات جهاز مرتبطة غير صالحة في النسخة الاحتياطية")
+            require(device.optString("id").isNotBlank()) { "معرّف جهاز غير صالح في النسخة الاحتياطية" }
+            require(device.optString("deviceName").isNotBlank()) { "اسم جهاز غير صالح في النسخة الاحتياطية" }
+            device.put("sessionToken", UUID.randomUUID().toString())
+            device.put("boundInstallationId", "")
+            device.put("isClaimed", false)
+        }
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LINKED_DEVICES_JSON] = devices.toString()
+            prefs[KEY_SYNC_REVISION] = (prefs[KEY_SYNC_REVISION] ?: 1L) + 1L
+        }
+    }
+
     suspend fun saveLinkedSubDevices(devices: List<LinkedSubDevice>) {
         val arr = JSONArray()
         devices.forEach { d ->
