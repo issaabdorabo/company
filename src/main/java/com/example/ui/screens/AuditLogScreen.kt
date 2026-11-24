@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +26,8 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.OperationAuditLog
 import com.example.ui.viewmodel.InventoryViewModel
@@ -56,7 +64,9 @@ import java.util.Locale
 @Composable
 fun AuditLogScreen(viewModel: InventoryViewModel, isMainDevice: Boolean = true, currentDeviceName: String = "") {
     val allLogs by viewModel.operationAuditLogs.collectAsState()
-    val logs = if (isMainDevice) allLogs else allLogs.filter { it.deviceName == currentDeviceName }
+    val logs = if (isMainDevice) allLogs else allLogs.filter {
+        it.deviceName == currentDeviceName || it.deviceName.endsWith(" • سحابي")
+    }
     var search by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("ALL") }
     val selectedDevices = remember { mutableStateListOf<String>() }
@@ -133,46 +143,108 @@ fun AuditLogScreen(viewModel: InventoryViewModel, isMainDevice: Boolean = true, 
             Card(
                 modifier = Modifier.fillMaxWidth().combinedClickable(
                     onClick = {
-                        if (selectedIds.isNotEmpty()) { if (selected) selectedIds.remove(log.id) else selectedIds.add(log.id) }
-                        else expandedId = if (expanded) null else log.id
+                        if (selectedIds.isNotEmpty()) {
+                            if (selected) selectedIds.remove(log.id) else selectedIds.add(log.id)
+                        } else {
+                            expandedId = if (expanded) null else log.id
+                        }
                     },
-                    onLongClick = { if (selected) selectedIds.remove(log.id) else selectedIds.add(log.id) }
+                    onLongClick = {
+                        if (selected) selectedIds.remove(log.id) else selectedIds.add(log.id)
+                    }
                 ),
-                shape = RoundedCornerShape(14.dp),
-                border = if (selected) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
-                colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surface)
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    if (selected) 2.dp else 1.dp,
+                    if (selected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
+                ),
+                elevation = CardDefaults.cardElevation(
+                    defaultElevation = if (expanded) 4.dp else 2.dp,
+                    pressedElevation = 5.dp
+                ),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    else MaterialTheme.colorScheme.surface
+                )
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         androidx.compose.material3.Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(11.dp),
                             color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.size(42.dp)
+                            modifier = Modifier.size(38.dp)
                         ) {
                             androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.FilterAlt, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                                Icon(
+                                    Icons.Default.FilterAlt,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             }
                         }
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(log.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                            Text(dateTimeFormat.format(Date(log.timestamp)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(
+                                log.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "${operationTypeLabel(log.operationType)} • ${log.deviceName.ifBlank { "جهاز غير محدد" }} • ${dateTimeFormat.format(Date(log.timestamp))}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                        Text(if (selected) "✓" else if (expanded) "−" else "+", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        if (selected) {
+                            Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(
+                                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = if (expanded) "طي التفاصيل" else "عرض التفاصيل",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        androidx.compose.material3.Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
-                            Text(operationTypeLabel(log.operationType), modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.SemiBold)
+                    AnimatedVisibility(
+                        visible = expanded,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            androidx.compose.material3.HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+                            )
+                            Text(
+                                "نفّذها: ${log.actorName.ifBlank { "مستخدم غير محدد" }}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "تفاصيل العملية",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                log.details.ifBlank { "لم يتم حفظ تفاصيل إضافية لهذه العملية." },
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "معرّف العملية: ${log.id}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        androidx.compose.material3.Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                            Text(log.deviceName.ifBlank { "جهاز غير محدد" }, modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    Text("نفّذها: ${log.actorName.ifBlank { "مستخدم غير محدد" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (expanded) {
-                        androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                        Text("تفاصيل العملية", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                        Text(log.details.ifBlank { "لم يتم حفظ تفاصيل إضافية لهذه العملية." }, style = MaterialTheme.typography.bodyMedium)
-                        Text("معرّف العملية: ${log.id}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
