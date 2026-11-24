@@ -23,6 +23,8 @@ import com.example.data.model.WarehouseItemAssociation
 import com.example.data.model.WarehouseParty
 import com.example.data.model.ItemUnitSerialRecord
 import com.example.data.model.OperationAuditLog
+import com.example.data.model.PendingSyncOperation
+import com.example.data.model.AppliedSyncOperation
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -500,4 +502,28 @@ interface OperationAuditLogDao {
 
     @Query("DELETE FROM operation_audit_logs")
     suspend fun clearAll()
+}
+
+@Dao
+interface PendingSyncOperationDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun enqueue(operation: PendingSyncOperation)
+
+    @Query("SELECT * FROM pending_sync_operations ORDER BY createdAt ASC")
+    suspend fun getPending(): List<PendingSyncOperation>
+
+    @Query("UPDATE pending_sync_operations SET attempts = attempts + 1, lastError = :error WHERE operationId = :operationId")
+    suspend fun recordFailure(operationId: String, error: String)
+
+    @Query("DELETE FROM pending_sync_operations WHERE operationId = :operationId")
+    suspend fun remove(operationId: String)
+
+    @Query("SELECT COUNT(*) FROM pending_sync_operations")
+    suspend fun countPending(): Int
+
+    @Query("SELECT EXISTS(SELECT 1 FROM applied_sync_operations WHERE operationId = :operationId)")
+    suspend fun wasApplied(operationId: String): Boolean
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun markApplied(receipt: AppliedSyncOperation)
 }
