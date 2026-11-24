@@ -550,6 +550,35 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             .toMap()
     }
 
+    private suspend fun effectiveCloudWarehouseIds(
+        workspaceId: String,
+        action: DeviceAction?,
+        requestedIds: Set<Long>
+    ): Set<Long> {
+        if (requestedIds.isNotEmpty()) return requestedIds
+        if (action != DeviceAction.ADD_OR_MANAGE_CATALOG && action != DeviceAction.EDIT_CATALOG_ITEMS) {
+            return requestedIds
+        }
+        val userId = cloudCollaborationRepo.currentUserIdOrNull()
+            ?: error("يجب تسجيل الدخول إلى حساب Google")
+        val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
+        if (workspace.ownerUserId == userId) return emptySet()
+
+        val requiredPermission = if (action == DeviceAction.EDIT_CATALOG_ITEMS) {
+            "canEditCatalogItems"
+        } else {
+            "canAddItems"
+        }
+        val remoteWarehouses = cloudCollaborationRepo.listWarehouses(workspaceId)
+        return remoteWarehouses.mapNotNull { warehouse ->
+            val hasGrant = cloudCollaborationRepo.listWarehouseMemberships(warehouse.id)
+                .any { grant ->
+                    grant.userId == userId && grant.permissions[requiredPermission]?.toString() == "true"
+                }
+            if (hasGrant) warehouse.localId else null
+        }.toSet()
+    }
+
     private suspend fun validateCloudWarehousePermission(
         action: DeviceAction,
         localWarehouseIds: Set<Long>
@@ -558,8 +587,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         if (workspaceId.isBlank()) return
         val deviceId = preferences.cloudDeviceIdFlow.first()
         if (deviceId.isBlank()) error("لم يتم تسجيل هذا الجهاز في مساحة العمل السحابية بعد")
+        val effectiveIds = effectiveCloudWarehouseIds(workspaceId, action, localWarehouseIds)
+        if ((action == DeviceAction.ADD_OR_MANAGE_CATALOG || action == DeviceAction.EDIT_CATALOG_ITEMS) &&
+            !isMainDevice.value && effectiveIds.isEmpty()
+        ) {
+            error("لم تُمنح لهذا الحساب صلاحية إضافة أو تعديل دليل الأصناف في أي مخزن")
+        }
         val cloudWarehouseMap = resolveCloudWarehouseMap(workspaceId)
-        val cloudWarehouseIds = localWarehouseIds.map { localId ->
+        val cloudWarehouseIds = effectiveIds.map { localId ->
             cloudWarehouseMap[localId] ?: error("المخزن المحلي رقم $localId غير مربوط بمساحة العمل السحابية")
         }.toSet()
         cloudCollaborationRepo.checkCloudWarehouseAccess(
@@ -1105,13 +1140,20 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val workspaceId = preferences.cloudWorkspaceIdFlow.first()
             if (workspaceId.isBlank()) return@launch
             try {
+                val effectiveIds = effectiveCloudWarehouseIds(workspaceId, action, warehouseIds)
+                if ((action == DeviceAction.ADD_OR_MANAGE_CATALOG || action == DeviceAction.EDIT_CATALOG_ITEMS) &&
+                    !isMainDevice.value && effectiveIds.isEmpty()
+                ) {
+                    _userMessage.emit("لم تُمنح لهذا الحساب صلاحية تعديل دليل الأصناف في أي مخزن.")
+                    return@launch
+                }
                 val operation = CloudPendingSyncOperation(
                     operationId = UUID.randomUUID().toString(),
                     actionType = action?.name ?: "GENERAL",
                     operationTitle = operationTitle,
                     operationDetails = operationDetails,
                     actorName = userName.value,
-                    warehouseIdsJson = JSONArray(warehouseIds.toList()).toString(),
+                    warehouseIdsJson = JSONArray(effectiveIds.toList()).toString(),
                     entitiesJson = LocalSyncJson.upsertsToJsonArray(repository.exportAllEntitiesForCloud()).toString()
                 )
                 repository.enqueueCloudPendingSyncOperation(operation)
@@ -1177,7 +1219,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 entities = entities,
                 cloudWarehouseIdByLocalId = warehouseMap,
                 targetWarehouseLocalIds = localWarehouseIds,
-                includeGlobalRecords = isOwner
+                includeGlobalRecords = isOwner ||
+                    operation.actionType == DeviceAction.ADD_OR_MANAGE_CATALOG.name ||
+                    operation.actionType == DeviceAction.EDIT_CATALOG_ITEMS.name,
+                includeWarehouseDefinitions = isOwner
             )
 
             val result = runCatching {
