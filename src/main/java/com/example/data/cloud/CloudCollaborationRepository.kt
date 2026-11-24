@@ -270,7 +270,7 @@ class CloudCollaborationRepository {
     }
 
     suspend fun canCreateFirstWorkspace(): Boolean =
-        client.postgrest.rpc("can_create_first_workspace").decodeSingle<Boolean>()
+        client.postgrest.rpc("can_create_first_workspace").decodeAs<Boolean>()
 
     suspend fun createWorkspace(name: String): CloudWorkspace {
         val cleanName = name.trim()
@@ -278,7 +278,7 @@ class CloudCollaborationRepository {
         val workspaceId = client.postgrest.rpc(
             "create_workspace",
             buildJsonObject { put("p_name", JsonPrimitive(cleanName)) }
-        ).decodeSingle<String>()
+        ).decodeAs<String>()
         return getWorkspace(workspaceId)
     }
 
@@ -301,7 +301,7 @@ class CloudCollaborationRepository {
             put("p_device_name", JsonPrimitive(deviceName.trim().ifBlank { "جهاز Android" }))
             put("p_device_fingerprint", JsonPrimitive(stableFingerprint))
         }
-    ).decodeSingle<String>()
+    ).decodeAs<String>()
 
     suspend fun heartbeat(deviceId: String, appState: String = "FOREGROUND") {
         client.postgrest.rpc(
@@ -326,7 +326,7 @@ class CloudCollaborationRepository {
             put("p_name", JsonPrimitive(name))
             put("p_data", data)
         }
-    ).decodeSingle<String>()
+    ).decodeAs<String>()
 
     suspend fun ensureCloudWarehouse(workspaceId: String, warehouse: Warehouse): String =
         ensureCloudWarehouse(
@@ -355,7 +355,7 @@ class CloudCollaborationRepository {
             put("p_device", JsonPrimitive(deviceId))
             put("p_records", records)
         }
-    ).decodeSingle<Int>()
+    ).decodeAs<Int>()
 
     suspend fun pushCloudSnapshot(
         workspaceId: String,
@@ -378,7 +378,7 @@ class CloudCollaborationRepository {
             put("p_details", JsonPrimitive(details))
             put("p_records", records)
         }
-    ).decodeSingle<String>()
+    ).decodeAs<String>()
 
     suspend fun checkCloudWarehouseAccess(
         workspaceId: String,
@@ -393,7 +393,7 @@ class CloudCollaborationRepository {
             put("p_operation_type", JsonPrimitive(operationType))
             put("p_warehouse_ids", buildJsonArray { warehouseIds.forEach { add(JsonPrimitive(it)) } })
         }
-    ).decodeSingle<Boolean>()
+    ).decodeAs<Boolean>()
 
     suspend fun fetchCloudEntitySnapshot(workspaceId: String): List<CloudEntityRecord> =
         fetchCloudEntitySnapshotVersioned(workspaceId).records
@@ -538,7 +538,7 @@ class CloudCollaborationRepository {
                 put("p_role", JsonPrimitive(role))
                 put("p_display_name", JsonPrimitive(displayName.trim()))
             }
-        ).decodeSingle<String>()
+        ).decodeAs<String>()
     }
 
     suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> =
@@ -591,7 +591,7 @@ class CloudCollaborationRepository {
                 put("p_workspace", JsonPrimitive(workspaceId))
                 put("p_other_user", JsonPrimitive(otherUserId))
             }
-        ).decodeSingle<String>()
+        ).decodeAs<String>()
 
     suspend fun createWarehouseConversation(
         workspaceId: String,
@@ -604,7 +604,7 @@ class CloudCollaborationRepository {
             put("p_warehouse", JsonPrimitive(warehouseId))
             put("p_title", JsonPrimitive(title))
         }
-    ).decodeSingle<String>()
+    ).decodeAs<String>()
 
     suspend fun listMessages(conversationId: String): List<CloudMessage> =
         client.postgrest["messages"].select {
