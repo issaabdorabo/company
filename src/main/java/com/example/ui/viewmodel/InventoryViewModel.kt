@@ -577,7 +577,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             DeviceAction.EDIT_OR_DELETE -> perms.canEditDelete
             // Inventory and serial edits without an explicit warehouse are allowed only for
             // legacy configurations; current UI always supplies the affected warehouse IDs.
-            DeviceAction.EDIT_INVENTORY, DeviceAction.EDIT_SERIALS, DeviceAction.ADJUST_STOCK -> legacyGlobalGrant && perms.canEditInventory
+            DeviceAction.EDIT_INVENTORY, DeviceAction.EDIT_SERIALS -> legacyGlobalGrant && perms.canEditInventory
+            DeviceAction.ADJUST_STOCK -> false
             DeviceAction.DELETE_ITEM -> perms.canDeleteItem
             DeviceAction.EDIT_ISSUE_VOUCHER -> perms.canEditIssueVoucher
             DeviceAction.DELETE_ISSUE_VOUCHER -> perms.canDeleteIssueVoucher
