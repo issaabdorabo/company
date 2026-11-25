@@ -434,10 +434,10 @@ fun CloudCollaborationScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    val member = members.firstOrNull { it.userId == selectedMemberId }
-                    if (member != null) {
+                    val selectedMemberForGlobal = members.firstOrNull { it.userId == selectedMemberId }
+                    if (selectedMemberForGlobal != null) {
                         val memberAccess = warehouses.mapNotNull { warehouse ->
-                            warehouseMemberships[warehouse.id].orEmpty().firstOrNull { it.userId == member.userId }
+                            warehouseMemberships[warehouse.id].orEmpty().firstOrNull { it.userId == selectedMemberForGlobal.userId }
                         }
                         val generalPermissions = listOf(
                             "canAddItems" to "إضافة أصناف إلى الدليل",
