@@ -85,7 +85,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
     private var messagesRealtimeJob: Job? = null
 
     fun refresh() {
+        if (_isBusy.value) return
         viewModelScope.launch {
+            if (_isBusy.value) return@launch
             _isBusy.value = true
             _error.value = null
             try {
@@ -500,6 +502,8 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
     }
 
     private suspend fun runCloudAction(prefix: String, action: suspend () -> Unit) {
+        // Ignore rapid repeated taps while a previous network request is still active.
+        if (_isBusy.value) return
         _isBusy.value = true
         _error.value = null
         try {
