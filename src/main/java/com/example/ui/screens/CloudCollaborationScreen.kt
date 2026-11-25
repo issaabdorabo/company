@@ -463,7 +463,7 @@ fun CloudCollaborationScreen(
                         val generalPermissions = listOf(
                             "canAddItems" to "إضافة أصناف إلى الدليل",
                             "canEditCatalogItems" to "تعديل بيانات الأصناف في الدليل",
-                            "canEditInventory" to "تعديل بيانات المخزون",
+                            "canEdit" to "تعديل البيانات العامة",
                             "canDeleteItem" to "حذف صنف من الدليل",
                             "canEditIssueVoucher" to "تعديل أوامر الصرف",
                             "canDeleteIssueVoucher" to "حذف أوامر الصرف",
@@ -510,32 +510,45 @@ fun CloudCollaborationScreen(
                         warehouses.forEach { warehouse ->
                             val access = warehouseMemberships[warehouse.id].orEmpty()
                                 .firstOrNull { it.userId == member.userId }
-                            val granted = buildList {
-                                if (access.permission("canView")) add("عرض المخزن")
-                                if (access.permission("canInward")) add("التوريد")
-                                if (access.permission("canDisburse")) add("الصرف")
-                                if (access.permission("canTransfer")) add("التحويل")
-                                if (access.permission("canAdjust")) add("التسوية")
-                                if (access.permission("canReports")) add("التقارير")
-                                if (access.permission("canEdit")) add("التعديل العام")
-                                if (access.permission("canEditInventory")) add("تعديل المخزون")
-                                if (access.permission("canDeleteItem")) add("حذف الأصناف")
-                            }
+                            val warehousePermissions = listOf(
+                                "canView" to "عرض المخزن",
+                                "canInward" to "التوريد",
+                                "canDisburse" to "الصرف",
+                                "canTransfer" to "التحويل المخزني",
+                                "canAdjust" to "تعديل الأرصدة والتسويات",
+                                "canReports" to "تقارير المخزن",
+                                "canEdit" to "التعديلات العامة داخل المخزن",
+                                "canEditInventory" to "تعديل بيانات المخزون والأصناف",
+                                "canDeleteItem" to "حذف الأصناف المرتبطة بالمخزن"
+                            )
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Column(
                                     Modifier.padding(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
                                     Text(warehouse.name, fontWeight = FontWeight.Bold)
-                                    Text(
-                                        when {
-                                            access == null -> "لم تتم مزامنة صلاحيات هذا الجهاز بعد."
-                                            granted.isEmpty() -> "لا توجد صلاحيات ممنوحة لهذا المخزن."
-                                            else -> granted.joinToString(" • ")
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    if (access == null) {
+                                        Text(
+                                            "لم تتم مزامنة صلاحيات هذا الجهاز بعد.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                    warehousePermissions.forEach { (key, label) ->
+                                        val granted = access.permission(key)
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(label, style = MaterialTheme.typography.bodySmall)
+                                            Text(
+                                                if (granted) "ممنوحة" else "غير ممنوحة",
+                                                color = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                                style = MaterialTheme.typography.labelSmall
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
