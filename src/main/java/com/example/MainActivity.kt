@@ -175,6 +175,7 @@ fun MainApp(
     val operationAuditLogs by viewModel.operationAuditLogs.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val currentDeviceName by viewModel.deviceName.collectAsState()
+    val isOperationRunning by viewModel.isOperationRunning.collectAsState()
 
     var hasAskedNotificationPermission by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -323,6 +324,9 @@ fun MainApp(
                                 containerColor = MaterialTheme.colorScheme.surface
                             )
                         )
+                        if (isOperationRunning) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
 
                         // Role & LAN Link Status Strip (Click opens Settings -> MultiDevice Control)
                         Row(
