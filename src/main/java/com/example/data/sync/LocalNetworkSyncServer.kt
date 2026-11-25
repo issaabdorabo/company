@@ -710,7 +710,7 @@ class LocalNetworkSyncServer(
                 requestedWarehouseIds.all { warehouseId ->
                     val grant = slot.warehousePermissions.firstOrNull { it.warehouseId == warehouseId }
                     if (grant == null) {
-                        legacyGlobalGrant && when (actionType) {
+                        globalWarehouseGrant && when (actionType) {
                             "INWARD" -> slot.canInward
                             "DISBURSEMENT", "DISBURSE_OR_TRANSFER" -> slot.canDisburse
                             "TRANSFER" -> false
