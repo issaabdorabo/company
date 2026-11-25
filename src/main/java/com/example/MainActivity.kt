@@ -50,7 +50,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -326,7 +325,7 @@ fun MainApp(
                             )
                         )
                         if (isOperationRunning) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(MaterialTheme.colorScheme.primary))
                         }
 
                         // Role & LAN Link Status Strip (Click opens Settings -> MultiDevice Control)
