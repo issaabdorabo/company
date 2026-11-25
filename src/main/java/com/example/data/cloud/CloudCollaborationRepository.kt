@@ -88,6 +88,14 @@ data class CloudDevice(
 )
 
 @Serializable
+data class ConversationPeerDetails(
+    @SerialName("user_id") val userId: String,
+    @SerialName("display_name") val displayName: String = "",
+    val email: String = "",
+    @SerialName("device_name") val deviceName: String = ""
+)
+
+@Serializable
 data class CloudConversation(
     val id: String,
     @SerialName("workspace_id") val workspaceId: String,
@@ -599,37 +607,31 @@ class CloudCollaborationRepository {
             filter { eq("workspace_id", workspaceId) }
         }.decodeList<CloudConversation>().sortedByDescending { it.createdAt }
 
-        val membersById = listWorkspaceMembers(workspaceId).associateBy { it.userId }
         val directIds = visible.filter { it.conversationType == "DIRECT" }.map { it.id }
         val participantsByConversation = directIds.associateWith { id ->
             client.postgrest["conversation_participants"].select {
                 filter { eq("conversation_id", id) }
             }.decodeList<ConversationParticipant>().map { it.userId }.toSet()
         }
-        val devicesByUser = runCatching {
-            client.postgrest["devices"].select {
-                filter {
-                    eq("workspace_id", workspaceId)
-                    eq("is_revoked", false)
-                }
-            }.decodeList<CloudDevice>().groupBy { it.userId }
-        }.getOrDefault(emptyMap())
+        // The peer details RPC checks that the caller is a participant, then returns only
+        // the other participant's public chat identity and current device name.
+        val peersByConversation = directIds.associateWith { id ->
+            runCatching {
+                client.postgrest.rpc(
+                    "get_conversation_peer_details",
+                    buildJsonObject { put("p_conversation", JsonPrimitive(id)) }
+                ).decodeList<ConversationPeerDetails>().firstOrNull()
+            }.getOrNull()
+        }
         val enrichedVisible = visible.map { conversation ->
             if (conversation.conversationType != "DIRECT") return@map conversation
-            val otherUserId = participantsByConversation[conversation.id].orEmpty()
-                .firstOrNull { it != currentUserId }
-            val member = otherUserId?.let(membersById::get)
-            val latestDevice = otherUserId?.let { userId ->
-                devicesByUser[userId].orEmpty().maxByOrNull { it.lastSeenAt.orEmpty() }
-            }
+            val peer = peersByConversation[conversation.id]
+            val peerName = peer?.displayName?.takeIf { it.isNotBlank() }
+                ?: peer?.email.orEmpty()
             conversation.copy(
-                title = conversation.title.ifBlank {
-                    member?.displayName?.takeIf { it.isNotBlank() }
-                        ?: member?.email.orEmpty()
-                },
-                participantDisplayName = member?.displayName?.takeIf { it.isNotBlank() }
-                    ?: member?.email.orEmpty(),
-                participantDeviceName = latestDevice?.deviceName.orEmpty()
+                title = conversation.title.ifBlank { peerName },
+                participantDisplayName = peerName,
+                participantDeviceName = peer?.deviceName.orEmpty()
             )
         }
 
