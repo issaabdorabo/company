@@ -127,30 +127,46 @@ fun ItemUnitSerialTrackingScreen(
     var statusBlockedMessage by remember { mutableStateOf<String?>(null) }
     var showExportDialog by remember { mutableStateOf(false) }
     var restrictedActionName by remember { mutableStateOf<String?>(null) }
+    var isLoadingSerials by remember { mutableStateOf(true) }
+    var serialLoadError by remember { mutableStateOf<String?>(null) }
 
-    // Load active non-disbursed serial records from DB
+    // Load active non-disbursed serial records without allowing a Room/query failure
+    // inside LaunchedEffect to terminate the entire application process.
     LaunchedEffect(warehouse.id, itemStock.itemId, totalCount) {
-        val existing = viewModel.getSerialsList(warehouse.id, itemStock.itemId)
-        var nextIdx = viewModel.getNextStartUnitIndex(warehouse.id, itemStock.itemId)
+        isLoadingSerials = true
+        serialLoadError = null
+        try {
+            require(totalCount <= 10000) { "كمية الصنف كبيرة جداً لعرض الترقيم دفعة واحدة" }
+            val existing = viewModel.getSerialsList(warehouse.id, itemStock.itemId)
+            var nextIdx = viewModel.getNextStartUnitIndex(warehouse.id, itemStock.itemId)
 
-        val activeRecords = existing.take(totalCount).toMutableList()
-        while (activeRecords.size < totalCount) {
-            activeRecords.add(
-                ItemUnitSerialRecord(
-                    warehouseId = warehouse.id,
-                    itemId = itemStock.itemId,
-                    unitIndex = nextIdx++,
-                    serialNumber = "",
-                    status = "موجود",
-                    notes = ""
+            val activeRecords = existing.take(totalCount).toMutableList()
+            while (activeRecords.size < totalCount) {
+                activeRecords.add(
+                    ItemUnitSerialRecord(
+                        warehouseId = warehouse.id,
+                        itemId = itemStock.itemId,
+                        unitIndex = nextIdx++,
+                        serialNumber = "",
+                        status = "موجود",
+                        notes = ""
+                    )
                 )
-            )
-        }
+            }
 
-        serialsList.clear()
-        serialsList.addAll(activeRecords)
-        val validUnitIndices = activeRecords.map { it.unitIndex }.toSet()
-        selectedUnitIndices.removeAll { it !in validUnitIndices }
+            serialsList.clear()
+            serialsList.addAll(activeRecords)
+            val validUnitIndices = activeRecords.map { it.unitIndex }.toSet()
+            selectedUnitIndices.removeAll { it !in validUnitIndices }
+        } catch (failure: Exception) {
+            serialLoadError = when {
+                failure.message?.contains("كمية الصنف") == true -> failure.message
+                else -> "تعذر تحميل الأرقام التسلسلية. أعد فتح الشاشة أو تحقق من بيانات الصنف."
+            }
+            Toast.makeText(context, serialLoadError, Toast.LENGTH_LONG).show()
+        } finally {
+            isLoadingSerials = false
+        }
     }
 
     Scaffold(
@@ -214,6 +230,25 @@ fun ItemUnitSerialTrackingScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp)
         ) {
+            if (isLoadingSerials) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("جارٍ تحميل بيانات الترقيم…")
+                }
+            }
+            serialLoadError?.let { message ->
+                Text(
+                    message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                )
+            }
             // Action bar: Disburse Selected, Save, Export & Preview
             Row(
                 modifier = Modifier
