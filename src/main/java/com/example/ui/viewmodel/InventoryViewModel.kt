@@ -588,6 +588,52 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun offlineWarehouseConflict(
+        grants: List<WarehousePermission>,
+        excludingSlotId: String?
+    ): String? {
+        val requested = grants.filter { it.canWorkOffline && it.canView }
+        val devices = linkedSubDevices.value.filter {
+            it.id != excludingSlotId && !it.isKicked && !it.wasUnlinked
+        }
+        val conflict = requested.firstNotNullOfOrNull { grant ->
+            devices.firstOrNull { slot ->
+                slot.warehousePermissions.any { it.warehouseId == grant.warehouseId && it.canWorkOffline && it.canView }
+            }?.let { slot -> grant.warehouseId to slot.deviceName }
+        }
+        return conflict?.let { (warehouseId, deviceName) ->
+            "المخزن رقم $warehouseId مخصص بالفعل للعمل دون اتصال للجهاز ($deviceName). لا يمكن تعيين أكثر من جهاز واحد للمخزن."
+        }
+    }
+
+    private fun hasCachedOfflinePermission(action: DeviceAction, requestedIds: Set<Long>): Boolean {
+        val permissions = devicePermissions.value
+        val candidates = permissions.warehousePermissions.filter { grant ->
+            grant.canView && grant.canWorkOffline &&
+                (requestedIds.isEmpty() || grant.warehouseId in requestedIds)
+        }
+        if (candidates.isEmpty()) return false
+        fun WarehousePermission.allows(): Boolean = when (action) {
+            DeviceAction.INWARD -> canInward
+            DeviceAction.DISBURSEMENT, DeviceAction.DISBURSE_OR_TRANSFER -> canDisburse
+            DeviceAction.TRANSFER -> canTransfer
+            DeviceAction.ADJUST_STOCK -> canAdjust
+            DeviceAction.EDIT_INVENTORY, DeviceAction.EDIT_SERIALS -> canEditInventory
+            DeviceAction.DELETE_ITEM -> canDeleteItem && permissions.canDeleteItem
+            DeviceAction.EDIT_OR_DELETE -> canEdit
+            DeviceAction.VIEW_REPORTS -> canReports
+            DeviceAction.EDIT_ISSUE_VOUCHER -> canEdit && permissions.canEditIssueVoucher
+            DeviceAction.DELETE_ISSUE_VOUCHER -> permissions.canDeleteIssueVoucher
+            DeviceAction.EDIT_SUPPLY_VOUCHER -> canEdit && permissions.canEditSupplyVoucher
+            DeviceAction.DELETE_SUPPLY_VOUCHER -> permissions.canDeleteSupplyVoucher
+            DeviceAction.ADD_OR_MANAGE_CATALOG -> permissions.canAddItems
+            DeviceAction.EDIT_CATALOG_ITEMS -> permissions.canEditCatalogItems
+            DeviceAction.BACKUP_RESTORE -> permissions.canBackup
+        }
+        return if (requestedIds.isEmpty()) candidates.any { it.allows() }
+        else requestedIds.all { id -> candidates.any { it.warehouseId == id && it.allows() } }
+    }
+
     private suspend fun resolveCloudWarehouseMap(workspaceId: String): Map<Long, String> {
         val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
         val currentUserId = cloudCollaborationRepo.currentUserIdOrNull()
@@ -643,6 +689,21 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
         if (workspaceId.isBlank()) return
+        if (!hasValidatedInternetConnection()) {
+            if (devicePermissions.value.isMainDevice) {
+                val canUseUnassignedWarehouseOffline = localWarehouseIds.isNotEmpty() &&
+                    localWarehouseIds.all { linkedSubDevicesForWarehouse(it).isEmpty() }
+                val isOwnerGlobalAction = localWarehouseIds.isEmpty() && action in setOf(
+                    DeviceAction.ADD_OR_MANAGE_CATALOG,
+                    DeviceAction.EDIT_CATALOG_ITEMS,
+                    DeviceAction.BACKUP_RESTORE
+                )
+                if (canUseUnassignedWarehouseOffline || isOwnerGlobalAction) return
+            } else if (isSubConnected.value && hasCachedOfflinePermission(action, localWarehouseIds)) {
+                return
+            }
+            error("لا يمكن تنفيذ هذه العملية دون اتصال؛ هذا المخزن غير مخصص للعمل دون اتصال على هذا الجهاز.")
+        }
         val deviceId = preferences.cloudDeviceIdFlow.first()
         if (deviceId.isBlank()) error("لم يتم تسجيل هذا الجهاز في مساحة العمل السحابية بعد")
         val effectiveIds = effectiveCloudWarehouseIds(workspaceId, action, localWarehouseIds)
@@ -747,6 +808,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (!requireMainDeviceForDeviceManagement()) return@launch
             val cleanName = deviceName.trim().ifBlank { "جهاز فرعي #${linkedSubDevices.value.size + 1}" }
             val currentDevices = preferences.getLinkedSubDevicesSnapshot()
+            val offlineConflict = offlineWarehouseConflict(warehousePermissions, excludingSlotId = null)
+            if (offlineConflict != null) {
+                _userMessage.emit(offlineConflict)
+                return@launch
+            }
             if (currentDevices.any { it.deviceName.trim().equals(cleanName, ignoreCase = true) }) {
                 _userMessage.emit("اسم الجهاز ($cleanName) مستخدم بالفعل. اختر اسماً مختلفاً.")
                 return@launch
@@ -841,6 +907,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx >= 0) {
+                val offlineConflict = offlineWarehouseConflict(warehousePermissions, excludingSlotId = slotId)
+                if (offlineConflict != null) {
+                    _userMessage.emit(offlineConflict)
+                    return@launch
+                }
                 current[idx] = current[idx].copy(
                     canAddItems = canAddItems,
                     canInward = canInward,
