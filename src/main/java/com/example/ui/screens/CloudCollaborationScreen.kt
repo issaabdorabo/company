@@ -728,9 +728,9 @@ private fun ChatConversationPanel(
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    var selectedEmojiCategory by remember { mutableStateOf("الوجوه") }
+    var selectedEmojiCategory by remember(conversation.id) { mutableStateOf("الوجوه") }
     var appearanceIndex by remember { mutableStateOf(0) }
-    var emojiDialogExpanded by remember { mutableStateOf(false) }
+    var emojiDialogExpanded by remember(conversation.id) { mutableStateOf(false) }
     var showChatAppearanceDialog by remember { mutableStateOf(false) }
     var chatBackgroundColor by remember { mutableStateOf(Color(0xFFEFF3F8)) }
     var myBubbleColor by remember { mutableStateOf(Color(0xFFD9FDD3)) }
@@ -751,11 +751,11 @@ private fun ChatConversationPanel(
         myBubbleColor = selected.second.second
         otherBubbleColor = selected.third
     }
-    var selectedMessageId by remember { mutableStateOf<String?>(null) }
-    var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var editingMessageId by remember { mutableStateOf<String?>(null) }
-    var editDraft by remember { mutableStateOf("") }
-    var replyToMessageId by remember { mutableStateOf<String?>(null) }
+    var selectedMessageId by remember(conversation.id) { mutableStateOf<String?>(null) }
+    var selectedMessageIds by remember(conversation.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var editingMessageId by remember(conversation.id) { mutableStateOf<String?>(null) }
+    var editDraft by remember(conversation.id) { mutableStateOf("") }
+    var replyToMessageId by remember(conversation.id) { mutableStateOf<String?>(null) }
     var audioRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
     var recordedAudioFile by remember { mutableStateOf<File?>(null) }
