@@ -1428,7 +1428,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         runCatching {
             val snapshot = cloudCollaborationRepo.fetchCloudEntitySnapshotVersioned(workspaceId)
             val savedSignature = preferences.cloudSnapshotSignatureFlow.first()
-            if (snapshot.records.isNotEmpty() && savedSignature.isNotBlank() &&
+            // A LAN-paired sub-device receives the authoritative database from its main
+            // device. Applying a cloud snapshot here can roll back a newer LAN operation
+            // with an older cloud revision, which caused stock entries to appear then vanish.
+            if (!isSubConnected.value &&
+                snapshot.records.isNotEmpty() &&
+                savedSignature.isNotBlank() &&
                 snapshot.updatedAtSignature != savedSignature
             ) {
                 if (repository.getPendingSyncOperations().isEmpty() &&
