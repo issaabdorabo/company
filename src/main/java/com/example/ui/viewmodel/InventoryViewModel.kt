@@ -1526,6 +1526,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 ) {
                     repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.records).getOrThrow()
                     preferences.saveCloudSnapshotSignature(snapshot.updatedAtSignature)
+                    // The main device must publish cloud-originated changes to LAN sub-devices too.
+                    if (isMainDevice.value) preferences.incrementSyncRevision()
                 } else {
                     _lastSyncError.value = "توجد عمليات محلية معلقة؛ تم تأجيل استبدال البيانات حتى لا تضيع."
                 }
