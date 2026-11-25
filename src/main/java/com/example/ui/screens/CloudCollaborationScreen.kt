@@ -1296,24 +1296,22 @@ private fun ChatConversationPanel(
     }
 
     if (showChatAppearanceDialog) {
-        val presets = listOf(
-            Triple("أخضر واتساب", Color(0xFFE9F5E9), Color(0xFFD9FDD3)) to Color.White,
-            Triple("أزرق هادئ", Color(0xFFEAF2FF), Color(0xFFD5E6FF)) to Color.White,
-            Triple("ليلي", Color(0xFF202B36), Color(0xFF315B4A)) to Color(0xFF344454),
-            Triple("وردي", Color(0xFFFFF0F4), Color(0xFFFFDCE7)) to Color.White
-        )
         AlertDialog(
             onDismissRequest = { showChatAppearanceDialog = false },
             title = { Text("مظهر المحادثة") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    presets.forEach { (preset, receiver) ->
+                    appearancePresets.forEachIndexed { index, preset ->
                         TextButton(onClick = {
-                            chatBackgroundColor = preset.second
-                            myBubbleColor = preset.third
-                            otherBubbleColor = receiver
+                            appearanceIndex = index
+                            chatBackgroundColor = preset.second.first
+                            myBubbleColor = preset.second.second
+                            otherBubbleColor = preset.third
+                            appearancePrefs.edit().putInt(conversation.id, index).apply()
                             showChatAppearanceDialog = false
-                        }) { Text(preset.first) }
+                        }) {
+                            Text(if (appearanceIndex == index) "✓ ${preset.first}" else preset.first)
+                        }
                     }
                 }
             },
