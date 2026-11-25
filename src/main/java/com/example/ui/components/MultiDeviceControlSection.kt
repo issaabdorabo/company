@@ -626,16 +626,49 @@ fun MultiDeviceControlSection(
                             // Use stable Column layout primitives here. FlowRow was compiled
                             // against a newer Foundation ABI than the one packaged in the APK.
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                PermissionBadge("الاطلاع والتقارير", true)
+                                PermissionBadge(
+                                    "الاطلاع على المخازن",
+                                    devicePermissions.canViewAllWarehouses ||
+                                        devicePermissions.warehousePermissions.any { it.canView }
+                                )
                                 PermissionBadge("إضافة أصناف ومخازن", devicePermissions.canAddItems)
-                                PermissionBadge("تسجيل الوارد", devicePermissions.canInward)
-                                PermissionBadge("صرف وتحويل", devicePermissions.canDisburse)
+                                PermissionBadge(
+                                    "تسجيل الوارد",
+                                    devicePermissions.canInward ||
+                                        devicePermissions.warehousePermissions.any { it.canView && it.canInward }
+                                )
+                                PermissionBadge(
+                                    "صرف المخزون",
+                                    devicePermissions.canDisburse ||
+                                        devicePermissions.warehousePermissions.any { it.canView && it.canDisburse }
+                                )
+                                PermissionBadge(
+                                    "التحويل المخزني",
+                                    devicePermissions.warehousePermissions.any { it.canView && it.canTransfer }
+                                )
+                                PermissionBadge(
+                                    "تعديل الأرصدة المخزنية",
+                                    devicePermissions.warehousePermissions.any { it.canView && it.canAdjust }
+                                )
+                                PermissionBadge(
+                                    "تعديل بيانات المخزون",
+                                    devicePermissions.canEditInventory ||
+                                        devicePermissions.warehousePermissions.any { it.canView && it.canEditInventory }
+                                )
                                 PermissionBadge("تعديل الأصناف داخل الدليل", devicePermissions.canEditCatalogItems)
-                                PermissionBadge("حذف الأصناف", devicePermissions.canDeleteItem)
+                                PermissionBadge(
+                                    "حذف الأصناف",
+                                    devicePermissions.canDeleteItem ||
+                                        devicePermissions.warehousePermissions.any { it.canView && it.canDeleteItem }
+                                )
                                 PermissionBadge("تعديل أوامر الصرف", devicePermissions.canEditIssueVoucher)
                                 PermissionBadge("حذف أوامر الصرف", devicePermissions.canDeleteIssueVoucher)
                                 PermissionBadge("تعديل أوامر التوريد", devicePermissions.canEditSupplyVoucher)
                                 PermissionBadge("حذف أوامر التوريد", devicePermissions.canDeleteSupplyVoucher)
+                                PermissionBadge(
+                                    "تقارير المخازن",
+                                    devicePermissions.warehousePermissions.any { it.canView && it.canReports }
+                                )
                             }
                         }
                     }
@@ -1053,9 +1086,6 @@ private fun WarehousePermissionsEditor(
                     PermissionSwitchRow("تخصيص هذا الجهاز للعمل دون اتصال (جهاز واحد فقط لكل مخزن)", current.canWorkOffline) { enabled ->
                         update { it.copy(canWorkOffline = enabled) }
                     }
-                }
-                PermissionSwitchRow("السماح لهذا الجهاز بالعمل دون اتصال (جهاز واحد لكل مخزن)", current.canWorkOffline) { enabled ->
-                    update { it.copy(canWorkOffline = enabled) }
                 }
                 }
             }
