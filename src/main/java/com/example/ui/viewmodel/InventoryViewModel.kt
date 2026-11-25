@@ -116,7 +116,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }
         },
         onExportEntities = { repository.exportAllEntitiesForCloud() },
-        onExportAuditLogs = { device -> repository.getOperationLogsForDevice(device) },
+        onExportAuditLogs = { repository.getAllOperationLogsForSync() },
         onApplyRemoteEntities = { records ->
             // Do not acknowledge a sub-device operation or advance the shared revision
             // until Room has committed the merged snapshot successfully.
@@ -1163,6 +1163,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 preferences.updateSubDevicePermissions(snapshot.permissions)
+                // History is synchronized independently of the inventory revision and deduplicated
+                // by the repository, so late audit writes are not missed.
+                repository.importOperationLogsFromMain(snapshot.auditLogs)
                 val lastApplied = preferences.lastAppliedRevisionFlow.first()
                 if (snapshot.syncVersion != lastApplied) {
                     if (snapshot.entities.isEmpty()) {
