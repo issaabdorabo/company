@@ -1949,8 +1949,10 @@ class InventoryRepository(
         }
     }
 
-    suspend fun getAllOperationLogsForSync(): List<OperationAuditLog> = withContext(Dispatchers.IO) {
-        auditLogDao.getAllList().sortedBy { it.timestamp }
+    suspend fun getOperationLogsForSyncToDevice(deviceName: String): List<OperationAuditLog> = withContext(Dispatchers.IO) {
+        auditLogDao.getAllList()
+            .filterNot { it.deviceName.equals(deviceName, ignoreCase = true) }
+            .sortedBy { it.timestamp }
     }
 
     suspend fun deleteOperationLogs(ids: List<Long>) = withContext(Dispatchers.IO) {
