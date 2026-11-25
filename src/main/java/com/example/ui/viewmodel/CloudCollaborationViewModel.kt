@@ -274,6 +274,17 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         }
     }
 
+    fun hideMessagesForMe(messageIds: List<String>) {
+        val uniqueIds = messageIds.distinct().filter { it.isNotBlank() }
+        if (uniqueIds.isEmpty()) return
+        viewModelScope.launch {
+            runCloudAction("تعذر إخفاء الرسائل المحددة") {
+                uniqueIds.forEach { repository.hideMessageForMe(it) }
+                _messages.value = _messages.value.filterNot { it.id in uniqueIds.toSet() }
+            }
+        }
+    }
+
     fun editMessage(messageId: String, body: String) {
         viewModelScope.launch {
             runCloudAction("تعذر تعديل الرسالة") {
