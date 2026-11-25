@@ -1040,35 +1040,7 @@ private fun ChatConversationPanel(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                        if (mine) {
-                                            Box {
-                                                IconButton(
-                                                    onClick = { messageMenuExpanded = true },
-                                                    modifier = Modifier.size(28.dp)
-                                                ) {
-                                                    Icon(
-                                                        Icons.Default.MoreVert,
-                                                        contentDescription = "خيارات الرسالة",
-                                                        modifier = Modifier.size(17.dp)
-                                                    )
-                                                }
-                                                DropdownMenu(
-                                                    expanded = messageMenuExpanded,
-                                                    onDismissRequest = { messageMenuExpanded = false }
-                                                ) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("حذف الرسالة والمرفق") },
-                                                        leadingIcon = {
-                                                            Icon(Icons.Default.Delete, contentDescription = null)
-                                                        },
-                                                        onClick = {
-                                                            messageMenuExpanded = false
-                                                            pendingDeleteMessageId = message.id
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
+
                                     }
 
                                     message.replyToMessageId?.let { replyId ->
@@ -1076,6 +1048,20 @@ private fun ChatConversationPanel(
                                             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
                                                 Column(Modifier.fillMaxWidth().padding(7.dp)) {
                                                     Text("رد على رسالة", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                                    Text(replied.body, maxLines = 2, style = MaterialTheme.typography.bodySmall)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    message.replyToMessageId?.let { replyId ->
+                                        messages.firstOrNull { it.id == replyId }?.let { replied ->
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                                shape = RoundedCornerShape(8.dp)
+                                            ) {
+                                                Column(Modifier.padding(7.dp)) {
+                                                    Text("رد على رسالة", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                                                     Text(replied.body, maxLines = 2, style = MaterialTheme.typography.bodySmall)
                                                 }
                                             }
