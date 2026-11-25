@@ -186,7 +186,16 @@ fun ItemUnitSerialTrackingScreen(
                             onDenied = { restrictedActionName = "حفظ وتعديل الأرقام المميزة" }
                         ) {
                             coroutineScope.launch {
-                                val saved = viewModel.saveSerialsAndGet(serialsList.toList())
+                                val saved = try {
+                                    viewModel.saveSerialsAndGet(serialsList.toList())
+                                } catch (failure: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        failure.localizedMessage ?: "تعذر حفظ بيانات الترقيم",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    return@launch
+                                }
                                 serialsList.clear()
                                 serialsList.addAll(saved)
                                 Toast.makeText(context, "تم حفظ بيانات الترقيم بنجاح", Toast.LENGTH_SHORT).show()
@@ -221,7 +230,12 @@ fun ItemUnitSerialTrackingScreen(
                             onDenied = { restrictedActionName = "صرف الوحدات المحددة" }
                         ) {
                             coroutineScope.launch {
-                                val persisted = viewModel.saveSerialsAndGet(serialsList.toList())
+                                val persisted = try {
+                                    viewModel.saveSerialsAndGet(serialsList.toList())
+                                } catch (failure: Exception) {
+                                    Toast.makeText(context, failure.localizedMessage ?: "تعذر حفظ بيانات الترقيم", Toast.LENGTH_LONG).show()
+                                    return@launch
+                                }
                                 serialsList.clear()
                                 serialsList.addAll(persisted)
                                 val selectedRecords = persisted.filter { selectedUnitIndices.contains(it.unitIndex) }
@@ -255,7 +269,12 @@ fun ItemUnitSerialTrackingScreen(
                             onDenied = { restrictedActionName = "حفظ وتعديل الأرقام المميزة" }
                         ) {
                             coroutineScope.launch {
-                                val saved = viewModel.saveSerialsAndGet(serialsList.toList())
+                                val saved = try {
+                                    viewModel.saveSerialsAndGet(serialsList.toList())
+                                } catch (failure: Exception) {
+                                    Toast.makeText(context, failure.localizedMessage ?: "تعذر حفظ البيانات", Toast.LENGTH_LONG).show()
+                                    return@launch
+                                }
                                 serialsList.clear()
                                 serialsList.addAll(saved)
                                 Toast.makeText(context, "تم حفظ البيانات بنجاح", Toast.LENGTH_SHORT).show()

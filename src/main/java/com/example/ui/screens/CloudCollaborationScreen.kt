@@ -434,6 +434,38 @@ fun CloudCollaborationScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
+                    val member = members.firstOrNull { it.userId == selectedMemberId }
+                    if (member != null) {
+                        val memberAccess = warehouses.mapNotNull { warehouse ->
+                            warehouseMemberships[warehouse.id].orEmpty().firstOrNull { it.userId == member.userId }
+                        }
+                        val generalPermissions = listOf(
+                            "canAddItems" to "إضافة أصناف إلى الدليل",
+                            "canEditCatalogItems" to "تعديل بيانات الأصناف في الدليل",
+                            "canEdit" to "التعديل العام",
+                            "canDeleteItem" to "حذف صنف من الدليل",
+                            "canEditIssueVoucher" to "تعديل أوامر الصرف",
+                            "canDeleteIssueVoucher" to "حذف أوامر الصرف",
+                            "canEditSupplyVoucher" to "تعديل أوامر التوريد",
+                            "canDeleteSupplyVoucher" to "حذف أوامر التوريد",
+                            "canBackup" to "النسخ الاحتياطي والتصدير"
+                        )
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("الصلاحيات العامة التسع", fontWeight = FontWeight.Bold)
+                                generalPermissions.forEach { (key, label) ->
+                                    val granted = memberAccess.any { it.permission(key) }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(label, style = MaterialTheme.typography.bodySmall)
+                                        Text(if (granted) "ممنوحة" else "غير ممنوحة",
+                                            color = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                            style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (members.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             members.filter { it.role != "OWNER" }.forEach { member ->
@@ -467,13 +499,6 @@ fun CloudCollaborationScreen(
                                 if (access.permission("canEdit")) add("التعديل العام")
                                 if (access.permission("canEditInventory")) add("تعديل المخزون")
                                 if (access.permission("canDeleteItem")) add("حذف الأصناف")
-                                if (access.permission("canEditIssueVoucher")) add("تعديل سند الصرف")
-                                if (access.permission("canDeleteIssueVoucher")) add("حذف سند الصرف")
-                                if (access.permission("canEditSupplyVoucher")) add("تعديل سند التوريد")
-                                if (access.permission("canDeleteSupplyVoucher")) add("حذف سند التوريد")
-                                if (access.permission("canAddItems")) add("إضافة الأصناف")
-                                if (access.permission("canEditCatalogItems")) add("تعديل دليل الأصناف")
-                                if (access.permission("canBackup")) add("النسخ الاحتياطي")
                             }
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Column(
@@ -651,6 +676,7 @@ private fun ChatConversationPanel(
     var audioRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
     var isRecording by remember { mutableStateOf(false) }
+    var showRecordingDialog by remember { mutableStateOf(false) }
 
     fun showLocalError(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
@@ -670,6 +696,7 @@ private fun ChatConversationPanel(
             audioRecorder = recorder
             audioFile = output
             isRecording = true
+            showRecordingDialog = true
         } catch (failure: Exception) {
             runCatching { audioRecorder?.release() }
             audioRecorder = null
@@ -690,6 +717,7 @@ private fun ChatConversationPanel(
             audioRecorder = null
             audioFile = null
             isRecording = false
+            showRecordingDialog = false
             if (output != null && output.exists() && output.length() > 0L) {
                 onSendAttachment(output.name, "audio/mp4", output.readBytes())
             } else {
@@ -701,6 +729,7 @@ private fun ChatConversationPanel(
             audioFile?.delete()
             audioFile = null
             isRecording = false
+            showRecordingDialog = false
             showLocalError("تعذر إنهاء التسجيل الصوتي.")
         } finally {
             output?.delete()
@@ -1058,7 +1087,7 @@ private fun ChatConversationPanel(
                 IconButton(
                     onClick = {
                         if (isRecording) {
-                            stopAudioRecordingAndSend()
+                            showRecordingDialog = true
                         } else if (
                             ContextCompat.checkSelfPermission(
                                 context,
@@ -1088,6 +1117,38 @@ private fun ChatConversationPanel(
                 }
             }
         }
+    }
+
+    if (showRecordingDialog && isRecording) {
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("تسجيل رسالة صوتية") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("جارٍ تسجيل الصوت. اضغط إيقاف عند الانتهاء، ثم أكد الإرسال.")
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text("التسجيل جارٍ")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { stopAudioRecordingAndSend() }) { Text("إيقاف وإرسال") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    audioRecorder?.let { recorder ->
+                        runCatching { recorder.stop() }
+                        runCatching { recorder.release() }
+                    }
+                    audioRecorder = null
+                    audioFile?.delete()
+                    audioFile = null
+                    isRecording = false
+                    showRecordingDialog = false
+                }) { Text("إلغاء التسجيل") }
+            }
+        )
     }
 
     if (emojiDialogExpanded) {
