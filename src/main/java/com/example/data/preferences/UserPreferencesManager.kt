@@ -592,6 +592,7 @@ class UserPreferencesManager(private val context: Context) {
                                 put("canEdit", grant.canEdit)
                                 put("canEditInventory", grant.canEditInventory)
                                 put("canDeleteItem", grant.canDeleteItem)
+                 put("canWorkOffline", grant.canWorkOffline)
                             })
                         }
                     })
