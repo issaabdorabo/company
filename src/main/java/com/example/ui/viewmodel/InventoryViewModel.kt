@@ -1715,13 +1715,20 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveWarehouse(warehouse: Warehouse, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             if (warehouse.id == 0L) {
-                repository.insertWarehouse(warehouse)
-                _userMessage.emit("تمت إضافة المخزن بنجاح")
-                notifyAndPropagate(
+                runAuthorizedAction(
                     action = DeviceAction.ADD_OR_MANAGE_CATALOG,
-                    notificationTitle = "إضافة مخزن جديد",
-                    notificationDetails = "تم إضافة المخزن (${warehouse.name}) — أمين المخزن: ${warehouse.managerName}"
-                )
+                    deniedMessage = "لا تملك صلاحية إضافة مخزن جديد"
+                ) {
+                    repository.insertWarehouse(warehouse)
+                    _userMessage.emit("تمت إضافة المخزن بنجاح")
+                    notifyAndPropagate(
+                        action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                        notificationTitle = "إضافة مخزن جديد",
+                        notificationDetails = "تم إضافة المخزن (${warehouse.name}) — أمين المخزن: ${warehouse.managerName}"
+                    )
+                    onDone()
+                }
+                return@launch
             } else {
                 runAuthorizedAction(
                     action = DeviceAction.EDIT_OR_DELETE,
