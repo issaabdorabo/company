@@ -243,11 +243,11 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         _messages.value = emptyList()
     }
 
-    fun sendMessage(body: String) {
+    fun sendMessage(body: String, replyToMessageId: String? = null) {
         viewModelScope.launch {
             val conversation = _selectedConversation.value ?: return@launch
             runCloudAction("تعذر إرسال الرسالة") {
-                val sent = repository.sendMessage(conversation.id, body)
+                val sent = repository.sendMessage(conversation.id, body, replyToMessageId)
                 _messages.value = (_messages.value.filterNot { it.id == sent.id } + sent)
                     .sortedBy { it.createdAt }
             }
@@ -265,9 +265,27 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         }
     }
 
+    fun hideMessageForMe(messageId: String) {
+        viewModelScope.launch {
+            runCloudAction("تعذر إخفاء الرسالة") {
+                repository.hideMessageForMe(messageId)
+                _messages.value = _messages.value.filterNot { it.id == messageId }
+            }
+        }
+    }
+
+    fun editMessage(messageId: String, body: String) {
+        viewModelScope.launch {
+            runCloudAction("تعذر تعديل الرسالة") {
+                val updated = repository.editMessage(messageId, body)
+                _messages.value = _messages.value.map { if (it.id == updated.id) updated else it }
+            }
+        }
+    }
+
     fun deleteMessage(messageId: String) {
         viewModelScope.launch {
-            runCloudAction("تعذر حذف الرسالة") {
+            runCloudAction("تعذر حذف الرسالة نهائياً") {
                 repository.deleteMessage(messageId)
                 _messages.value = _messages.value.filterNot { it.id == messageId }
             }
