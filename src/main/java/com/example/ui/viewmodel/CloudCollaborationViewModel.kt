@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -394,13 +395,38 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         _registeredUsers.value = if (_activeWorkspace.value?.ownerUserId == repository.currentUserIdOrNull()) {
             repository.listRegisteredWorkspaceUsers(workspaceId)
         } else emptyList()
-        _warehouses.value = repository.listWarehouses(workspaceId)
-        val membershipMap = LinkedHashMap<String, List<CloudWarehouseMembership>>()
-        _warehouses.value.forEach { warehouse ->
-            membershipMap[warehouse.id] = repository.listWarehouseMemberships(warehouse.id)
+        val allWarehouses = repository.listWarehouses(workspaceId)
+        val ownerId = _activeWorkspace.value?.ownerUserId.orEmpty()
+        val currentUserId = repository.currentUserIdOrNull().orEmpty()
+        val membershipsByWarehouse = allWarehouses.associate { warehouse ->
+            warehouse.id to repository.listWarehouseMemberships(warehouse.id)
         }
-        _warehouseMemberships.value = membershipMap
-        _conversations.value = repository.listConversations(workspaceId, _activeWorkspace.value?.ownerUserId.orEmpty())
+        _warehouses.value = if (currentUserId == ownerId) allWarehouses else allWarehouses.filter { warehouse ->
+            membershipsByWarehouse[warehouse.id].orEmpty().any { grant ->
+                grant.userId == currentUserId && grant.permissions["canView"]?.toString() == "true"
+            }
+        }
+        _warehouseMemberships.value = membershipsByWarehouse.filterKeys { id ->
+            _warehouses.value.any { it.id == id }
+        }
+        var visibleConversations = repository.listConversations(workspaceId, ownerId)
+        if (currentUserId == ownerId) {
+            _members.value.filter { it.userId != ownerId && it.isActive }.forEach { member ->
+                repository.createDirectConversation(workspaceId, member.userId)
+            }
+            _warehouses.value.forEach { warehouse ->
+                val assignedUsers = membershipsByWarehouse[warehouse.id].orEmpty()
+                    .filter { it.permissions["canView"]?.toString() == "true" }
+                val hasGroup = visibleConversations.any {
+                    it.conversationType == "WAREHOUSE_GROUP" && it.warehouseId == warehouse.id
+                }
+                if (assignedUsers.size > 1 && !hasGroup) {
+                    repository.createWarehouseConversation(workspaceId, warehouse.id, "مجموعة " + warehouse.name)
+                }
+            }
+            visibleConversations = repository.listConversations(workspaceId, ownerId)
+        }
+        _conversations.value = visibleConversations
     }
 
     private suspend fun ensureCloudDeviceRegistered(workspace: CloudWorkspace, force: Boolean = false) {

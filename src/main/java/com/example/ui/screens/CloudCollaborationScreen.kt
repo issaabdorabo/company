@@ -675,6 +675,7 @@ private fun ChatConversationPanel(
     var pendingDeleteMessageId by remember { mutableStateOf<String?>(null) }
     var audioRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
+    var recordedAudioFile by remember { mutableStateOf<File?>(null) }
     var isRecording by remember { mutableStateOf(false) }
     var showRecordingDialog by remember { mutableStateOf(false) }
 
@@ -708,7 +709,7 @@ private fun ChatConversationPanel(
         }
     }
 
-    fun stopAudioRecordingAndSend() {
+    fun stopAudioRecording() {
         val recorder = audioRecorder ?: return
         val output = audioFile
         try {
@@ -717,10 +718,10 @@ private fun ChatConversationPanel(
             audioRecorder = null
             audioFile = null
             isRecording = false
-            showRecordingDialog = false
-            if (output != null && output.exists() && output.length() > 0L) {
-                onSendAttachment(output.name, "audio/mp4", output.readBytes())
-            } else {
+            if (output != null && output.exists() && output.length() > 0L) recordedAudioFile = output
+            else {
+                output?.delete()
+                showRecordingDialog = false
                 showLocalError("لم يتم تسجيل صوت صالح للإرسال.")
             }
         } catch (failure: Exception) {
@@ -728,12 +729,34 @@ private fun ChatConversationPanel(
             audioRecorder = null
             audioFile?.delete()
             audioFile = null
+            recordedAudioFile = null
             isRecording = false
             showRecordingDialog = false
             showLocalError("تعذر إنهاء التسجيل الصوتي.")
-        } finally {
-            output?.delete()
         }
+    }
+
+    fun sendRecordedAudio() {
+        val output = recordedAudioFile ?: return
+        if (output.exists() && output.length() > 0L) onSendAttachment(output.name, "audio/mp4", output.readBytes())
+        else showLocalError("ملف التسجيل غير صالح.")
+        output.delete()
+        recordedAudioFile = null
+        showRecordingDialog = false
+    }
+
+    fun cancelAudioRecording() {
+        audioRecorder?.let { recorder ->
+            runCatching { recorder.stop() }
+            runCatching { recorder.release() }
+        }
+        audioRecorder = null
+        audioFile?.delete()
+        audioFile = null
+        recordedAudioFile?.delete()
+        recordedAudioFile = null
+        isRecording = false
+        showRecordingDialog = false
     }
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
@@ -827,6 +850,7 @@ private fun ChatConversationPanel(
                 runCatching { recorder.release() }
             }
             audioFile?.delete()
+            recordedAudioFile?.delete()
         }
     }
 
@@ -1122,31 +1146,25 @@ private fun ChatConversationPanel(
     if (showRecordingDialog && isRecording) {
         AlertDialog(
             onDismissRequest = { },
-            title = { Text("تسجيل رسالة صوتية") },
+            title = { Text(if (isRecording) "تسجيل رسالة صوتية" else "إرسال التسجيل الصوتي") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("جارٍ تسجيل الصوت. اضغط إيقاف عند الانتهاء، ثم أكد الإرسال.")
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text("التسجيل جارٍ")
-                    }
+                    if (isRecording) {
+                        Text("جارٍ تسجيل الصوت. اضغط إيقاف عند الانتهاء.")
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Text("التسجيل جارٍ")
+                        }
+                    } else Text("تم إيقاف التسجيل. هل تريد إرسال الرسالة الصوتية؟")
                 }
             },
             confirmButton = {
-                TextButton(onClick = { stopAudioRecordingAndSend() }) { Text("إيقاف وإرسال") }
+                TextButton(onClick = { if (isRecording) stopAudioRecording() else sendRecordedAudio() }) {
+                    Text(if (isRecording) "إيقاف التسجيل" else "تأكيد الإرسال")
+                }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    audioRecorder?.let { recorder ->
-                        runCatching { recorder.stop() }
-                        runCatching { recorder.release() }
-                    }
-                    audioRecorder = null
-                    audioFile?.delete()
-                    audioFile = null
-                    isRecording = false
-                    showRecordingDialog = false
-                }) { Text("إلغاء التسجيل") }
+                TextButton(onClick = { cancelAudioRecording() }) { Text("إلغاء") }
             }
         )
     }
