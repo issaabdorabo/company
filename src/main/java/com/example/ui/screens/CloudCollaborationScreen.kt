@@ -1217,42 +1217,23 @@ private fun ChatConversationPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Box {
-                    IconButton(
-                        onClick = { attachmentMenuExpanded = true },
-                        enabled = enabled && !isRecording
-                    ) {
-                        Icon(Icons.Default.AttachFile, contentDescription = "إرفاق صورة أو PDF")
-                    }
-                    DropdownMenu(
-                        expanded = attachmentMenuExpanded,
-                        onDismissRequest = { attachmentMenuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("اختيار صورة") },
-                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-                            onClick = {
-                                attachmentMenuExpanded = false
-                                imageLauncher.launch("image/*")
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("اختيار ملف PDF") },
-                            leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
-                            onClick = {
-                                attachmentMenuExpanded = false
-                                documentLauncher.launch(arrayOf("application/pdf"))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("التقاط صورة بالكاميرا") },
-                            leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null) },
-                            onClick = {
-                                attachmentMenuExpanded = false
-                                cameraLauncher.launch(null)
-                            }
-                        )
-                    }
+                IconButton(
+                    onClick = { imageLauncher.launch("image/*") },
+                    enabled = enabled && !isRecording
+                ) {
+                    Icon(Icons.Default.Image, contentDescription = "اختيار صورة")
+                }
+                IconButton(
+                    onClick = { documentLauncher.launch(arrayOf("application/pdf")) },
+                    enabled = enabled && !isRecording
+                ) {
+                    Icon(Icons.Default.AttachFile, contentDescription = "اختيار ملف PDF")
+                }
+                IconButton(
+                    onClick = { cameraLauncher.launch(null) },
+                    enabled = enabled && !isRecording
+                ) {
+                    Icon(Icons.Default.CameraAlt, contentDescription = "التقاط صورة")
                 }
 
                 TextField(
