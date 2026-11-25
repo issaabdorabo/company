@@ -758,12 +758,23 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val cloudWarehouseIds = effectiveIds.map { localId ->
             cloudWarehouseMap[localId] ?: error("المخزن المحلي رقم $localId غير مربوط بمساحة العمل السحابية")
         }.toSet()
-        val allowed = cloudCollaborationRepo.checkCloudWarehouseAccess(
-            workspaceId = workspaceId,
-            deviceId = deviceId,
-            operationType = action.name,
-            warehouseIds = cloudWarehouseIds
-        )
+        val allowed = try {
+            cloudCollaborationRepo.checkCloudWarehouseAccess(
+                workspaceId = workspaceId,
+                deviceId = deviceId,
+                operationType = action.name,
+                warehouseIds = cloudWarehouseIds
+            )
+        } catch (exception: Exception) {
+            val detail = exception.localizedMessage.orEmpty()
+            when {
+                detail.contains("WAREHOUSE_LOCKED_BY_ASSIGNED_USER", ignoreCase = true) ->
+                    throw IllegalStateException("هذا المخزن مخصص لجهاز فرعي محدد للعمل دون اتصال، ولا يمكن للأجهزة الأخرى تنفيذ عمليات عليه حتى إلغاء التخصيص.", exception)
+                detail.contains("WAREHOUSE_ACCESS_DENIED", ignoreCase = true) ->
+                    throw IllegalStateException("لا تملك الصلاحية المطلوبة لتنفيذ هذه العملية في المخزن المحدد.", exception)
+                else -> throw exception
+            }
+        }
         if (!allowed) error("CLOUD_PERMISSION_DENIED")
     }
 
