@@ -95,7 +95,9 @@ data class CloudConversation(
     val title: String = "",
     @SerialName("warehouse_id") val warehouseId: String? = null,
     @SerialName("created_by") val createdBy: String,
-    @SerialName("created_at") val createdAt: String
+    @SerialName("created_at") val createdAt: String,
+    val participantDisplayName: String = "",
+    val participantDeviceName: String = ""
 )
 
 @Serializable
@@ -597,6 +599,40 @@ class CloudCollaborationRepository {
             filter { eq("workspace_id", workspaceId) }
         }.decodeList<CloudConversation>().sortedByDescending { it.createdAt }
 
+        val membersById = listWorkspaceMembers(workspaceId).associateBy { it.userId }
+        val directIds = visible.filter { it.conversationType == "DIRECT" }.map { it.id }
+        val participantsByConversation = directIds.associateWith { id ->
+            client.postgrest["conversation_participants"].select {
+                filter { eq("conversation_id", id) }
+            }.decodeList<ConversationParticipant>().map { it.userId }.toSet()
+        }
+        val devicesByUser = runCatching {
+            client.postgrest["devices"].select {
+                filter {
+                    eq("workspace_id", workspaceId)
+                    eq("is_revoked", false)
+                }
+            }.decodeList<CloudDevice>().groupBy { it.userId }
+        }.getOrDefault(emptyMap())
+        val enrichedVisible = visible.map { conversation ->
+            if (conversation.conversationType != "DIRECT") return@map conversation
+            val otherUserId = participantsByConversation[conversation.id].orEmpty()
+                .firstOrNull { it != currentUserId }
+            val member = otherUserId?.let(membersById::get)
+            val latestDevice = otherUserId?.let { userId ->
+                devicesByUser[userId].orEmpty().maxByOrNull { it.lastSeenAt.orEmpty() }
+            }
+            conversation.copy(
+                title = conversation.title.ifBlank {
+                    member?.displayName?.takeIf { it.isNotBlank() }
+                        ?: member?.email.orEmpty()
+                },
+                participantDisplayName = member?.displayName?.takeIf { it.isNotBlank() }
+                    ?: member?.email.orEmpty(),
+                participantDeviceName = latestDevice?.deviceName.orEmpty()
+            )
+        }
+
         val allWarehouses = listWarehouses(workspaceId)
         val grantsByWarehouse = allWarehouses.associate { warehouse ->
             warehouse.id to listWarehouseMemberships(warehouse.id)
@@ -604,7 +640,7 @@ class CloudCollaborationRepository {
         }
         val multiUserWarehouseIds = grantsByWarehouse.filterValues { it.size > 1 }.keys
         if (currentUserId == ownerUserId) {
-            return visible.filter { conversation ->
+            return enrichedVisible.filter { conversation ->
                 conversation.conversationType != "WAREHOUSE_GROUP" ||
                     conversation.warehouseId in multiUserWarehouseIds
             }
@@ -613,15 +649,9 @@ class CloudCollaborationRepository {
         val assignedWarehouseIds = multiUserWarehouseIds.filter { warehouseId ->
             grantsByWarehouse[warehouseId].orEmpty().any { it.userId == currentUserId }
         }.toSet()
-        val directIds = visible.filter { it.conversationType == "DIRECT" }.map { it.id }
-        val participants = directIds.associateWith { id ->
-            client.postgrest["conversation_participants"].select {
-                filter { eq("conversation_id", id) }
-            }.decodeList<ConversationParticipant>().map { it.userId }.toSet()
-        }
-        return visible.filter { conversation ->
+        return enrichedVisible.filter { conversation ->
             when (conversation.conversationType) {
-                "DIRECT" -> participants[conversation.id].orEmpty().contains(ownerUserId)
+                "DIRECT" -> participantsByConversation[conversation.id].orEmpty().contains(ownerUserId)
                 "WAREHOUSE_GROUP" -> conversation.warehouseId in assignedWarehouseIds
                 else -> false
             }
