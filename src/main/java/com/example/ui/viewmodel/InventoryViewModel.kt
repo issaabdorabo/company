@@ -72,7 +72,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as InventoryApp
@@ -82,7 +82,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudCollaborationRepo = CloudCollaborationRepository()
     private val notificationManager = AppNotificationManager(application)
 
-    private val activeAuthorizedActions = AtomicInteger(0)
+    private val authorizedActionRunning = AtomicBoolean(false)
     private val _isOperationRunning = MutableStateFlow(false)
     val isOperationRunning: StateFlow<Boolean> = _isOperationRunning.asStateFlow()
 
@@ -566,7 +566,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             onDenied = { viewModelScope.launch { _userMessage.emit(deniedMessage) } }
         ) {
             viewModelScope.launch {
-                if (activeAuthorizedActions.incrementAndGet() == 1) _isOperationRunning.value = true
+                if (!authorizedActionRunning.compareAndSet(false, true)) {
+                    _userMessage.emit("هناك عملية قيد التنفيذ؛ انتظر اكتمالها قبل تكرار الضغط.")
+                    return@launch
+                }
+                _isOperationRunning.value = true
                 try {
                     validateCloudWarehousePermission(action, warehouseIds)
                     operation()
@@ -576,10 +580,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     val detail = error.localizedMessage ?: error.javaClass.simpleName
                     _userMessage.emit("تعذر تنفيذ العملية: $detail")
                 } finally {
-                    if (activeAuthorizedActions.decrementAndGet() <= 0) {
-                        activeAuthorizedActions.set(0)
-                        _isOperationRunning.value = false
-                    }
+                    _isOperationRunning.value = false
+                    authorizedActionRunning.set(false)
                 }
             }
         }
