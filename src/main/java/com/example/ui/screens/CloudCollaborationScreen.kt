@@ -716,6 +716,7 @@ private fun ChatConversationPanel(
     var audioFile by remember { mutableStateOf<File?>(null) }
     var recordedAudioFile by remember { mutableStateOf<File?>(null) }
     var isRecording by remember { mutableStateOf(false) }
+    var isRecordingPaused by remember { mutableStateOf(false) }
     var showRecordingDialog by remember { mutableStateOf(false) }
 
     fun showLocalError(message: String) {
@@ -736,6 +737,7 @@ private fun ChatConversationPanel(
             audioRecorder = recorder
             audioFile = output
             isRecording = true
+            isRecordingPaused = false
             showRecordingDialog = true
         } catch (failure: Exception) {
             runCatching { audioRecorder?.release() }
@@ -757,6 +759,7 @@ private fun ChatConversationPanel(
             audioRecorder = null
             audioFile = null
             isRecording = false
+            isRecordingPaused = false
             if (output != null && output.exists() && output.length() > 0L) recordedAudioFile = output
             else {
                 output?.delete()
@@ -773,6 +776,14 @@ private fun ChatConversationPanel(
             showRecordingDialog = false
             showLocalError("تعذر إنهاء التسجيل الصوتي.")
         }
+    }
+
+    fun pauseOrResumeAudioRecording() {
+        val recorder = audioRecorder ?: return
+        runCatching {
+            if (isRecordingPaused) recorder.resume() else recorder.pause()
+            isRecordingPaused = !isRecordingPaused
+        }.onFailure { showLocalError("تعذر تغيير حالة التسجيل مؤقتاً.") }
     }
 
     fun sendRecordedAudio() {
@@ -795,6 +806,7 @@ private fun ChatConversationPanel(
         recordedAudioFile?.delete()
         recordedAudioFile = null
         isRecording = false
+        isRecordingPaused = false
         showRecordingDialog = false
     }
 
@@ -1189,10 +1201,13 @@ private fun ChatConversationPanel(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (isRecording) {
-                        Text("جارٍ تسجيل الصوت. اضغط إنهاء عند الانتهاء.")
+                        Text(if (isRecordingPaused) "التسجيل متوقف مؤقتاً." else "جارٍ تسجيل الصوت. يمكنك إيقافه مؤقتاً أو إنهاءه.")
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Text("التسجيل جارٍ")
+                            if (!isRecordingPaused) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Text(if (isRecordingPaused) "متوقف مؤقتاً" else "التسجيل جارٍ")
+                        }
+                        TextButton(onClick = { pauseOrResumeAudioRecording() }) {
+                            Text(if (isRecordingPaused) "استئناف التسجيل" else "إيقاف مؤقت")
                         }
                     } else Text("تم إيقاف التسجيل. هل تريد إرسال الرسالة الصوتية؟")
                 }
