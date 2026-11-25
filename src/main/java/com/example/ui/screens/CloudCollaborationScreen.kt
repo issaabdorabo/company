@@ -224,8 +224,22 @@ fun CloudCollaborationScreen(
         }
 
         if (busy) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                CircularProgressIndicator()
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.5.dp
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text("جارٍ تنفيذ العملية والاتصال بالخادم…", style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
 
@@ -342,7 +356,13 @@ fun CloudCollaborationScreen(
                                         Text("حسابات سجلت الدخول ويمكن إضافتها", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                                         registeredUsers.forEach { account ->
                                             Row(
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 5.dp)
+                                                    .clickable(enabled = !busy) {
+                                                        viewModel.addMember(account.email, account.displayName, "SUBUSER")
+                                                    }
+                                                    .padding(horizontal = 10.dp, vertical = 9.dp),
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
@@ -350,10 +370,11 @@ fun CloudCollaborationScreen(
                                                     Text(account.displayName.ifBlank { account.email }, fontWeight = FontWeight.SemiBold)
                                                     Text(account.email, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                                 }
-                                                TextButton(
-                                                    onClick = { viewModel.addMember(account.email, account.displayName, "SUBUSER") },
-                                                    enabled = !busy
-                                                ) { Text("إضافة") }
+                                                Text(
+                                                    "اضغط لإضافة الحساب",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
                                             }
                                         }
                                     } else {
@@ -442,7 +463,7 @@ fun CloudCollaborationScreen(
                         val generalPermissions = listOf(
                             "canAddItems" to "إضافة أصناف إلى الدليل",
                             "canEditCatalogItems" to "تعديل بيانات الأصناف في الدليل",
-                            "canEdit" to "التعديل العام",
+                            "canEditInventory" to "تعديل بيانات المخزون",
                             "canDeleteItem" to "حذف صنف من الدليل",
                             "canEditIssueVoucher" to "تعديل أوامر الصرف",
                             "canDeleteIssueVoucher" to "حذف أوامر الصرف",
