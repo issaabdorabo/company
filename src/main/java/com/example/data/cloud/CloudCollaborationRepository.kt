@@ -786,6 +786,40 @@ class CloudCollaborationRepository {
     suspend fun resolveAttachmentUrl(path: String): String =
         client.storage.from(CHAT_ATTACHMENTS_BUCKET).createSignedUrl(path, 1.hours)
 
+    suspend fun clearOfflineWarehouseDesignationsForDevice(
+        workspaceId: String,
+        deviceFingerprint: String
+    ): Int {
+        if (deviceFingerprint.isBlank()) return 0
+        val registeredDevices = client.postgrest["devices"].select {
+            filter {
+                eq("workspace_id", workspaceId)
+                eq("device_fingerprint", deviceFingerprint)
+                eq("is_revoked", false)
+            }
+        }.decodeList<CloudDevice>()
+        val userIds = registeredDevices.map { it.userId }.distinct()
+        if (userIds.isEmpty()) return 0
+        val cloudWarehouses = listWarehouses(workspaceId).filter { it.localId != null }
+        val membershipsByWarehouse = cloudWarehouses.associate { warehouse ->
+            warehouse.id to listWarehouseMemberships(warehouse.id)
+        }
+        userIds.forEach { userId ->
+            cloudWarehouses.forEach { warehouse ->
+                val membership = membershipsByWarehouse[warehouse.id].orEmpty()
+                    .firstOrNull { it.userId == userId } ?: return@forEach
+                setWarehousePermissions(
+                    workspaceId,
+                    warehouse.id,
+                    userId,
+                    membership.permissions,
+                    makeDedicated = false
+                )
+            }
+        }
+        return userIds.size
+    }
+
     suspend fun syncLinkedDevicePermissionsToCloud(
         workspaceId: String,
         slot: LinkedSubDevice
