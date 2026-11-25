@@ -484,11 +484,27 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val perms = devicePermissions.value
         if (perms.isMainDevice) {
             val assignedWarehouses = warehouseIds.filter { linkedSubDevicesForWarehouse(it).isNotEmpty() }
+            val offlineDesignatedDeviceActive = assignedWarehouses.any { warehouseId ->
+                val now = System.currentTimeMillis()
+                linkedSubDevicesForWarehouse(warehouseId).any { slot ->
+                    slot.warehousePermissions.any {
+                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                    } && slot.isClaimed && now - slot.lastSeenAt in 0L..15_000L
+                }
+            }
             val assignedWarehouseUnavailable = assignedWarehouses.isNotEmpty() &&
-                (!hasValidatedInternetConnection() || assignedWarehouses.any { !isAssignedSubDeviceOnline(it) })
+                (!hasValidatedInternetConnection() ||
+                    assignedWarehouses.any { !isAssignedSubDeviceOnline(it) } ||
+                    offlineDesignatedDeviceActive)
             if (assignedWarehouseUnavailable) {
                 viewModelScope.launch {
-                    _userMessage.emit("لا يمكن تنفيذ العملية على هذا المخزن إلا عند توفر إنترنت موثّق وظهور الجهاز الفرعي المرتبط به متصلاً.")
+                    _userMessage.emit(
+                        if (offlineDesignatedDeviceActive) {
+                            "هذا المخزن مخصص لجهاز فرعي محدد للعمل دون اتصال؛ لا يمكن تنفيذ عمليات متزامنة من الجهاز الرئيسي."
+                        } else {
+                            "لا يمكن تنفيذ العملية على هذا المخزن إلا عند توفر إنترنت موثّق وظهور الجهاز الفرعي المرتبط به متصلاً."
+                        }
+                    )
                 }
                 onDenied()
                 return
