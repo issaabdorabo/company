@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.media.MediaRecorder
 import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -129,6 +130,7 @@ fun CloudCollaborationScreen(
     }
 
     val openConversation = selectedConversation
+    BackHandler(enabled = openConversation != null) { viewModel.closeConversation() }
     if (openConversation != null) {
         ChatConversationPanel(
             conversation = openConversation,
@@ -1180,14 +1182,14 @@ private fun ChatConversationPanel(
         }
     }
 
-    if (showRecordingDialog && isRecording) {
+    if (showRecordingDialog) {
         AlertDialog(
             onDismissRequest = { },
             title = { Text(if (isRecording) "تسجيل رسالة صوتية" else "إرسال التسجيل الصوتي") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (isRecording) {
-                        Text("جارٍ تسجيل الصوت. اضغط إيقاف عند الانتهاء.")
+                        Text("جارٍ تسجيل الصوت. اضغط إنهاء عند الانتهاء.")
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             Text("التسجيل جارٍ")
@@ -1197,7 +1199,7 @@ private fun ChatConversationPanel(
             },
             confirmButton = {
                 TextButton(onClick = { if (isRecording) stopAudioRecording() else sendRecordedAudio() }) {
-                    Text(if (isRecording) "إيقاف التسجيل" else "تأكيد الإرسال")
+                    Text(if (isRecording) "إنهاء التسجيل" else "إرسال التسجيل")
                 }
             },
             dismissButton = {
