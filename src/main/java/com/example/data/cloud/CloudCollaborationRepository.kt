@@ -865,7 +865,7 @@ class CloudCollaborationRepository {
                     put("canEditCatalogItems", canView && slot.canEditCatalogItems)
                     put("canBackup", canView && slot.canBackup)
                 }
-                setWarehousePermissions(workspaceId, warehouse.id, userId, permissions, grant?.canWorkOffline == true)
+                setWarehousePermissions(workspaceId, warehouse.id, userId, permissions, grant?.canWorkOffline == true && grant.canView)
             }
         }
         return userIds.size
