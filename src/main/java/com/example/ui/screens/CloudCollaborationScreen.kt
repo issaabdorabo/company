@@ -861,6 +861,30 @@ private fun ChatConversationPanel(
         }
     }
 
+    val imageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val resolver = context.contentResolver
+                val mimeType = resolver.getType(uri) ?: "image/jpeg"
+                require(mimeType.startsWith("image/")) { "اختر ملف صورة فقط." }
+                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("تعذر قراءة الصورة المحددة.")
+                require(bytes.size <= 20 * 1024 * 1024) { "حجم الصورة يتجاوز 20 ميجابايت." }
+                val extension = when (mimeType.lowercase()) {
+                    "image/png" -> "png"
+                    "image/webp" -> "webp"
+                    "image/gif" -> "gif"
+                    else -> "jpg"
+                }
+                onSendAttachment("image-${System.currentTimeMillis()}.$extension", mimeType, bytes)
+            }.onFailure { failure ->
+                showLocalError(failure.localizedMessage ?: "تعذر قراءة الصورة.")
+            }
+        }
+    }
+
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
@@ -1117,11 +1141,19 @@ private fun ChatConversationPanel(
                         onDismissRequest = { attachmentMenuExpanded = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("اختيار صورة أو PDF") },
+                            text = { Text("اختيار صورة") },
+                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                            onClick = {
+                                attachmentMenuExpanded = false
+                                imageLauncher.launch("image/*")
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("اختيار ملف PDF") },
                             leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
                             onClick = {
                                 attachmentMenuExpanded = false
-                                documentLauncher.launch(arrayOf("image/*", "application/pdf"))
+                                documentLauncher.launch(arrayOf("application/pdf"))
                             }
                         )
                         DropdownMenuItem(
