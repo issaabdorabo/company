@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Send
@@ -720,6 +721,10 @@ private fun ChatConversationPanel(
 
     var attachmentMenuExpanded by remember { mutableStateOf(false) }
     var emojiDialogExpanded by remember { mutableStateOf(false) }
+    var showChatAppearanceDialog by remember { mutableStateOf(false) }
+    var chatBackgroundColor by remember { mutableStateOf(Color(0xFFEFF3F8)) }
+    var myBubbleColor by remember { mutableStateOf(Color(0xFFD9FDD3)) }
+    var otherBubbleColor by remember { mutableStateOf(Color.White) }
     var pendingDeleteMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -975,6 +980,9 @@ private fun ChatConversationPanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            IconButton(onClick = { showChatAppearanceDialog = true }) {
+                Icon(Icons.Default.Palette, contentDescription = "تخصيص مظهر المحادثة")
+            }
         }
 
         if (selectedMessageIds.isNotEmpty()) {
@@ -1012,9 +1020,7 @@ private fun ChatConversationPanel(
 
         Card(
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-            )
+            colors = CardDefaults.cardColors(containerColor = chatBackgroundColor)
         ) {
             LazyColumn(
                 state = listState,
@@ -1050,8 +1056,7 @@ private fun ChatConversationPanel(
                                         selectedMessageId = null
                                     }
                                 ),
-                                color = if (mine) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surface,
+                                color = if (mine) myBubbleColor else otherBubbleColor,
                                 shape = RoundedCornerShape(
                                     topStart = 18.dp,
                                     topEnd = 18.dp,
@@ -1283,6 +1288,34 @@ private fun ChatConversationPanel(
                 }
             }
         }
+    }
+
+    if (showChatAppearanceDialog) {
+        val presets = listOf(
+            Triple("أخضر واتساب", Color(0xFFE9F5E9), Color(0xFFD9FDD3)) to Color.White,
+            Triple("أزرق هادئ", Color(0xFFEAF2FF), Color(0xFFD5E6FF)) to Color.White,
+            Triple("ليلي", Color(0xFF202B36), Color(0xFF315B4A)) to Color(0xFF344454),
+            Triple("وردي", Color(0xFFFFF0F4), Color(0xFFFFDCE7)) to Color.White
+        )
+        AlertDialog(
+            onDismissRequest = { showChatAppearanceDialog = false },
+            title = { Text("مظهر المحادثة") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    presets.forEach { (preset, receiver) ->
+                        TextButton(onClick = {
+                            chatBackgroundColor = preset.second
+                            myBubbleColor = preset.third
+                            otherBubbleColor = receiver
+                            showChatAppearanceDialog = false
+                        }) { Text(preset.first) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showChatAppearanceDialog = false }) { Text("إغلاق") }
+            }
+        )
     }
 
     editingMessageId?.let { messageId ->
