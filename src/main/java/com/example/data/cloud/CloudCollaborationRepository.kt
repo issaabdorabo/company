@@ -706,10 +706,23 @@ class CloudCollaborationRepository {
         val allowedMimeTypes = setOf(
             "image/jpeg", "image/png", "image/webp", "image/gif",
             "application/pdf", "audio/mp4", "audio/aac",
-            "audio/ogg", "audio/mpeg", "audio/webm", "audio/3gpp"
+            "audio/ogg", "audio/mpeg", "audio/webm", "audio/3gpp",
+            "application/octet-stream", "text/plain", "text/csv", "application/csv",
+            "text/markdown", "application/json", "application/xml", "text/xml",
+            "application/rtf", "text/rtf", "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-powerpoint",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.oasis.opendocument.text",
+            "application/vnd.oasis.opendocument.spreadsheet",
+            "application/vnd.oasis.opendocument.presentation",
+            "application/zip", "application/x-zip-compressed",
+            "application/x-7z-compressed", "application/vnd.rar", "application/x-rar-compressed"
         )
         require(normalizedMime in allowedMimeTypes) {
-            "نوع الملف غير مدعوم. أرسل صورة أو PDF أو تسجيلاً صوتياً."
+            "نوع الملف غير مدعوم. الملفات المدعومة تشمل PDF وWord وExcel وPowerPoint والنصوص وZIP والصور والتسجيلات الصوتية."
         }
         val userId = currentUserIdOrNull()
             ?: error("يجب تسجيل الدخول بحساب Google أولاً")

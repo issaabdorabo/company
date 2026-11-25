@@ -39,6 +39,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.core.content.ContextCompat
@@ -48,6 +49,7 @@ import java.io.File
 import java.time.Instant
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,6 +66,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -744,12 +747,44 @@ private fun ChatConversationPanel(
             Triple("وردي", Pair(Color(0xFFFFF0F4), Color(0xFFFFDCE7)), Color.White)
         )
     }
+    val appearanceSwatches = remember {
+        listOf(
+            Color(0xFFFFFFFF), Color(0xFFF1F3F5), Color(0xFFE9F5E9),
+            Color(0xFFD9FDD3), Color(0xFFB2DFDB), Color(0xFFEAF2FF),
+            Color(0xFFD5E6FF), Color(0xFFFFF0F4), Color(0xFFFFDCE7),
+            Color(0xFFFFE0B2), Color(0xFFFFF9C4), Color(0xFFE1BEE7),
+            Color(0xFFCFD8DC), Color(0xFF90A4AE), Color(0xFF607D8B),
+            Color(0xFF455A64), Color(0xFF344454), Color(0xFF202B36)
+        )
+    }
+    fun setChatAppearanceColor(target: String, color: Color) {
+        appearanceIndex = -1
+        when (target) {
+            "background" -> chatBackgroundColor = color
+            "my_bubble" -> myBubbleColor = color
+            "other_bubble" -> otherBubbleColor = color
+        }
+        appearancePrefs.edit()
+            .putInt("${conversation.id}_preset", -1)
+            .putInt("${conversation.id}_${target}", color.toArgb())
+            .apply()
+    }
     LaunchedEffect(conversation.id) {
-        appearanceIndex = appearancePrefs.getInt(conversation.id, 0).coerceIn(0, appearancePresets.lastIndex)
-        val selected = appearancePresets[appearanceIndex]
-        chatBackgroundColor = selected.second.first
-        myBubbleColor = selected.second.second
-        otherBubbleColor = selected.third
+        val savedPreset = appearancePrefs.getInt(
+            "${conversation.id}_preset",
+            appearancePrefs.getInt(conversation.id, 0)
+        )
+        appearanceIndex = savedPreset.takeIf { it in appearancePresets.indices } ?: -1
+        val fallback = appearancePresets.getOrElse(savedPreset) { appearancePresets[0] }
+        chatBackgroundColor = Color(
+            appearancePrefs.getInt("${conversation.id}_background", fallback.second.first.toArgb())
+        )
+        myBubbleColor = Color(
+            appearancePrefs.getInt("${conversation.id}_my_bubble", fallback.second.second.toArgb())
+        )
+        otherBubbleColor = Color(
+            appearancePrefs.getInt("${conversation.id}_other_bubble", fallback.third.toArgb())
+        )
     }
     var selectedMessageId by remember(conversation.id) { mutableStateOf<String?>(null) }
     var selectedMessageIds by remember(conversation.id) { mutableStateOf<Set<String>>(emptySet()) }
@@ -878,21 +913,14 @@ private fun ChatConversationPanel(
                     if (cursor.moveToFirst() && columnIndex >= 0) cursor.getString(columnIndex)
                     else null
                 } ?: "مرفق"
-                val mimeType = resolver.getType(uri)
-                    ?: when (displayName.substringAfterLast('.', "").lowercase()) {
-                        "pdf" -> "application/pdf"
-                        "jpg", "jpeg" -> "image/jpeg"
-                        "png" -> "image/png"
-                        "gif" -> "image/gif"
-                        "webp" -> "image/webp"
-                        else -> ""
-                    }
-                require(
-                    mimeType in setOf(
-                        "image/jpeg", "image/png", "image/webp",
-                        "image/gif", "application/pdf"
-                    )
-                ) { "اختر صورة أو ملف PDF فقط." }
+                val extension = displayName.substringAfterLast('.', "").lowercase()
+                val mimeType = resolver.getType(uri)?.takeIf { it.isNotBlank() }
+                    ?: android.webkit.MimeTypeMap.getSingleton()
+                        .getMimeTypeFromExtension(extension)
+                    ?: "application/octet-stream"
+                require(!mimeType.startsWith("image/", ignoreCase = true)) {
+                    "لإرسال الصور استخدم زر اختيار الصورة المنفصل."
+                }
                 val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: error("تعذر قراءة الملف المحدد.")
                 require(bytes.size <= 20 * 1024 * 1024) {
@@ -1147,7 +1175,13 @@ private fun ChatConversationPanel(
                                                         fileName.endsWith(".m4a", ignoreCase = true) ||
                                                             fileName.endsWith(".aac", ignoreCase = true) ->
                                                             Icons.Default.Mic
-                                                        else -> Icons.Default.Image
+                                                        fileName.endsWith(".jpg", true) ||
+                                                            fileName.endsWith(".jpeg", true) ||
+                                                            fileName.endsWith(".png", true) ||
+                                                            fileName.endsWith(".webp", true) ||
+                                                            fileName.endsWith(".gif", true) ->
+                                                            Icons.Default.Image
+                                                        else -> Icons.Default.AttachFile
                                                     },
                                                     contentDescription = null,
                                                     tint = MaterialTheme.colorScheme.primary
@@ -1217,10 +1251,10 @@ private fun ChatConversationPanel(
                     Icon(Icons.Default.Image, contentDescription = "اختيار صورة")
                 }
                 IconButton(
-                    onClick = { documentLauncher.launch(arrayOf("application/pdf")) },
+                    onClick = { documentLauncher.launch(arrayOf("*/*")) },
                     enabled = enabled && !isRecording
                 ) {
-                    Icon(Icons.Default.AttachFile, contentDescription = "اختيار ملف PDF")
+                    Icon(Icons.Default.AttachFile, contentDescription = "اختيار ملف")
                 }
                 IconButton(
                     onClick = { cameraLauncher.launch(null) },
@@ -1293,17 +1327,85 @@ private fun ChatConversationPanel(
             onDismissRequest = { showChatAppearanceDialog = false },
             title = { Text("مظهر المحادثة") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("قوالب جاهزة", fontWeight = FontWeight.SemiBold)
                     appearancePresets.forEachIndexed { index, preset ->
                         TextButton(onClick = {
                             appearanceIndex = index
                             chatBackgroundColor = preset.second.first
                             myBubbleColor = preset.second.second
                             otherBubbleColor = preset.third
-                            appearancePrefs.edit().putInt(conversation.id, index).apply()
+                            appearancePrefs.edit()
+                                .putInt("${conversation.id}_preset", index)
+                                .putInt("${conversation.id}_background", preset.second.first.toArgb())
+                                .putInt("${conversation.id}_my_bubble", preset.second.second.toArgb())
+                                .putInt("${conversation.id}_other_bubble", preset.third.toArgb())
+                                .apply()
                             showChatAppearanceDialog = false
                         }) {
                             Text(if (appearanceIndex == index) "✓ ${preset.first}" else preset.first)
+                        }
+                    }
+                    HorizontalDivider()
+                    Text("تخصيص الألوان بشكل مستقل", fontWeight = FontWeight.SemiBold)
+                    Text("خلفية المحادثة", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        appearanceSwatches.forEach { swatch ->
+                            Box(
+                                Modifier.size(30.dp)
+                                    .background(swatch, CircleShape)
+                                    .border(
+                                        if (swatch == chatBackgroundColor) 2.dp else 1.dp,
+                                        if (swatch == chatBackgroundColor) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outlineVariant,
+                                        CircleShape
+                                    )
+                                    .clickable { setChatAppearanceColor("background", swatch) }
+                            )
+                        }
+                    }
+                    Text("لون رسائلي", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        appearanceSwatches.forEach { swatch ->
+                            Box(
+                                Modifier.size(30.dp)
+                                    .background(swatch, CircleShape)
+                                    .border(
+                                        if (swatch == myBubbleColor) 2.dp else 1.dp,
+                                        if (swatch == myBubbleColor) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outlineVariant,
+                                        CircleShape
+                                    )
+                                    .clickable { setChatAppearanceColor("my_bubble", swatch) }
+                            )
+                        }
+                    }
+                    Text("لون رسائل الطرف الآخر", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        appearanceSwatches.forEach { swatch ->
+                            Box(
+                                Modifier.size(30.dp)
+                                    .background(swatch, CircleShape)
+                                    .border(
+                                        if (swatch == otherBubbleColor) 2.dp else 1.dp,
+                                        if (swatch == otherBubbleColor) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outlineVariant,
+                                        CircleShape
+                                    )
+                                    .clickable { setChatAppearanceColor("other_bubble", swatch) }
+                            )
                         }
                     }
                 }
