@@ -548,7 +548,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             DeviceAction.VIEW_REPORTS -> legacyGlobalGrant || perms.warehousePermissions.any { it.canView && it.canReports }
             DeviceAction.BACKUP_RESTORE -> perms.canBackup
         }
-        if (allowed) onAllowed() else onDenied()
+        val offlineAllowed = hasValidatedInternetConnection() ||
+            (isSubConnected.value && hasCachedOfflinePermission(action, warehouseIds))
+        if (allowed && offlineAllowed) onAllowed() else onDenied()
     }
 
     fun checkCanEdit(onSubDeviceWarning: () -> Unit, onAllowed: () -> Unit) {
