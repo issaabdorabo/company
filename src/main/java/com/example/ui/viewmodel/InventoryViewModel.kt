@@ -544,7 +544,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         DeviceAction.DELETE_ISSUE_VOUCHER -> perms.canDeleteIssueVoucher
                         DeviceAction.EDIT_SUPPLY_VOUCHER -> perms.canEditSupplyVoucher
                         DeviceAction.DELETE_SUPPLY_VOUCHER -> perms.canDeleteSupplyVoucher
-                        DeviceAction.VIEW_REPORTS -> true
+                        DeviceAction.VIEW_REPORTS -> false
                         DeviceAction.BACKUP_RESTORE -> perms.canBackup
                         DeviceAction.ADD_OR_MANAGE_CATALOG -> perms.canAddItems
                         DeviceAction.EDIT_CATALOG_ITEMS -> perms.canEditCatalogItems
