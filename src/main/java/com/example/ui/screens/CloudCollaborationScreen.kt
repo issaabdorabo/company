@@ -4,6 +4,7 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaRecorder
 import android.provider.OpenableColumns
@@ -58,6 +59,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -686,7 +689,9 @@ private fun ConversationRow(conversation: CloudConversation, onOpen: () -> Unit)
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    if (conversation.conversationType == "WAREHOUSE_GROUP") "مجموعة مخزن" else "محادثة مباشرة",
+                    if (conversation.conversationType == "WAREHOUSE_GROUP") "مجموعة مخزن"
+                    else listOf(conversation.participantDisplayName, conversation.participantDeviceName)
+                        .filter { it.isNotBlank() }.joinToString(" • ").ifBlank { "محادثة مباشرة" },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -719,12 +724,29 @@ private fun ChatConversationPanel(
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    var attachmentMenuExpanded by remember { mutableStateOf(false) }
+    var selectedEmojiCategory by remember { mutableStateOf("الوجوه") }
+    var appearanceIndex by remember { mutableStateOf(0) }
     var emojiDialogExpanded by remember { mutableStateOf(false) }
     var showChatAppearanceDialog by remember { mutableStateOf(false) }
     var chatBackgroundColor by remember { mutableStateOf(Color(0xFFEFF3F8)) }
     var myBubbleColor by remember { mutableStateOf(Color(0xFFD9FDD3)) }
     var otherBubbleColor by remember { mutableStateOf(Color.White) }
+    val appearancePrefs = remember(context) { context.getSharedPreferences("chat_appearance", Context.MODE_PRIVATE) }
+    val appearancePresets = remember {
+        listOf(
+            Triple("أخضر واتساب", Pair(Color(0xFFE9F5E9), Color(0xFFD9FDD3)), Color.White),
+            Triple("أزرق هادئ", Pair(Color(0xFFEAF2FF), Color(0xFFD5E6FF)), Color.White),
+            Triple("ليلي", Pair(Color(0xFF202B36), Color(0xFF315B4A)), Color(0xFF344454)),
+            Triple("وردي", Pair(Color(0xFFFFF0F4), Color(0xFFFFDCE7)), Color.White)
+        )
+    }
+    LaunchedEffect(conversation.id) {
+        appearanceIndex = appearancePrefs.getInt(conversation.id, 0).coerceIn(0, appearancePresets.lastIndex)
+        val selected = appearancePresets[appearanceIndex]
+        chatBackgroundColor = selected.second.first
+        myBubbleColor = selected.second.second
+        otherBubbleColor = selected.third
+    }
     var pendingDeleteMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -974,8 +996,10 @@ private fun ChatConversationPanel(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    if (conversation.conversationType == "DIRECT") "محادثة خاصة"
-                    else "مجموعة المخزن",
+                    if (conversation.conversationType == "DIRECT") {
+                        listOf(conversation.participantDisplayName, conversation.participantDeviceName)
+                            .filter { it.isNotBlank() }.joinToString(" • ").ifBlank { "محادثة خاصة" }
+                    } else "مجموعة المخزن",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
