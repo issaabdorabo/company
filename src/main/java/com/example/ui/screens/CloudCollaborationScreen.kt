@@ -163,6 +163,7 @@ fun CloudCollaborationScreen(
                 viewModel.sendAttachment(name, mime, bytes)
             },
             onDeleteMessage = { messageId -> viewModel.hideMessageForMe(messageId) },
+            onDeleteMessages = { messageIds -> viewModel.hideMessagesForMe(messageIds) },
             onEditMessage = { messageId, body -> viewModel.editMessage(messageId, body) },
             onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
             onBack = { viewModel.closeConversation() },
@@ -593,6 +594,7 @@ fun CloudCollaborationScreen(
                                 viewModel.sendAttachment(name, mime, bytes)
                             },
                             onDeleteMessage = { messageId -> viewModel.hideMessageForMe(messageId) },
+                            onDeleteMessages = { messageIds -> viewModel.hideMessagesForMe(messageIds) },
                             onEditMessage = { messageId, body -> viewModel.editMessage(messageId, body) },
                             onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
                             onBack = { viewModel.closeConversation() },
@@ -718,6 +720,7 @@ private fun ChatConversationPanel(
     onSend: (String, String?) -> Unit,
     onSendAttachment: (String, String, ByteArray) -> Unit,
     onDeleteMessage: (String) -> Unit,
+    onDeleteMessages: (List<String>) -> Unit,
     onEditMessage: (String, String) -> Unit,
     onResolveAttachment: suspend (String) -> String,
     onBack: () -> Unit,
@@ -1017,7 +1020,7 @@ private fun ChatConversationPanel(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Text("تم تحديد ${selectedMessageIds.size} رسالة", modifier = Modifier.weight(1f))
                 TextButton(onClick = {
-                    selectedMessageIds.toList().forEach(onDeleteMessage)
+                    onDeleteMessages(selectedMessageIds.toList())
                     selectedMessageIds = emptySet()
                     selectedMessageId = null
                 }) { Text("حذف من جهازي") }
@@ -1102,7 +1105,7 @@ private fun ChatConversationPanel(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            if (mine) "أنت" else "مستخدم",
+                                            if (mine) "أنت" else conversation.participantDisplayName.ifBlank { "مستخدم" } + conversation.participantDeviceName.takeIf { it.isNotBlank() }?.let { " • $it" }.orEmpty(),
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1110,16 +1113,6 @@ private fun ChatConversationPanel(
 
                                     }
 
-                                    message.replyToMessageId?.let { replyId ->
-                                        messages.firstOrNull { it.id == replyId }?.let { replied ->
-                                            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
-                                                Column(Modifier.fillMaxWidth().padding(7.dp)) {
-                                                    Text("رد على رسالة", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                                    Text(replied.body, maxLines = 2, style = MaterialTheme.typography.bodySmall)
-                                                }
-                                            }
-                                        }
-                                    }
                                     message.replyToMessageId?.let { replyId ->
                                         messages.firstOrNull { it.id == replyId }?.let { replied ->
                                             Surface(
