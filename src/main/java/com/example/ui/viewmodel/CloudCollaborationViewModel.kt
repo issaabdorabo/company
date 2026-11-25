@@ -136,6 +136,10 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 loadWorkspaceContent(selected.id)
                 ensureCloudDeviceRegistered(selected)
                 bootstrapCloudWorkspace(selected)
+                // Bootstrap can create or refresh cloud memberships and conversations.
+                // Reload once afterwards so the owner immediately sees every active member,
+                // direct conversation, and warehouse group without leaving this screen.
+                loadWorkspaceContent(selected.id)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -412,7 +416,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         var visibleConversations = repository.listConversations(workspaceId, ownerId)
         if (currentUserId == ownerId) {
             _members.value.filter { it.userId != ownerId && it.isActive }.forEach { member ->
-                repository.createDirectConversation(workspaceId, member.userId)
+                // One unavailable/legacy member must not prevent other direct chats
+                // from appearing in the owner's conversation list.
+                runCatching { repository.createDirectConversation(workspaceId, member.userId) }
             }
             _warehouses.value.forEach { warehouse ->
                 val assignedUsers = membershipsByWarehouse[warehouse.id].orEmpty()
@@ -526,7 +532,22 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 "هذا الحساب ليس عضواً نشطاً في مساحة العمل."
             raw.contains("WAREHOUSE_LOCKED_BY_ASSIGNED_USER", true) ->
                 "المخزن تحت إدارة المستخدم الفرعي المتصل حالياً."
-            else -> raw.take(240)
+            raw.contains("JWT", true) || raw.contains("TOKEN", true) || raw.contains("AUTH", true) ->
+                "انتهت جلسة تسجيل الدخول أو تعذر التحقق منها. أعد ربط حساب Google ثم حاول مرة أخرى."
+            raw.contains("TIMEOUT", true) || raw.contains("TIMED OUT", true) ->
+                "انتهت مهلة الاتصال بالخادم. تحقق من الإنترنت ثم أعد المحاولة."
+            raw.contains("UNKNOWNHOST", true) || raw.contains("UNABLE TO RESOLVE", true) ||
+                raw.contains("NETWORK", true) || raw.contains("CONNECTION", true) ->
+                "تعذر الاتصال بالإنترنت أو بالخادم. تحقق من الشبكة ثم حاول مرة أخرى."
+            raw.contains("403", true) || raw.contains("FORBIDDEN", true) ->
+                "رفض الخادم العملية بسبب عدم كفاية الصلاحيات."
+            raw.contains("404", true) || raw.contains("NOT FOUND", true) ->
+                "تعذر العثور على البيانات المطلوبة على الخادم."
+            raw.contains("DUPLICATE", true) || raw.contains("UNIQUE", true) ->
+                "هذه البيانات مسجلة مسبقاً."
+            raw.contains("SERIAL", true) ->
+                "تعذر حفظ أو تحميل الأرقام التسلسلية. تحقق من البيانات والصلاحيات."
+            else -> "تعذر إتمام العملية. تحقق من اتصال الإنترنت والصلاحيات ثم حاول مرة أخرى."
         }
     }
 
