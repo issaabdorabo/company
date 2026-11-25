@@ -538,7 +538,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         DeviceAction.DISBURSEMENT, DeviceAction.DISBURSE_OR_TRANSFER -> perms.canDisburse
                         DeviceAction.TRANSFER -> false
                         DeviceAction.EDIT_OR_DELETE -> perms.canEditDelete
-                        DeviceAction.ADJUST_STOCK, DeviceAction.EDIT_INVENTORY, DeviceAction.EDIT_SERIALS -> perms.canEditInventory
+                        DeviceAction.ADJUST_STOCK -> false
+                        DeviceAction.EDIT_INVENTORY, DeviceAction.EDIT_SERIALS -> perms.canEditInventory
                         DeviceAction.DELETE_ITEM -> perms.canDeleteItem
                         DeviceAction.EDIT_ISSUE_VOUCHER -> perms.canEditIssueVoucher
                         DeviceAction.DELETE_ISSUE_VOUCHER -> perms.canDeleteIssueVoucher
