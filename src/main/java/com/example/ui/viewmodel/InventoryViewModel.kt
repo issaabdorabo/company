@@ -126,17 +126,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         hasAppliedSyncOperation = { operationId -> repository.hasAppliedSyncOperation(operationId) },
         onMarkSyncOperationApplied = { operationId -> repository.markSyncOperationApplied(operationId) },
         onRemoteOperationAlert = { subDeviceName, actorName, actionType, operationTitle, operationDetails ->
-            viewModelScope.launch {
-                repository.recordOperation(
-                    OperationAuditLog(
-                        actorName = actorName.ifBlank { subDeviceName },
-                        deviceName = subDeviceName,
-                        operationType = actionType.ifBlank { "GENERAL" },
-                        title = operationTitle,
-                        details = operationDetails
-                    )
+            // Persist the incoming operation in history before the server acknowledges it.
+            repository.recordOperation(
+                OperationAuditLog(
+                    actorName = actorName.ifBlank { subDeviceName },
+                    deviceName = subDeviceName,
+                    operationType = actionType.ifBlank { "GENERAL" },
+                    title = operationTitle,
+                    details = operationDetails
                 )
-            }
+            )
             val title = "إشعار من ($subDeviceName): $operationTitle"
             val actorPrefix = if (actorName.isNotBlank()) "بواسطة: $actorName • " else ""
             val details = "$actorPrefix$operationDetails"
