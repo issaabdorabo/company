@@ -1935,12 +1935,22 @@ class InventoryRepository(
             .sortedBy { it.timestamp }
     }
 
-    /** Import the device history after a clean re-pair. IDs are regenerated locally to avoid collisions. */
+    /** Import remote operation history without creating duplicates on every polling cycle. */
     suspend fun importOperationLogsFromMain(logs: List<OperationAuditLog>) = withContext(Dispatchers.IO) {
         if (logs.isEmpty()) return@withContext
         database.withTransaction {
-            logs.forEach { log -> auditLogDao.insert(log.copy(id = 0L)) }
+            fun OperationAuditLog.syncKey(): String = listOf(
+                timestamp.toString(), actorName, deviceName, operationType, title, details
+            ).joinToString("|")
+            val known = auditLogDao.getAllList().mapTo(mutableSetOf()) { it.syncKey() }
+            logs.sortedBy { it.timestamp }.forEach { log ->
+                if (known.add(log.syncKey())) auditLogDao.insert(log.copy(id = 0L))
+            }
         }
+    }
+
+    suspend fun getAllOperationLogsForSync(): List<OperationAuditLog> = withContext(Dispatchers.IO) {
+        auditLogDao.getAllList().sortedBy { it.timestamp }
     }
 
     suspend fun deleteOperationLogs(ids: List<Long>) = withContext(Dispatchers.IO) {
