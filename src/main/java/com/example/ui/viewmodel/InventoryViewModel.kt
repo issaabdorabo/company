@@ -527,14 +527,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
         // Backward compatibility applies only to older linked devices that have no explicit
         // warehouse grants. New devices receive warehouse edit permissions per warehouse.
-        val legacyGlobalGrant = perms.canViewAllWarehouses && perms.warehousePermissions.isEmpty()
+        val globalWarehouseGrant = perms.canViewAllWarehouses
+        val legacyGlobalGrant = globalWarehouseGrant && perms.warehousePermissions.isEmpty()
         val allowed = if (warehouseIds.isNotEmpty()) {
             warehouseIds.all { warehouseId ->
                 val grant = perms.warehousePermissions.firstOrNull { it.warehouseId == warehouseId }
                 if (grant == null) {
-                    legacyGlobalGrant && when (action) {
+                    globalWarehouseGrant && when (action) {
                         DeviceAction.INWARD -> perms.canInward
-                        DeviceAction.DISBURSEMENT, DeviceAction.DISBURSE_OR_TRANSFER, DeviceAction.TRANSFER -> perms.canDisburse
+                        DeviceAction.DISBURSEMENT, DeviceAction.DISBURSE_OR_TRANSFER -> perms.canDisburse
+                        DeviceAction.TRANSFER -> false
                         DeviceAction.EDIT_OR_DELETE -> perms.canEditDelete
                         DeviceAction.ADJUST_STOCK, DeviceAction.EDIT_INVENTORY, DeviceAction.EDIT_SERIALS -> perms.canEditInventory
                         DeviceAction.DELETE_ITEM -> perms.canDeleteItem
@@ -545,7 +547,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         DeviceAction.VIEW_REPORTS -> true
                         DeviceAction.BACKUP_RESTORE -> perms.canBackup
                         DeviceAction.ADD_OR_MANAGE_CATALOG -> perms.canAddItems
-                        DeviceAction.EDIT_CATALOG_ITEMS -> false
+                        DeviceAction.EDIT_CATALOG_ITEMS -> perms.canEditCatalogItems
                     }
                 } else when (action) {
                     DeviceAction.ADD_OR_MANAGE_CATALOG -> perms.canAddItems && grant.canView
