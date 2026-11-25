@@ -782,9 +782,6 @@ class LocalNetworkSyncServer(
                 }
                 onApplyRemoteEntities(mergeResult.records)
             }
-            if (clientOperationId.isNotBlank()) {
-                onMarkSyncOperationApplied(clientOperationId)
-            }
             val now = System.currentTimeMillis()
             val updatedDevices = devices.map {
                 if (it.id == slot.id) it.copy(lastSeenAt = now) else it
@@ -819,6 +816,10 @@ class LocalNetworkSyncServer(
                 titleToNotify,
                 detailsToNotify
             )
+            // Only acknowledge after both the inventory transaction and history row are durable.
+            if (clientOperationId.isNotBlank()) {
+                onMarkSyncOperationApplied(clientOperationId)
+            }
 
             val newVersion = getSyncVersion()
             jsonResponse(
