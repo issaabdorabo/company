@@ -690,7 +690,8 @@ class UserPreferencesManager(private val context: Context) {
                     canReports = obj.optBoolean("canReports", false),
                     canEdit = obj.optBoolean("canEdit", false),
                     canEditInventory = obj.optBoolean("canEditInventory", obj.optBoolean("canEdit", false)),
-                    canDeleteItem = obj.optBoolean("canDeleteItem", obj.optBoolean("canEdit", false))
+                    canDeleteItem = obj.optBoolean("canDeleteItem", obj.optBoolean("canEdit", false)),
+                    canWorkOffline = obj.optBoolean("canWorkOffline", false)
                 ))
             }
         }
