@@ -837,7 +837,6 @@ class CloudCollaborationRepository {
 
         val cloudWarehouses = listWarehouses(workspaceId).filter { it.localId != null }
         val grantsByLocalId = slot.warehousePermissions.associateBy { it.warehouseId }
-        val hasExplicitWarehouseGrants = slot.warehousePermissions.isNotEmpty()
         userIds.forEach { userId ->
             cloudWarehouses.forEach { warehouse ->
                 val localWarehouseId = warehouse.localId ?: return@forEach
@@ -849,14 +848,14 @@ class CloudCollaborationRepository {
                     // Warehouse-level grants are authoritative when present. Do not
                     // intersect them with legacy device-wide toggles: doing so silently
                     // revokes a grant when the old global flag was never enabled.
-                    put("canInward", canView && if (hasExplicitWarehouseGrants) grant?.canInward == true else slot.canInward)
-                    put("canDisburse", canView && if (hasExplicitWarehouseGrants) grant?.canDisburse == true else slot.canDisburse)
+                    put("canInward", canView && (grant?.canInward ?: slot.canInward))
+                    put("canDisburse", canView && (grant?.canDisburse ?: slot.canDisburse))
                     put("canTransfer", canView && (grant?.canTransfer == true))
                     put("canAdjust", canView && (grant?.canAdjust == true))
                     put("canReports", canView && (grant?.canReports == true))
-                    put("canEdit", canView && if (hasExplicitWarehouseGrants) grant?.canEdit == true else slot.canEditDelete)
-                    put("canEditInventory", canView && if (hasExplicitWarehouseGrants) grant?.canEditInventory == true else slot.canEditInventory)
-                    put("canDeleteItem", canView && if (hasExplicitWarehouseGrants) grant?.canDeleteItem == true else slot.canDeleteItem)
+                    put("canEdit", canView && (grant?.canEdit ?: slot.canEditDelete))
+                    put("canEditInventory", canView && (grant?.canEditInventory ?: slot.canEditInventory))
+                    put("canDeleteItem", canView && (grant?.canDeleteItem ?: slot.canDeleteItem))
                     put("canEditIssueVoucher", canView && slot.canEditIssueVoucher)
                     put("canDeleteIssueVoucher", canView && slot.canDeleteIssueVoucher)
                     put("canEditSupplyVoucher", canView && slot.canEditSupplyVoucher)
