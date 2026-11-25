@@ -197,59 +197,6 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         }
     }
 
-    fun saveWarehousePermissions(
-        warehouseId: String,
-        userId: String,
-        canView: Boolean,
-        canInward: Boolean,
-        canDisburse: Boolean,
-        canTransfer: Boolean,
-        canAdjust: Boolean,
-        canReports: Boolean,
-        canEdit: Boolean,
-        canEditInventory: Boolean,
-        canDeleteItem: Boolean,
-        canEditIssueVoucher: Boolean,
-        canDeleteIssueVoucher: Boolean,
-        canEditSupplyVoucher: Boolean,
-        canDeleteSupplyVoucher: Boolean,
-        canAddItems: Boolean,
-        canEditCatalogItems: Boolean,
-        canBackup: Boolean,
-        makeDedicated: Boolean
-    ) {
-        viewModelScope.launch {
-            runCloudAction("تعذر حفظ صلاحيات المخزن") {
-                val workspace = _activeWorkspace.value ?: error("لا توجد مساحة عمل محددة")
-                val permissions = buildJsonObject {
-                    put("canView", canView)
-                    put("canInward", canInward)
-                    put("canDisburse", canDisburse)
-                    put("canTransfer", canTransfer)
-                    put("canAdjust", canAdjust)
-                    put("canReports", canReports)
-                    put("canEdit", canEdit)
-                    put("canEditInventory", canEditInventory)
-                    put("canDeleteItem", canDeleteItem)
-                    put("canEditIssueVoucher", canEditIssueVoucher)
-                    put("canDeleteIssueVoucher", canDeleteIssueVoucher)
-                    put("canEditSupplyVoucher", canEditSupplyVoucher)
-                    put("canDeleteSupplyVoucher", canDeleteSupplyVoucher)
-                    put("canAddItems", canAddItems)
-                    put("canEditCatalogItems", canEditCatalogItems)
-                    put("canBackup", canBackup)
-                }
-                repository.setWarehousePermissions(
-                    workspace.id, warehouseId, userId, permissions, makeDedicated
-                )
-                val updated = _warehouseMemberships.value.toMutableMap()
-                updated[warehouseId] = repository.listWarehouseMemberships(warehouseId)
-                _warehouseMemberships.value = updated
-                _notice.value = "تم حفظ صلاحيات المستخدم لهذا المخزن على الخادم."
-            }
-        }
-    }
-
     fun startDirectConversation(member: CloudWorkspaceMember) {
         viewModelScope.launch {
             runCloudAction("تعذر فتح المحادثة") {
@@ -299,6 +246,29 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
             }
         }
     }
+
+    fun sendAttachment(fileName: String, mimeType: String, bytes: ByteArray) {
+        viewModelScope.launch {
+            val conversation = _selectedConversation.value ?: return@launch
+            runCloudAction("تعذر إرسال المرفق") {
+                val sent = repository.sendAttachment(conversation.id, fileName, mimeType, bytes)
+                _messages.value = (_messages.value.filterNot { it.id == sent.id } + sent)
+                    .sortedBy { it.createdAt }
+            }
+        }
+    }
+
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            runCloudAction("تعذر حذف الرسالة") {
+                repository.deleteMessage(messageId)
+                _messages.value = _messages.value.filterNot { it.id == messageId }
+            }
+        }
+    }
+
+    suspend fun resolveAttachmentUrl(path: String): String =
+        repository.resolveAttachmentUrl(path)
 
     fun dismissNotice() {
         _notice.value = null

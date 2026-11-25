@@ -11,6 +11,8 @@ import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.realtime
+import io.github.jan.supabase.storage.storage
+import io.ktor.http.ContentType
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +31,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.UUID
+import kotlin.time.Duration.Companion.hours
 
 @Serializable
 data class CloudWorkspace(
@@ -174,14 +177,14 @@ data class CloudEntitySnapshot(
 @Serializable
 private data class CloudEntityRecordDto(
     val id: String,
-    val workspaceId: String,
-    val warehouseId: String? = null,
-    val documentId: String,
-    val entityType: String,
-    val localId: Long,
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("warehouse_id") val warehouseId: String? = null,
+    @SerialName("document_id") val documentId: String,
+    @SerialName("entity_type") val entityType: String,
+    @SerialName("local_id") val localId: Long,
     val payload: JsonObject,
-    val isDeleted: Boolean = false,
-    val updatedAt: String
+    @SerialName("is_deleted") val isDeleted: Boolean = false,
+    @SerialName("updated_at") val updatedAt: String
 )
 
 @Serializable
@@ -247,6 +250,10 @@ private data class SendMessageParams(
  */
 class CloudCollaborationRepository {
     private val client get() = SupabaseAuthClient.client
+
+    private companion object {
+        const val CHAT_ATTACHMENTS_BUCKET = "chat-attachments"
+    }
 
     fun currentUserIdOrNull(): String? =
         client.auth.currentSessionOrNull()?.user?.id
@@ -614,7 +621,49 @@ class CloudCollaborationRepository {
             }
         }.decodeList<CloudMessage>().sortedBy { it.createdAt }
 
-    suspend fun sendMessage(conversationId: String, body: String): CloudMessage {
+    suspend fun sendMessage(conversationId: String, body: String): CloudMessage =
+        insertMessage(conversationId, body.trim(), null)
+
+    suspend fun sendAttachment(
+        conversationId: String,
+        fileName: String,
+        mimeType: String,
+        bytes: ByteArray
+    ): CloudMessage {
+        require(bytes.isNotEmpty()) { "الملف فارغ" }
+        require(bytes.size <= 20 * 1024 * 1024) { "حجم المرفق يتجاوز 20 ميجابايت" }
+        val normalizedMime = mimeType.trim().lowercase()
+        val allowedMimeTypes = setOf(
+            "image/jpeg", "image/png", "image/webp", "image/gif",
+            "application/pdf", "audio/mp4", "audio/aac",
+            "audio/ogg", "audio/mpeg", "audio/webm", "audio/3gpp"
+        )
+        require(normalizedMime in allowedMimeTypes) {
+            "نوع الملف غير مدعوم. أرسل صورة أو PDF أو تسجيلاً صوتياً."
+        }
+        val userId = currentUserIdOrNull()
+            ?: error("يجب تسجيل الدخول بحساب Google أولاً")
+        val extension = fileName.substringAfterLast('.', "bin")
+            .lowercase()
+            .takeIf { it.matches(Regex("[a-z0-9]{1,10}")) } ?: "bin"
+        val path = "$conversationId/$userId/${UUID.randomUUID()}.$extension"
+        val bucket = client.storage.from(CHAT_ATTACHMENTS_BUCKET)
+        bucket.upload(path, bytes) {
+            contentType = ContentType.parse(normalizedMime)
+        }
+        return try {
+            insertMessage(conversationId, fileName.trim().ifBlank { "مرفق" }.take(180), path)
+        } catch (failure: Exception) {
+            runCatching { bucket.delete(path) }
+            throw failure
+        }
+    }
+
+    private suspend fun insertMessage(
+        conversationId: String,
+        body: String,
+        attachmentPath: String?
+    ): CloudMessage {
         val cleanBody = body.trim()
         require(cleanBody.isNotBlank() && cleanBody.length <= 10_000) {
             "الرسالة فارغة أو أطول من الحد المسموح"
@@ -625,25 +674,100 @@ class CloudCollaborationRepository {
                 put("p_conversation", JsonPrimitive(conversationId))
                 put("p_client_message_id", JsonPrimitive(UUID.randomUUID().toString()))
                 put("p_body", JsonPrimitive(cleanBody))
-                put("p_attachment_path", JsonNull)
+                put("p_attachment_path", attachmentPath?.let(::JsonPrimitive) ?: JsonNull)
             }
-        ).decodeSingle<CloudMessage>()
+        ).decodeAs<CloudMessage>()
+    }
+
+    suspend fun deleteMessage(messageId: String) {
+        val message = client.postgrest["messages"].select {
+            filter { eq("id", messageId) }
+        }.decodeSingle<CloudMessage>()
+        client.postgrest.rpc(
+            "delete_message",
+            buildJsonObject { put("p_message", JsonPrimitive(messageId)) }
+        )
+        message.attachmentPath?.takeIf { it.isNotBlank() }?.let { path ->
+            runCatching { client.storage.from(CHAT_ATTACHMENTS_BUCKET).delete(path) }
+        }
+    }
+
+    suspend fun resolveAttachmentUrl(path: String): String =
+        client.storage.from(CHAT_ATTACHMENTS_BUCKET).createSignedUrl(path, 1.hours)
+
+    suspend fun syncLinkedDevicePermissionsToCloud(
+        workspaceId: String,
+        slot: LinkedSubDevice
+    ): Int {
+        if (slot.boundInstallationId.isBlank()) return 0
+        val registeredDevices = client.postgrest["devices"].select {
+            filter {
+                eq("workspace_id", workspaceId)
+                eq("device_fingerprint", slot.boundInstallationId)
+                eq("is_revoked", false)
+            }
+        }.decodeList<CloudDevice>()
+        val userIds = registeredDevices.map { it.userId }.distinct()
+        if (userIds.isEmpty()) return 0
+
+        val cloudWarehouses = listWarehouses(workspaceId).filter { it.localId != null }
+        val grantsByLocalId = slot.warehousePermissions.associateBy { it.warehouseId }
+        val hasExplicitWarehouseGrants = slot.warehousePermissions.isNotEmpty()
+        userIds.forEach { userId ->
+            cloudWarehouses.forEach { warehouse ->
+                val localWarehouseId = warehouse.localId ?: return@forEach
+                val grant = grantsByLocalId[localWarehouseId]
+                val canView = !slot.isKicked &&
+                    (slot.canViewAllWarehouses || grant?.canView == true)
+                val permissions = buildJsonObject {
+                    put("canView", canView)
+                    put("canInward", canView && slot.canInward &&
+                        (!hasExplicitWarehouseGrants || grant?.canInward == true))
+                    put("canDisburse", canView && slot.canDisburse &&
+                        (!hasExplicitWarehouseGrants || grant?.canDisburse == true))
+                    put("canTransfer", canView && grant?.canTransfer == true)
+                    put("canAdjust", canView && grant?.canAdjust == true)
+                    put("canReports", canView && grant?.canReports == true)
+                    put("canEdit", canView && slot.canEditDelete &&
+                        (!hasExplicitWarehouseGrants || grant?.canEdit == true))
+                    put("canEditInventory", canView && slot.canEditInventory &&
+                        (!hasExplicitWarehouseGrants || grant?.canEditInventory == true))
+                    put("canDeleteItem", canView && slot.canDeleteItem &&
+                        (!hasExplicitWarehouseGrants || grant?.canDeleteItem == true))
+                    put("canEditIssueVoucher", canView && slot.canEditIssueVoucher)
+                    put("canDeleteIssueVoucher", canView && slot.canDeleteIssueVoucher)
+                    put("canEditSupplyVoucher", canView && slot.canEditSupplyVoucher)
+                    put("canDeleteSupplyVoucher", canView && slot.canDeleteSupplyVoucher)
+                    put("canAddItems", canView && slot.canAddItems)
+                    put("canEditCatalogItems", canView && slot.canEditCatalogItems)
+                    put("canBackup", canView && slot.canBackup)
+                }
+                setWarehousePermissions(workspaceId, warehouse.id, userId, permissions, false)
+            }
+        }
+        return userIds.size
     }
 
     fun observeMessages(conversationId: String): Flow<Unit> = callbackFlow {
         val channel = client.realtime.channel("cloud-chat-$conversationId")
-        val changes = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
+        val inserts = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
             table = "messages"
             filter("conversation_id", FilterOperator.EQ, conversationId)
         }
-        val collector = launch {
-            changes.collect { trySend(Unit).isSuccess }
+        val deletes = channel.postgresChangeFlow<PostgresAction.Delete>(schema = "public") {
+            table = "messages"
+        }
+        val insertCollector = launch {
+            inserts.collect { trySend(Unit).isSuccess }
+        }
+        val deleteCollector = launch {
+            deletes.collect { trySend(Unit).isSuccess }
         }
         channel.subscribe(blockUntilSubscribed = true)
-        // Signal initial history loading only after the websocket is subscribed.
         trySend(Unit)
         awaitClose {
-            collector.cancel()
+            insertCollector.cancel()
+            deleteCollector.cancel()
             CoroutineScope(Dispatchers.IO).launch {
                 runCatching { client.realtime.removeChannel(channel) }
             }

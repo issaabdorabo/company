@@ -89,7 +89,27 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         getOrgName = { preferences.orgNameFlow.first() },
         getSyncVersion = { preferences.syncRevisionFlow.first() },
         getLinkedDevices = { preferences.getLinkedSubDevicesSnapshot() },
-        onSaveLinkedDevices = { devices -> preferences.saveLinkedSubDevices(devices) },
+        onSaveLinkedDevices = { devices ->
+            val previousById = preferences.getLinkedSubDevicesSnapshot().associateBy { it.id }
+            val newlyBoundDevices = devices.filter { slot ->
+                slot.boundInstallationId.isNotBlank() &&
+                    previousById[slot.id]?.boundInstallationId != slot.boundInstallationId
+            }
+            preferences.saveLinkedSubDevices(devices)
+            newlyBoundDevices.forEach { newlyBound ->
+                viewModelScope.launch {
+                    val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                    if (workspaceId.isNotBlank()) {
+                        runCatching {
+                            cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(
+                                workspaceId,
+                                newlyBound
+                            )
+                        }
+                    }
+                }
+            }
+        },
         onExportEntities = { repository.exportAllEntitiesForCloud() },
         onExportAuditLogs = { device -> repository.getOperationLogsForDevice(device) },
         onApplyRemoteEntities = { records ->
@@ -825,8 +845,77 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 )
                 preferences.saveLinkedSubDevices(current)
                 preferences.incrementSyncRevision()
-                _userMessage.emit("تم تحديث صلاحيات ${current[idx].deviceName}")
+
+                val updatedSlot = current[idx]
+                val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                val cloudSync = if (
+                    workspaceId.isNotBlank() && updatedSlot.boundInstallationId.isNotBlank()
+                ) {
+                    runCatching {
+                        cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(
+                            workspaceId,
+                            updatedSlot
+                        )
+                    }
+                } else {
+                    Result.success(0)
+                }
+
+                when {
+                    cloudSync.isFailure -> _userMessage.emit(
+                        "تم تحديث الصلاحيات محلياً، لكن تعذرت مزامنتها سحابياً: " +
+                            (cloudSync.exceptionOrNull()?.localizedMessage ?: "تحقق من الاتصال")
+                    )
+                    cloudSync.getOrDefault(0) > 0 -> _userMessage.emit(
+                        "تم تحديث صلاحيات ${updatedSlot.deviceName} ومزامنتها مع التعاون السحابي."
+                    )
+                    else -> _userMessage.emit(
+                        "تم تحديث صلاحيات ${updatedSlot.deviceName} محلياً. سجّل المستخدم الدخول بحساب Google على الجهاز أولاً، ثم اضغط مزامنة الصلاحيات من شاشة الأجهزة."
+                    )
+                }
             }
+        }
+    }
+
+    fun syncLinkedSubDevicesPermissionsToCloud() {
+        viewModelScope.launch {
+            if (!requireMainDeviceForDeviceManagement()) return@launch
+            val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+            if (workspaceId.isBlank()) {
+                _userMessage.emit("اربط حساب Google بالجهاز الرئيسي أولاً لتفعيل مزامنة الصلاحيات.")
+                return@launch
+            }
+
+            val slots = preferences.getLinkedSubDevicesSnapshot()
+                .filter { it.boundInstallationId.isNotBlank() && !it.isKicked }
+            if (slots.isEmpty()) {
+                _userMessage.emit("لا توجد أجهزة فرعية مرتبطة وجاهزة لمزامنة الصلاحيات.")
+                return@launch
+            }
+
+            var syncedAccounts = 0
+            var failedDevices = 0
+            slots.forEach { slot ->
+                val syncResult = runCatching {
+                    cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(workspaceId, slot)
+                }
+                if (syncResult.isSuccess) {
+                    syncedAccounts += syncResult.getOrDefault(0)
+                } else {
+                    failedDevices++
+                }
+            }
+
+            _userMessage.emit(
+                when {
+                    syncedAccounts > 0 ->
+                        "تمت مزامنة صلاحيات $syncedAccounts حساباً سحابياً من شاشة الأجهزة."
+                    failedDevices > 0 ->
+                        "تعذرت مزامنة الصلاحيات. تحقق من اتصال الإنترنت وحساب Google الرئيسي."
+                    else ->
+                        "لم يظهر أي حساب سحابي مطابق لبصمات الأجهزة المرتبطة. سجّل المستخدمون الدخول إلى التعاون السحابي من أجهزتهم أولاً."
+                }
+            )
         }
     }
 

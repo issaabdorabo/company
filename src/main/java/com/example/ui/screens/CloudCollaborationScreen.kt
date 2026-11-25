@@ -1,5 +1,47 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.media.MediaRecorder
+import android.provider.OpenableColumns
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.io.File
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,7 +62,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -87,6 +128,32 @@ fun CloudCollaborationScreen(
         if (selectedMemberId.isBlank() || members.none { it.userId == selectedMemberId }) {
             selectedMemberId = members.firstOrNull { it.userId != currentUserId && it.role != "OWNER" }?.userId.orEmpty()
         }
+    }
+
+    if (selectedConversation != null) {
+        ChatConversationPanel(
+            conversation = selectedConversation,
+            messages = messages,
+            currentUserId = currentUserId,
+            messageText = messageText,
+            error = error,
+            notice = notice,
+            onMessageChange = { messageText = it },
+            onSend = {
+                if (messageText.isNotBlank()) {
+                    viewModel.sendMessage(messageText)
+                    messageText = ""
+                }
+            },
+            onSendAttachment = { name, mime, bytes ->
+                viewModel.sendAttachment(name, mime, bytes)
+            },
+            onDeleteMessage = { messageId -> viewModel.deleteMessage(messageId) },
+            onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
+            onBack = { viewModel.closeConversation() },
+            enabled = !busy
+        )
+        return
     }
 
     Column(
@@ -392,67 +459,83 @@ fun CloudCollaborationScreen(
                 }
 
                 1 -> {
-                    Text("تعيين صلاحيات المخازن", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        "حدد مستخدماً ثم امنحه صلاحيات كل مخزن. حفظ الصلاحيات يتم على Supabase، وقفل المخزن يتحقق منه الخادم.",
+                        "الصلاحيات المعتمدة من شاشة الأجهزة",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "تعرض هذه الشاشة الصلاحيات كما حُددت في إدارة الأجهزة. لا يمكن تعديلها أو مزامنتها من هنا.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
                     if (members.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            members.forEach { member ->
+                            members.filter { it.role != "OWNER" }.forEach { member ->
                                 FilterChip(
                                     selected = selectedMemberId == member.userId,
                                     onClick = { selectedMemberId = member.userId },
-                                    label = { Text(member.displayName.ifBlank { member.email.ifBlank { member.role } }) }
+                                    label = {
+                                        Text(member.displayName.ifBlank { member.email.ifBlank { member.role } })
+                                    }
                                 )
                             }
                         }
                     }
+
                     val member = members.firstOrNull { it.userId == selectedMemberId }
                     if (member == null) {
-                        Text("لا يوجد مستخدم محدد لتعديل صلاحياته.")
-                    } else if (member.role == "OWNER") {
-                        Text("مالك مساحة العمل يملك صلاحيات الإدارة الكاملة.")
+                        Text("لا يوجد مستخدم فرعي محدد.")
                     } else if (warehouses.isEmpty()) {
-                        Text("لا توجد مخازن متاحة في مساحة العمل.")
+                        Text("لا توجد مخازن مرفوعة إلى السحابة بعد.")
                     } else {
                         warehouses.forEach { warehouse ->
                             val access = warehouseMemberships[warehouse.id].orEmpty()
                                 .firstOrNull { it.userId == member.userId }
-                            WarehousePermissionEditor(
-                                warehouse = warehouse,
-                                member = member,
-                                access = access,
-                                enabled = !busy,
-                                onSave = { permissions, dedicated ->
-                                    viewModel.saveWarehousePermissions(
-                                        warehouseId = warehouse.id,
-                                        userId = member.userId,
-                                        canView = permissions.canView,
-                                        canInward = permissions.canInward,
-                                        canDisburse = permissions.canDisburse,
-                                        canTransfer = permissions.canTransfer,
-                                        canAdjust = permissions.canAdjust,
-                                        canReports = permissions.canReports,
-                                        canEdit = permissions.canEdit,
-                                        canEditInventory = permissions.canEditInventory,
-                                        canDeleteItem = permissions.canDeleteItem,
-                                        canEditIssueVoucher = permissions.canEditIssueVoucher,
-                                        canDeleteIssueVoucher = permissions.canDeleteIssueVoucher,
-                                        canEditSupplyVoucher = permissions.canEditSupplyVoucher,
-                                        canDeleteSupplyVoucher = permissions.canDeleteSupplyVoucher,
-                                        canAddItems = permissions.canAddItems,
-                                        canEditCatalogItems = permissions.canEditCatalogItems,
-                                        canBackup = permissions.canBackup,
-                                        makeDedicated = dedicated
+                            val granted = buildList {
+                                if (access.permission("canView")) add("عرض المخزن")
+                                if (access.permission("canInward")) add("التوريد")
+                                if (access.permission("canDisburse")) add("الصرف")
+                                if (access.permission("canTransfer")) add("التحويل")
+                                if (access.permission("canAdjust")) add("التسوية")
+                                if (access.permission("canReports")) add("التقارير")
+                                if (access.permission("canEdit")) add("التعديل العام")
+                                if (access.permission("canEditInventory")) add("تعديل المخزون")
+                                if (access.permission("canDeleteItem")) add("حذف الأصناف")
+                                if (access.permission("canEditIssueVoucher")) add("تعديل سند الصرف")
+                                if (access.permission("canDeleteIssueVoucher")) add("حذف سند الصرف")
+                                if (access.permission("canEditSupplyVoucher")) add("تعديل سند التوريد")
+                                if (access.permission("canDeleteSupplyVoucher")) add("حذف سند التوريد")
+                                if (access.permission("canAddItems")) add("إضافة الأصناف")
+                                if (access.permission("canEditCatalogItems")) add("تعديل دليل الأصناف")
+                                if (access.permission("canBackup")) add("النسخ الاحتياطي")
+                            }
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Text(warehouse.name, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        when {
+                                            access == null -> "لم تتم مزامنة صلاحيات هذا الجهاز بعد."
+                                            granted.isEmpty() -> "لا توجد صلاحيات ممنوحة لهذا المخزن."
+                                            else -> granted.joinToString(" • ")
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                            )
+                            }
                         }
                     }
+                    Text(
+                        "لتعديل الصلاحيات استخدم شاشة الأجهزة المرتبطة؛ فهي المصدر الوحيد للصلاحيات.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
-
                 else -> {
                     selectedConversation?.let { conversation ->
                         ChatConversationPanel(
@@ -460,11 +543,18 @@ fun CloudCollaborationScreen(
                             messages = messages,
                             currentUserId = currentUserId,
                             messageText = messageText,
+                            error = error,
+                            notice = notice,
                             onMessageChange = { messageText = it },
                             onSend = {
                                 viewModel.sendMessage(messageText)
                                 messageText = ""
                             },
+                            onSendAttachment = { name, mime, bytes ->
+                                viewModel.sendAttachment(name, mime, bytes)
+                            },
+                            onDeleteMessage = { messageId -> viewModel.deleteMessage(messageId) },
+                            onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
                             onBack = { viewModel.closeConversation() },
                             enabled = !busy
                         )
@@ -518,25 +608,6 @@ fun CloudCollaborationScreen(
     }
 }
 
-private data class EditableWarehousePermissions(
-    val canView: Boolean,
-    val canInward: Boolean,
-    val canDisburse: Boolean,
-    val canTransfer: Boolean,
-    val canAdjust: Boolean,
-    val canReports: Boolean,
-    val canEdit: Boolean,
-    val canEditInventory: Boolean,
-    val canDeleteItem: Boolean,
-    val canEditIssueVoucher: Boolean,
-    val canDeleteIssueVoucher: Boolean,
-    val canEditSupplyVoucher: Boolean,
-    val canDeleteSupplyVoucher: Boolean,
-    val canAddItems: Boolean,
-    val canEditCatalogItems: Boolean,
-    val canBackup: Boolean
-)
-
 private fun CloudWarehouseMembership?.permission(key: String): Boolean =
     runCatching { this?.permissions?.get(key)?.jsonPrimitive?.booleanOrNull ?: false }.getOrDefault(false)
 
@@ -560,102 +631,6 @@ private fun MemberRow(member: CloudWorkspaceMember, isSelected: Boolean, onClick
             }
             TextButton(onClick = onClick) { Text(if (isSelected) "محدد" else "تحديد") }
         }
-    }
-}
-
-@Composable
-private fun WarehousePermissionEditor(
-    warehouse: CloudWarehouse,
-    member: CloudWorkspaceMember,
-    access: CloudWarehouseMembership?,
-    enabled: Boolean,
-    onSave: (EditableWarehousePermissions, Boolean) -> Unit
-) {
-    var canView by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canView")) }
-    var canInward by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canInward")) }
-    var canDisburse by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canDisburse")) }
-    var canTransfer by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canTransfer")) }
-    var canAdjust by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canAdjust")) }
-    var canReports by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canReports")) }
-    var canEdit by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEdit")) }
-    var canEditInventory by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditInventory")) }
-    var canDeleteItem by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canDeleteItem")) }
-    var canEditIssueVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditIssueVoucher")) }
-    var canDeleteIssueVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canDeleteIssueVoucher")) }
-    var canEditSupplyVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditSupplyVoucher")) }
-    var canDeleteSupplyVoucher by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canDeleteSupplyVoucher")) }
-    var canAddItems by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canAddItems")) }
-    var canEditCatalogItems by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canEditCatalogItems")) }
-    var canBackup by remember(warehouse.id, member.userId, access) { mutableStateOf(access.permission("canBackup")) }
-    var dedicated by remember(warehouse.id, member.userId, access) { mutableStateOf(false) }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(warehouse.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Text(
-                if (access != null) "لدى المستخدم عضوية محفوظة لهذا المخزن" else "لم تُمنح صلاحية لهذا المخزن بعد",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            PermissionToggle("عرض المخزن", canView, enabled) { canView = it }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PermissionToggle("توريد", canInward, enabled) { canInward = it; if (it) canView = true }
-                PermissionToggle("صرف", canDisburse, enabled) { canDisburse = it; if (it) canView = true }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PermissionToggle("تحويل", canTransfer, enabled) { canTransfer = it; if (it) canView = true }
-                PermissionToggle("تسوية", canAdjust, enabled) { canAdjust = it; if (it) canView = true }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PermissionToggle("تقارير", canReports, enabled) { canReports = it; if (it) canView = true }
-                PermissionToggle("تعديل عام", canEdit, enabled) { canEdit = it; if (it) canView = true }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PermissionToggle("تعديل المخزون", canEditInventory, enabled) { canEditInventory = it; if (it) canView = true }
-                PermissionToggle("حذف صنف", canDeleteItem, enabled) { canDeleteItem = it; if (it) canView = true }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PermissionToggle("تعديل سند صرف/تحويل", canEditIssueVoucher, enabled) { canEditIssueVoucher = it; if (it) canView = true }
-                PermissionToggle("حذف سند صرف/تحويل", canDeleteIssueVoucher, enabled) { canDeleteIssueVoucher = it; if (it) canView = true }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PermissionToggle("تعديل سند توريد", canEditSupplyVoucher, enabled) { canEditSupplyVoucher = it; if (it) canView = true }
-                PermissionToggle("حذف سند توريد", canDeleteSupplyVoucher, enabled) { canDeleteSupplyVoucher = it; if (it) canView = true }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PermissionToggle("إضافة أصناف ودليل", canAddItems, enabled) { canAddItems = it; if (it) canView = true }
-                PermissionToggle("تعديل دليل الأصناف", canEditCatalogItems, enabled) { canEditCatalogItems = it; if (it) canView = true }
-            }
-            PermissionToggle("نسخ احتياطي واستعادة", canBackup, enabled) { canBackup = it }
-            PermissionToggle("تخصيص هذا المخزن لهذا المستخدم", dedicated, enabled) { dedicated = it }
-            Button(
-                onClick = {
-                    onSave(
-                        EditableWarehousePermissions(
-                            canView, canInward, canDisburse, canTransfer, canAdjust,
-                            canReports, canEdit, canEditInventory, canDeleteItem,
-                            canEditIssueVoucher, canDeleteIssueVoucher,
-                            canEditSupplyVoucher, canDeleteSupplyVoucher,
-                            canAddItems, canEditCatalogItems, canBackup
-                        ),
-                        dedicated
-                    )
-                },
-                enabled = enabled,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("حفظ الصلاحيات على السحابة") }
-        }
-    }
-}
-
-@Composable
-private fun PermissionToggle(label: String, checked: Boolean, enabled: Boolean, onChecked: (Boolean) -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(end = 4.dp)
-    ) {
-        Checkbox(checked = checked, onCheckedChange = onChecked, enabled = enabled)
-        Text(label, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -691,73 +666,518 @@ private fun ChatConversationPanel(
     messages: List<CloudMessage>,
     currentUserId: String,
     messageText: String,
+    error: String?,
+    notice: String?,
     onMessageChange: (String) -> Unit,
     onSend: () -> Unit,
+    onSendAttachment: (String, String, ByteArray) -> Unit,
+    onDeleteMessage: (String) -> Unit,
+    onResolveAttachment: suspend (String) -> String,
     onBack: () -> Unit,
     enabled: Boolean
 ) {
-    TextButton(onClick = onBack) { Text("رجوع إلى المحادثات") }
-    Text(
-        conversation.title.ifBlank {
-            if (conversation.conversationType == "DIRECT") "محادثة مباشرة" else "محادثة المخزن"
-        },
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold
-    )
-    Card(
-        modifier = Modifier.fillMaxWidth().height(340.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-    ) {
-        if (messages.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("لا توجد رسائل بعد. ابدأ المحادثة.")
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+
+    var attachmentMenuExpanded by remember { mutableStateOf(false) }
+    var emojiDialogExpanded by remember { mutableStateOf(false) }
+    var pendingDeleteMessageId by remember { mutableStateOf<String?>(null) }
+    var audioRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
+    var audioFile by remember { mutableStateOf<File?>(null) }
+    var isRecording by remember { mutableStateOf(false) }
+
+    fun showLocalError(message: String) {
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+    }
+
+    fun startAudioRecording() {
+        if (audioRecorder != null) return
+        val output = File(context.cacheDir, "voice-${System.currentTimeMillis()}.m4a")
+        try {
+            val recorder = MediaRecorder()
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            recorder.setOutputFile(output.absolutePath)
+            recorder.prepare()
+            recorder.start()
+            audioRecorder = recorder
+            audioFile = output
+            isRecording = true
+        } catch (failure: Exception) {
+            runCatching { audioRecorder?.release() }
+            audioRecorder = null
+            output.delete()
+            showLocalError(
+                "تعذر بدء تسجيل الصوت: " +
+                    (failure.localizedMessage ?: "تحقق من إذن الميكروفون")
+            )
+        }
+    }
+
+    fun stopAudioRecordingAndSend() {
+        val recorder = audioRecorder ?: return
+        val output = audioFile
+        try {
+            recorder.stop()
+            recorder.release()
+            audioRecorder = null
+            audioFile = null
+            isRecording = false
+            if (output != null && output.exists() && output.length() > 0L) {
+                onSendAttachment(output.name, "audio/mp4", output.readBytes())
+            } else {
+                showLocalError("لم يتم تسجيل صوت صالح للإرسال.")
             }
-        } else {
+        } catch (failure: Exception) {
+            runCatching { recorder.release() }
+            audioRecorder = null
+            audioFile?.delete()
+            audioFile = null
+            isRecording = false
+            showLocalError("تعذر إنهاء التسجيل الصوتي.")
+        } finally {
+            output?.delete()
+        }
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startAudioRecording()
+        else showLocalError("يجب السماح باستخدام الميكروفون لتسجيل رسالة صوتية.")
+    }
+
+    val documentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val resolver = context.contentResolver
+                val displayName = resolver.query(
+                    uri,
+                    arrayOf(OpenableColumns.DISPLAY_NAME),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    val columnIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (cursor.moveToFirst() && columnIndex >= 0) cursor.getString(columnIndex)
+                    else null
+                } ?: "مرفق"
+                val mimeType = resolver.getType(uri)
+                    ?: when (displayName.substringAfterLast('.', "").lowercase()) {
+                        "pdf" -> "application/pdf"
+                        "jpg", "jpeg" -> "image/jpeg"
+                        "png" -> "image/png"
+                        "gif" -> "image/gif"
+                        "webp" -> "image/webp"
+                        else -> ""
+                    }
+                require(
+                    mimeType in setOf(
+                        "image/jpeg", "image/png", "image/webp",
+                        "image/gif", "application/pdf"
+                    )
+                ) { "اختر صورة أو ملف PDF فقط." }
+                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("تعذر قراءة الملف المحدد.")
+                require(bytes.size <= 20 * 1024 * 1024) {
+                    "حجم المرفق يتجاوز 20 ميجابايت."
+                }
+                onSendAttachment(displayName, mimeType, bytes)
+            }.onFailure { failure ->
+                showLocalError(failure.localizedMessage ?: "تعذر قراءة المرفق.")
+            }
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            val output = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)
+            val bytes = output.toByteArray()
+            if (bytes.isNotEmpty()) {
+                onSendAttachment(
+                    "camera-${System.currentTimeMillis()}.jpg",
+                    "image/jpeg",
+                    bytes
+                )
+            } else {
+                showLocalError("تعذر التقاط الصورة.")
+            }
+        }
+    }
+
+    fun openAttachment(path: String) {
+        coroutineScope.launch {
+            runCatching { onResolveAttachment(path) }
+                .onSuccess { signedUrl -> uriHandler.openUri(signedUrl) }
+                .onFailure { failure ->
+                    showLocalError(failure.localizedMessage ?: "تعذر فتح المرفق.")
+                }
+        }
+    }
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            audioRecorder?.let { recorder ->
+                runCatching { recorder.stop() }
+                runCatching { recorder.release() }
+            }
+            audioFile?.delete()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "رجوع")
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    conversation.title.ifBlank {
+                        if (conversation.conversationType == "DIRECT") "محادثة مباشرة"
+                        else "محادثة المخزن"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    if (conversation.conversationType == "DIRECT") "محادثة خاصة"
+                    else "مجموعة المخزن",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        error?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        notice?.let {
+            Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+        }
+
+        Card(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            )
+        ) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(7.dp)
+                state = listState,
+                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(messages, key = { it.id }) { message ->
-                    val mine = message.senderUserId == currentUserId
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = if (mine) Arrangement.Start else Arrangement.End
-                    ) {
-                        Surface(
-                            color = if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                            shape = RoundedCornerShape(14.dp)
+                if (messages.isEmpty()) {
+                    item {
+                        Box(
+                            Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Column(Modifier.width(260.dp).padding(10.dp)) {
-                                Text(
-                                    if (mine) "أنت" else "مستخدم",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(message.body, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    message.createdAt.replace("T", " ").take(16),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            Text("لا توجد رسائل بعد. ابدأ المحادثة.")
+                        }
+                    }
+                } else {
+                    items(messages, key = { it.id }) { message ->
+                        val mine = message.senderUserId == currentUserId
+                        var messageMenuExpanded by remember(message.id) { mutableStateOf(false) }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start
+                        ) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(0.88f),
+                                color = if (mine) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(
+                                    topStart = 18.dp,
+                                    topEnd = 18.dp,
+                                    bottomEnd = if (mine) 5.dp else 18.dp,
+                                    bottomStart = if (mine) 18.dp else 5.dp
+                                ),
+                                shadowElevation = 1.dp
+                            ) {
+                                Column(
+                                    Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            if (mine) "أنت" else "مستخدم",
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (mine) {
+                                            Box {
+                                                IconButton(
+                                                    onClick = { messageMenuExpanded = true },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.MoreVert,
+                                                        contentDescription = "خيارات الرسالة",
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                }
+                                                DropdownMenu(
+                                                    expanded = messageMenuExpanded,
+                                                    onDismissRequest = { messageMenuExpanded = false }
+                                                ) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("حذف الرسالة والمرفق") },
+                                                        leadingIcon = {
+                                                            Icon(Icons.Default.Delete, contentDescription = null)
+                                                        },
+                                                        onClick = {
+                                                            messageMenuExpanded = false
+                                                            pendingDeleteMessageId = message.id
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Text(message.body, style = MaterialTheme.typography.bodyMedium)
+
+                                    message.attachmentPath?.let { attachmentPath ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { openAttachment(attachmentPath) }
+                                                    .padding(10.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                val fileName = attachmentPath.substringAfterLast('/')
+                                                Icon(
+                                                    when {
+                                                        fileName.endsWith(".pdf", ignoreCase = true) ->
+                                                            Icons.Default.PictureAsPdf
+                                                        fileName.endsWith(".m4a", ignoreCase = true) ||
+                                                            fileName.endsWith(".aac", ignoreCase = true) ->
+                                                            Icons.Default.Mic
+                                                        else -> Icons.Default.Image
+                                                    },
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(
+                                                        message.body.ifBlank { fileName },
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                    Text(
+                                                        "اضغط لفتح المرفق",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Text(
+                                        message.createdAt.replace("T", " ").take(16),
+                                        modifier = Modifier.align(Alignment.End),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant
+            ),
+            shadowElevation = 2.dp
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Box {
+                    IconButton(
+                        onClick = { attachmentMenuExpanded = true },
+                        enabled = enabled && !isRecording
+                    ) {
+                        Icon(Icons.Default.AttachFile, contentDescription = "إرفاق صورة أو PDF")
+                    }
+                    DropdownMenu(
+                        expanded = attachmentMenuExpanded,
+                        onDismissRequest = { attachmentMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("اختيار صورة أو PDF") },
+                            leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+                            onClick = {
+                                attachmentMenuExpanded = false
+                                documentLauncher.launch(arrayOf("image/*", "application/pdf"))
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("التقاط صورة بالكاميرا") },
+                            leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null) },
+                            onClick = {
+                                attachmentMenuExpanded = false
+                                cameraLauncher.launch(null)
+                            }
+                        )
+                    }
+                }
+
+                TextField(
+                    value = messageText,
+                    onValueChange = onMessageChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("اكتب رسالة...") },
+                    enabled = enabled && !isRecording,
+                    maxLines = 4,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent
+                    )
+                )
+
+                IconButton(
+                    onClick = { emojiDialogExpanded = true },
+                    enabled = enabled && !isRecording
+                ) {
+                    Icon(Icons.Default.EmojiEmotions, contentDescription = "إيموجي")
+                }
+
+                IconButton(
+                    onClick = {
+                        if (isRecording) {
+                            stopAudioRecordingAndSend()
+                        } else if (
+                            ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            startAudioRecording()
+                        } else {
+                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    enabled = enabled
+                ) {
+                    Icon(
+                        if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
+                        contentDescription = if (isRecording) "إيقاف وإرسال التسجيل" else "تسجيل صوت",
+                        tint = if (isRecording) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                FilledIconButton(
+                    onClick = onSend,
+                    enabled = enabled && messageText.isNotBlank() && !isRecording
+                ) {
+                    Icon(Icons.Default.Send, contentDescription = "إرسال")
+                }
+            }
+        }
     }
-    OutlinedTextField(
-        value = messageText,
-        onValueChange = onMessageChange,
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text("اكتب رسالة") },
-        enabled = enabled,
-        minLines = 2,
-        maxLines = 4
-    )
-    Button(
-        onClick = onSend,
-        enabled = enabled && messageText.isNotBlank(),
-        modifier = Modifier.fillMaxWidth()
-    ) { Text("إرسال الرسالة") }
+
+    if (emojiDialogExpanded) {
+        val emojis = listOf(
+            "😀", "😂", "😍", "🥰", "😊", "😉",
+            "👍", "👏", "🙏", "❤️", "🔥", "🎉",
+            "😢", "😎", "🤔", "✅", "❌", "📦"
+        )
+        AlertDialog(
+            onDismissRequest = { emojiDialogExpanded = false },
+            title = { Text("اختر إيموجي") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    emojis.chunked(6).forEach { group ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            group.forEach { emoji ->
+                                TextButton(
+                                    onClick = {
+                                        onMessageChange(messageText + emoji)
+                                        emojiDialogExpanded = false
+                                    }
+                                ) {
+                                    Text(emoji, style = MaterialTheme.typography.titleLarge)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { emojiDialogExpanded = false }) { Text("إغلاق") }
+            }
+        )
+    }
+
+    pendingDeleteMessageId?.let { messageId ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteMessageId = null },
+            title = { Text("حذف الرسالة") },
+            text = { Text("هل تريد حذف هذه الرسالة ومرفقها من المحادثة؟") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteMessage(messageId)
+                        pendingDeleteMessageId = null
+                    }
+                ) { Text("حذف") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteMessageId = null }) { Text("إلغاء") }
+            }
+        )
+    }
 }
