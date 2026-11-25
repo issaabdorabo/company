@@ -43,7 +43,7 @@ class LocalNetworkSyncServer(
     private val onApplyRemoteEntities: suspend (List<CloudEntityRecord>) -> Unit,
     private val hasAppliedSyncOperation: suspend (String) -> Boolean = { false },
     private val onMarkSyncOperationApplied: suspend (String) -> Unit = {},
-    private val onRemoteOperationAlert: (
+    private val onRemoteOperationAlert: suspend (
         subDeviceName: String,
         actorName: String,
         actionType: String,
@@ -811,15 +811,13 @@ class LocalNetworkSyncServer(
             val detailsToNotify = operationDetails.ifBlank {
                 "قام الجهاز الفرعي (${slot.deviceName}) بمزامنة عملية جديدة"
             }
-            runCatching {
-                onRemoteOperationAlert(
-                    slot.deviceName,
-                    actorName,
-                    actionType,
-                    titleToNotify,
-                    detailsToNotify
-                )
-            }
+            onRemoteOperationAlert(
+                slot.deviceName,
+                actorName,
+                actionType,
+                titleToNotify,
+                detailsToNotify
+            )
 
             val newVersion = getSyncVersion()
             jsonResponse(
