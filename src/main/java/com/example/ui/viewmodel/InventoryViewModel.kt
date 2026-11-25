@@ -118,7 +118,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         onExportEntities = { repository.exportAllEntitiesForCloud() },
         onExportAuditLogs = { device -> repository.getOperationLogsForDevice(device) },
         onApplyRemoteEntities = { records ->
-            repository.replaceDatabaseFromCloudEntitiesSafely(records)
+            // Do not acknowledge a sub-device operation or advance the shared revision
+            // until Room has committed the merged snapshot successfully.
+            repository.replaceDatabaseFromCloudEntitiesSafely(records).getOrThrow()
             preferences.incrementSyncRevision()
         },
         hasAppliedSyncOperation = { operationId -> repository.hasAppliedSyncOperation(operationId) },
