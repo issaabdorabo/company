@@ -154,7 +154,8 @@ class LocalNetworkSyncClient {
                     permissions = permissions,
                     isKicked = isKicked,
                     syncVersion = json.optLong("syncVersion", 1L),
-                    entities = entities
+                    entities = entities,
+                    auditLogs = LocalSyncJson.auditLogsFromJsonArray(json.optJSONArray("auditLogs"))
                 )
             }
         }
