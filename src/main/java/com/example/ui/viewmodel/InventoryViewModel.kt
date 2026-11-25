@@ -641,12 +641,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val cloudWarehouseIds = effectiveIds.map { localId ->
             cloudWarehouseMap[localId] ?: error("المخزن المحلي رقم $localId غير مربوط بمساحة العمل السحابية")
         }.toSet()
-        cloudCollaborationRepo.checkCloudWarehouseAccess(
+        val allowed = cloudCollaborationRepo.checkCloudWarehouseAccess(
             workspaceId = workspaceId,
             deviceId = deviceId,
             operationType = action.name,
             warehouseIds = cloudWarehouseIds
         )
+        if (!allowed) error("CLOUD_PERMISSION_DENIED")
     }
 
     // Multi-Device Setup & Controls
@@ -1324,6 +1325,26 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private suspend fun pollCloudIncomingOperations() {
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
         if (workspaceId.isBlank() || cloudCollaborationRepo.currentUserIdOrNull().isNullOrBlank()) return
+
+        // Keep the local Room database in sync even when the collaboration screen is not open.
+        runCatching {
+            val snapshot = cloudCollaborationRepo.fetchCloudEntitySnapshotVersioned(workspaceId)
+            val savedSignature = preferences.cloudSnapshotSignatureFlow.first()
+            if (snapshot.records.isNotEmpty() && savedSignature.isNotBlank() &&
+                snapshot.updatedAtSignature != savedSignature
+            ) {
+                if (repository.getPendingSyncOperations().isEmpty() &&
+                    repository.getCloudPendingSyncOperations().isEmpty()
+                ) {
+                    repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.records).getOrThrow()
+                    preferences.saveCloudSnapshotSignature(snapshot.updatedAtSignature)
+                } else {
+                    _lastSyncError.value = "توجد عمليات محلية معلقة؛ تم تأجيل استبدال البيانات حتى لا تضيع."
+                }
+            }
+        }.onFailure { failure ->
+            _lastSyncError.value = "تعذر تحديث العمليات السحابية: " + (failure.localizedMessage ?: failure.javaClass.simpleName)
+        }
 
         val notifications = cloudCollaborationRepo.listMyOperationNotifications(workspaceId)
         if (notifications.isEmpty()) return
@@ -3057,14 +3078,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     suspend fun saveSerialsAndGet(serials: List<ItemUnitSerialRecord>): List<ItemUnitSerialRecord> {
         val changed = findChangedSerialRecords(serials)
-        if (changed.isNotEmpty() && cloudAuthorizationEnabled.value) {
-            validateCloudWarehousePermission(
-                DeviceAction.EDIT_SERIALS,
-                changed.map { it.warehouseId }.toSet()
-            )
-        }
-        val saved = repository.saveSerialsAndReturn(serials)
-        if (changed.isNotEmpty()) {
+        if (changed.isEmpty()) return serials
+        try {
+            if (cloudAuthorizationEnabled.value) {
+                validateCloudWarehousePermission(
+                    DeviceAction.EDIT_SERIALS,
+                    changed.map { it.warehouseId }.toSet()
+                )
+            }
+            val saved = repository.saveSerialsAndReturn(serials)
             notifyAndPropagate(
                 action = DeviceAction.EDIT_SERIALS,
                 notificationTitle = "تحديث الأرقام التسلسلية والحالات والملاحظات",
@@ -3072,8 +3094,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 warehouseIds = changed.map { it.warehouseId }.toSet(),
                 targetItemIds = changed.map { it.itemId }.toSet()
             )
+            return saved
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            _userMessage.emit("تعذر حفظ الترقيم: " + (failure.localizedMessage ?: failure.javaClass.simpleName))
+            throw failure
         }
-        return saved
     }
 
     fun saveSerials(serials: List<ItemUnitSerialRecord>, onDone: () -> Unit = {}) {

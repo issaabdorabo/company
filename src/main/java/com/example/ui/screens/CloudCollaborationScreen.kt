@@ -118,9 +118,6 @@ fun CloudCollaborationScreen(
 
     var selectedTab by remember { mutableStateOf(0) }
     var workspaceName by remember { mutableStateOf("") }
-    var memberEmail by remember { mutableStateOf("") }
-    var memberDisplayName by remember { mutableStateOf("") }
-    var memberRole by remember { mutableStateOf("SUBUSER") }
     var selectedMemberId by remember { mutableStateOf("") }
     var messageText by remember(selectedConversation?.id) { mutableStateOf("") }
 
@@ -326,45 +323,10 @@ fun CloudCollaborationScreen(
                                 if (workspace.ownerUserId == currentUserId) {
                                     HorizontalDivider()
                                     Text(
-                                        "إضافة مستخدم إلى المساحة المشتركة",
+                                        "الحسابات التي سجلت الدخول ويمكن إضافتها",
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold
                                     )
-                                    OutlinedTextField(
-                                        value = memberEmail,
-                                        onValueChange = { memberEmail = it },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        label = { Text("بريد حساب Google للمستخدم") },
-                                        singleLine = true
-                                    )
-                                    OutlinedTextField(
-                                        value = memberDisplayName,
-                                        onValueChange = { memberDisplayName = it },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        label = { Text("اسم المستخدم (اختياري)") },
-                                        singleLine = true
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        FilterChip(
-                                            selected = memberRole == "SUBUSER",
-                                            onClick = { memberRole = "SUBUSER" },
-                                            label = { Text("مستخدم فرعي") }
-                                        )
-                                        FilterChip(
-                                            selected = memberRole == "MULTI_WAREHOUSE",
-                                            onClick = { memberRole = "MULTI_WAREHOUSE" },
-                                            label = { Text("متعدد المخازن") }
-                                        )
-                                    }
-                                    Button(
-                                        onClick = {
-                                            viewModel.addMember(memberEmail, memberDisplayName, memberRole)
-                                            memberEmail = ""
-                                            memberDisplayName = ""
-                                        },
-                                        enabled = !busy && memberEmail.contains("@"),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) { Text("إضافة إلى مساحة العمل") }
                                     Text(
                                         "يجب أن يسجل المستخدم الدخول إلى التطبيق بحساب Google مرة واحدة أولاً. بعد إضافته ستظهر له مساحة العمل نفسها تلقائياً.",
                                         style = MaterialTheme.typography.bodySmall,

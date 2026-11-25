@@ -400,7 +400,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
             membershipMap[warehouse.id] = repository.listWarehouseMemberships(warehouse.id)
         }
         _warehouseMemberships.value = membershipMap
-        _conversations.value = repository.listConversations(workspaceId)
+        _conversations.value = repository.listConversations(workspaceId, _activeWorkspace.value?.ownerUserId.orEmpty())
     }
 
     private suspend fun ensureCloudDeviceRegistered(workspace: CloudWorkspace, force: Boolean = false) {
@@ -434,20 +434,37 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
 
     private suspend fun openConversationInternal(conversationId: String) {
         val workspace = _activeWorkspace.value ?: error("لا توجد مساحة عمل محددة")
-        val conversation = repository.listConversations(workspace.id)
+        val conversation = repository.listConversations(workspace.id, workspace.ownerUserId)
             .firstOrNull { it.id == conversationId }
             ?: error("هذه المحادثة غير متاحة لهذا الحساب")
         messagesRealtimeJob?.cancel()
         _selectedConversation.value = conversation
         _messages.value = emptyList()
         messagesRealtimeJob = viewModelScope.launch {
-            repository.observeMessages(conversationId).collect {
-                runCatching {
-                    _messages.value = repository.listMessages(conversationId)
+            val realtimeJob = launch {
+                while (isActive) {
+                    try {
+                        repository.observeMessages(conversationId).collect {
+                            runCatching { _messages.value = repository.listMessages(conversationId) }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        delay(1_500L)
+                    }
+                    delay(1_500L)
                 }
             }
+            try {
+                while (isActive) {
+                    runCatching { _messages.value = repository.listMessages(conversationId) }
+                    delay(2_500L)
+                }
+            } finally {
+                realtimeJob.cancel()
+            }
         }
-        _conversations.value = repository.listConversations(workspace.id)
+        _conversations.value = repository.listConversations(workspace.id, workspace.ownerUserId)
     }
 
     private suspend fun runCloudAction(prefix: String, action: suspend () -> Unit) {

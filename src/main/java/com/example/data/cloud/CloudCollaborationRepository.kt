@@ -236,6 +236,12 @@ private data class CreateWarehouseConversationParams(
 )
 
 @Serializable
+private data class ConversationParticipant(
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("user_id") val userId: String
+)
+
+@Serializable
 private data class SendMessageParams(
     @SerialName("p_conversation") val conversation: String,
     @SerialName("p_client_message_id") val clientMessageId: String,
@@ -583,13 +589,33 @@ class CloudCollaborationRepository {
         )
     }
 
-    suspend fun listConversations(workspaceId: String): List<CloudConversation> =
-        client.postgrest["conversations"].select {
-            filter {
-            eq("workspace_id", workspaceId)
-        
-            }
+    suspend fun listConversations(workspaceId: String, ownerUserId: String): List<CloudConversation> {
+        val currentUserId = currentUserIdOrNull() ?: error("يجب تسجيل الدخول بحساب Google")
+        val visible = client.postgrest["conversations"].select {
+            filter { eq("workspace_id", workspaceId) }
         }.decodeList<CloudConversation>().sortedByDescending { it.createdAt }
+        if (currentUserId == ownerUserId) return visible
+
+        val assignedWarehouseIds = listWarehouses(workspaceId).filter { warehouse ->
+            listWarehouseMemberships(warehouse.id).any { grant ->
+                grant.userId == currentUserId &&
+                    grant.permissions["canView"]?.toString() == "true"
+            }
+        }.map { it.id }.toSet()
+        val directIds = visible.filter { it.conversationType == "DIRECT" }.map { it.id }
+        val participants = directIds.associateWith { id ->
+            client.postgrest["conversation_participants"].select {
+                filter { eq("conversation_id", id) }
+            }.decodeList<ConversationParticipant>().map { it.userId }.toSet()
+        }
+        return visible.filter { conversation ->
+            when (conversation.conversationType) {
+                "DIRECT" -> participants[conversation.id].orEmpty().contains(ownerUserId)
+                "WAREHOUSE_GROUP" -> conversation.warehouseId in assignedWarehouseIds
+                else -> false
+            }
+        }
+    }
 
     suspend fun createDirectConversation(workspaceId: String, otherUserId: String): String =
         client.postgrest.rpc(
