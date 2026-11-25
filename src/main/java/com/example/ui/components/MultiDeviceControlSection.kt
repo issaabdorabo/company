@@ -1049,6 +1049,11 @@ private fun WarehousePermissionsEditor(
                 PermissionSwitchRow("تعديل بيانات المخزون والأصناف في هذا المخزن", current.canEditInventory) { enabled -> update { it.copy(canEditInventory = enabled) } }
                 PermissionSwitchRow("حذف الأصناف المرتبطة بهذا المخزن", current.canDeleteItem) { enabled -> update { it.copy(canDeleteItem = enabled) } }
                 PermissionSwitchRow("تقارير هذا المخزن", current.canReports) { enabled -> update { it.copy(canReports = enabled) } }
+                if (visible) {
+                    PermissionSwitchRow("تخصيص هذا الجهاز للعمل دون اتصال (جهاز واحد فقط لكل مخزن)", current.canWorkOffline) { enabled ->
+                        update { it.copy(canWorkOffline = enabled) }
+                    }
+                }
                 PermissionSwitchRow("السماح لهذا الجهاز بالعمل دون اتصال (جهاز واحد لكل مخزن)", current.canWorkOffline) { enabled ->
                     update { it.copy(canWorkOffline = enabled) }
                 }
