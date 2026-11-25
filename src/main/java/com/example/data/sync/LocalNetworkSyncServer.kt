@@ -249,6 +249,7 @@ class LocalNetworkSyncServer(
                 isClaimed = false,
                 wasUnlinked = true,
                 boundInstallationId = "",
+                warehousePermissions = slot.warehousePermissions.map { it.copy(canWorkOffline = false) },
                 sessionToken = java.util.UUID.randomUUID().toString(),
                 updatedAt = System.currentTimeMillis()
             )
