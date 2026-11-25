@@ -106,7 +106,9 @@ data class CloudMessage(
     @SerialName("client_message_id") val clientMessageId: String,
     val body: String,
     @SerialName("attachment_path") val attachmentPath: String? = null,
-    @SerialName("created_at") val createdAt: String
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("edited_at") val editedAt: String? = null,
+    @SerialName("reply_to_message_id") val replyToMessageId: String? = null
 )
 
 @Serializable
@@ -648,16 +650,17 @@ class CloudCollaborationRepository {
         }
     ).decodeAs<String>()
 
-    suspend fun listMessages(conversationId: String): List<CloudMessage> =
-        client.postgrest["messages"].select {
-            filter {
-            eq("conversation_id", conversationId)
-        
-            }
-        }.decodeList<CloudMessage>().sortedBy { it.createdAt }
+    suspend fun listMessages(conversationId: String): List<CloudMessage> {
+        val hiddenIds = client.postgrest["message_user_deletions"].select {
+            filter { eq("user_id", currentUserIdOrNull() ?: error("يجب تسجيل الدخول")) }
+        }.decodeList<MessageDeletionRow>().map { it.messageId }.toSet()
+        return client.postgrest["messages"].select {
+            filter { eq("conversation_id", conversationId) }
+        }.decodeList<CloudMessage>().filterNot { it.id in hiddenIds }.sortedBy { it.createdAt }
+    }
 
-    suspend fun sendMessage(conversationId: String, body: String): CloudMessage =
-        insertMessage(conversationId, body.trim(), null)
+    suspend fun sendMessage(conversationId: String, body: String, replyToMessageId: String? = null): CloudMessage =
+        insertMessage(conversationId, body.trim(), null, replyToMessageId)
 
     suspend fun sendAttachment(
         conversationId: String,
@@ -697,7 +700,8 @@ class CloudCollaborationRepository {
     private suspend fun insertMessage(
         conversationId: String,
         body: String,
-        attachmentPath: String?
+        attachmentPath: String?,
+        replyToMessageId: String? = null
     ): CloudMessage {
         val cleanBody = body.trim()
         require(cleanBody.isNotBlank() && cleanBody.length <= 10_000) {
@@ -710,9 +714,29 @@ class CloudCollaborationRepository {
                 put("p_client_message_id", JsonPrimitive(UUID.randomUUID().toString()))
                 put("p_body", JsonPrimitive(cleanBody))
                 put("p_attachment_path", attachmentPath?.let(::JsonPrimitive) ?: JsonNull)
+                put("p_reply_to_message_id", replyToMessageId?.let(::JsonPrimitive) ?: JsonNull)
             }
         ).decodeAs<CloudMessage>()
     }
+
+    @Serializable
+    private data class MessageDeletionRow(@SerialName("message_id") val messageId: String)
+
+    suspend fun hideMessageForMe(messageId: String) {
+        client.postgrest.rpc(
+            "hide_message_for_me",
+            buildJsonObject { put("p_message", JsonPrimitive(messageId)) }
+        )
+    }
+
+    suspend fun editMessage(messageId: String, body: String): CloudMessage =
+        client.postgrest.rpc(
+            "edit_message",
+            buildJsonObject {
+                put("p_message", JsonPrimitive(messageId))
+                put("p_body", JsonPrimitive(body.trim()))
+            }
+        ).decodeAs<CloudMessage>()
 
     suspend fun deleteMessage(messageId: String) {
         val message = client.postgrest["messages"].select {
