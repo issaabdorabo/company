@@ -116,7 +116,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }
         },
         onExportEntities = { repository.exportAllEntitiesForCloud() },
-        onExportAuditLogs = { repository.getAllOperationLogsForSync() },
+        onExportAuditLogs = { deviceName -> repository.getOperationLogsForSyncToDevice(deviceName) },
         onApplyRemoteEntities = { records ->
             // Do not acknowledge a sub-device operation or advance the shared revision
             // until Room has committed the merged snapshot successfully.
