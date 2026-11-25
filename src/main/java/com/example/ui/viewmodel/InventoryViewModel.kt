@@ -1453,10 +1453,34 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private fun startCloudOutboxCoordinator() {
         cloudOutboxJob?.cancel()
         cloudOutboxJob = viewModelScope.launch {
+            var lastOfflinePermissionSyncAt = 0L
             while (isActive) {
                 runCatching { flushCloudPendingSyncOperations() }
                 runCatching { pollCloudIncomingOperations() }
+                val now = System.currentTimeMillis()
+                if (now - lastOfflinePermissionSyncAt >= 60_000L) {
+                    runCatching { syncOfflineDesignationsQuietly() }
+                    lastOfflinePermissionSyncAt = now
+                }
                 delay(15_000L)
+            }
+        }
+    }
+
+    private suspend fun syncOfflineDesignationsQuietly() {
+        if (!isMainDevice.value) return
+        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+        if (workspaceId.isBlank()) return
+        val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
+            slot.boundInstallationId.isNotBlank() &&
+                !slot.isKicked && !slot.wasUnlinked &&
+                slot.warehousePermissions.any { it.canWorkOffline && it.canView }
+        }
+        slots.forEach { slot ->
+            runCatching {
+                cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(workspaceId, slot)
+            }.onFailure { error ->
+                _lastSyncError.value = "تعذرت مزامنة تعيين العمل دون اتصال للجهاز ${slot.deviceName}: ${error.localizedMessage ?: "تحقق من الاتصال"}"
             }
         }
     }
