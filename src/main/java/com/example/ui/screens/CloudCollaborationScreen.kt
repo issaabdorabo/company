@@ -575,7 +575,10 @@ fun CloudCollaborationScreen(
                         }
                         HorizontalDivider()
                         Text("محادثات المخازن", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        warehouses.forEach { warehouse ->
+                        warehouses.filter { warehouse ->
+                            warehouseMemberships[warehouse.id].orEmpty()
+                                .count { it.permission("canView") } > 1
+                        }.forEach { warehouse ->
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -585,7 +588,7 @@ fun CloudCollaborationScreen(
                                 TextButton(
                                     onClick = { viewModel.startWarehouseConversation(warehouse) },
                                     enabled = !busy
-                                ) { Text("فتح مجموعة") }
+                                ) { Text("فتح المجموعة") }
                             }
                         }
                     }

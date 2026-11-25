@@ -594,14 +594,23 @@ class CloudCollaborationRepository {
         val visible = client.postgrest["conversations"].select {
             filter { eq("workspace_id", workspaceId) }
         }.decodeList<CloudConversation>().sortedByDescending { it.createdAt }
-        if (currentUserId == ownerUserId) return visible
 
-        val assignedWarehouseIds = listWarehouses(workspaceId).filter { warehouse ->
-            listWarehouseMemberships(warehouse.id).any { grant ->
-                grant.userId == currentUserId &&
-                    grant.permissions["canView"]?.toString() == "true"
+        val allWarehouses = listWarehouses(workspaceId)
+        val grantsByWarehouse = allWarehouses.associate { warehouse ->
+            warehouse.id to listWarehouseMemberships(warehouse.id)
+                .filter { it.permissions["canView"]?.toString() == "true" }
+        }
+        val multiUserWarehouseIds = grantsByWarehouse.filterValues { it.size > 1 }.keys
+        if (currentUserId == ownerUserId) {
+            return visible.filter { conversation ->
+                conversation.conversationType != "WAREHOUSE_GROUP" ||
+                    conversation.warehouseId in multiUserWarehouseIds
             }
-        }.map { it.id }.toSet()
+        }
+
+        val assignedWarehouseIds = multiUserWarehouseIds.filter { warehouseId ->
+            grantsByWarehouse[warehouseId].orEmpty().any { it.userId == currentUserId }
+        }.toSet()
         val directIds = visible.filter { it.conversationType == "DIRECT" }.map { it.id }
         val participants = directIds.associateWith { id ->
             client.postgrest["conversation_participants"].select {
