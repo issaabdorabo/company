@@ -114,6 +114,25 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 }
             }
+            val newlyUnlinkedDevices = devices.filter { slot ->
+                slot.wasUnlinked && previousById[slot.id]?.wasUnlinked != true
+            }
+            newlyUnlinkedDevices.forEach { unlinked ->
+                val oldFingerprint = previousById[unlinked.id]?.boundInstallationId.orEmpty()
+                if (oldFingerprint.isNotBlank()) {
+                    viewModelScope.launch {
+                        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                        if (workspaceId.isNotBlank()) {
+                            runCatching {
+                                cloudCollaborationRepo.clearOfflineWarehouseDesignationsForDevice(
+                                    workspaceId,
+                                    oldFingerprint
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         },
         onExportEntities = { repository.exportAllEntitiesForCloud() },
         onExportAuditLogs = { deviceName -> repository.getOperationLogsForSyncToDevice(deviceName) },
