@@ -108,7 +108,8 @@ import kotlinx.serialization.json.jsonPrimitive
 @Composable
 fun CloudCollaborationScreen(
     viewModel: CloudCollaborationViewModel,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onBeforeOpen: suspend () -> Unit = {}
 ) {
     val isAuthenticated by viewModel.isAuthenticated.collectAsState()
     val userEmail by viewModel.userEmail.collectAsState()
@@ -131,7 +132,10 @@ fun CloudCollaborationScreen(
     var selectedMemberId by remember { mutableStateOf("") }
     var messageText by remember(selectedConversation?.id) { mutableStateOf("") }
 
-    LaunchedEffect(Unit) { viewModel.refresh() }
+    LaunchedEffect(Unit) {
+        runCatching { onBeforeOpen() }
+        viewModel.refresh()
+    }
     LaunchedEffect(members, currentUserId) {
         if (selectedMemberId.isBlank() || members.none { it.userId == selectedMemberId }) {
             selectedMemberId = members.firstOrNull { it.userId != currentUserId && it.role != "OWNER" }?.userId.orEmpty()
