@@ -1151,10 +1151,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 preferences.updateSubDevicePermissions(snapshot.permissions)
                 val lastApplied = preferences.lastAppliedRevisionFlow.first()
                 if (snapshot.syncVersion != lastApplied) {
-                    if (snapshot.entities.isNotEmpty()) {
-                        repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.entities)
+                    if (snapshot.entities.isEmpty()) {
+                        val localEntities = repository.exportAllEntitiesForCloud()
+                        if (localEntities.isNotEmpty()) {
+                            // An empty remote response can be transient or incomplete. Never erase
+                            // an existing warehouse database from an empty snapshot.
+                            _lastSyncError.value = "وصلت لقطة مزامنة فارغة رغم وجود بيانات محلية؛ تم الاحتفاظ بالبيانات وإعادة المحاولة لاحقاً."
+                            return@onSuccess
+                        }
                     } else {
-                        repository.clearAllSyncedData()
+                        // Advance the revision only after the database replacement succeeds.
+                        // The previous code ignored Result.failure and marked the snapshot applied,
+                        // leaving the device on stale/partial inventory indefinitely.
+                        repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.entities).getOrThrow()
                     }
                     preferences.updateLastSync(snapshot.syncVersion)
                 } else {
