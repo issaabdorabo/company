@@ -30,7 +30,9 @@ data class Item(
     val smallUnitsPerMedium: Double = 1.0, // عدد الوحدات الصغرى في المتوسطة
     val openingStock: Double = 0.0, // الكمية الافتتاحية للمخزون (بالوحدة الصغرى)
     val category: String = "عام",
-    val minStockLevel: Double = 5.0,
+    val carType: String = "",
+    val carName: String = "",
+    val minStockLevel: Double = 0.0,
     val purchasePrice: Double = 0.0,
     val salePrice: Double = 0.0,
     val notes: String = "",

@@ -84,7 +84,7 @@ class DatabaseConverters {
         AppliedSyncOperation::class,
         CloudPendingSyncOperation::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
@@ -337,6 +337,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!hasColumn(db, "items", "carType")) {
+                    db.execSQL("ALTER TABLE `items` ADD COLUMN `carType` TEXT NOT NULL DEFAULT ''")
+                }
+                if (!hasColumn(db, "items", "carName")) {
+                    db.execSQL("ALTER TABLE `items` ADD COLUMN `carName` TEXT NOT NULL DEFAULT ''")
+                }
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -355,7 +366,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
-                        MIGRATION_11_12
+                        MIGRATION_11_12,
+                        MIGRATION_12_13
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()

@@ -132,6 +132,11 @@ fun ItemsScreen(
     var restrictedActionName by remember { mutableStateOf<String?>(null) }
 
     val itemsList = snapshot?.itemStockInfos ?: emptyList()
+    val existingCarTypes = remember(itemsList) {
+        itemsList.mapNotNull { it.item.carType.trim().takeIf(String::isNotEmpty) }
+            .distinct()
+            .sorted()
+    }
     val warehouses = snapshot?.warehouses ?: emptyList()
     val warehouseItemStocks = snapshot?.warehouseItemStocks ?: emptyList()
     val categoriesFromDb by viewModel.categories.collectAsState()
@@ -187,7 +192,9 @@ fun ItemsScreen(
             val matchesSearch = searchQuery.isBlank() ||
                 item.name.contains(searchQuery, ignoreCase = true) ||
                 item.barcode.contains(searchQuery, ignoreCase = true) ||
-                item.category.contains(searchQuery, ignoreCase = true)
+                item.category.contains(searchQuery, ignoreCase = true) ||
+                item.carType.contains(searchQuery, ignoreCase = true) ||
+                item.carName.contains(searchQuery, ignoreCase = true)
 
             val matchesCategory = selectedCategory == null ||
                 selectedCategory == "الكل" ||
@@ -383,6 +390,7 @@ fun ItemsScreen(
             unitsList = unitsFromDb,
             smallerUnitsList = smallerUnitsFromDb,
             categoriesList = categoriesFromDb,
+            existingCarTypes = existingCarTypes,
             viewModel = viewModel,
             onAddNewCategory = { cat -> viewModel.saveCategory(cat) },
             onDismiss = { showEditDialog = false },
@@ -554,6 +562,14 @@ private fun ItemCard(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
+                        if (item.carType.isNotBlank() || item.carName.isNotBlank()) {
+                            Text(
+                                text = listOf(item.carType, item.carName)
+                                    .filter { it.isNotBlank() }.joinToString(" • "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Surface(
                                 shape = RoundedCornerShape(4.dp),
@@ -796,6 +812,7 @@ private fun ItemFormDialog(
     unitsList: List<ItemUnit>,
     smallerUnitsList: List<SmallerUnit>,
     categoriesList: List<ItemCategory>,
+    existingCarTypes: List<String>,
     viewModel: InventoryViewModel,
     onAddNewCategory: (ItemCategory) -> Unit,
     onDismiss: () -> Unit,
@@ -806,6 +823,15 @@ private fun ItemFormDialog(
 
     var name by remember { mutableStateOf(initialItem?.name ?: "") }
     var barcode by remember { mutableStateOf(initialItem?.barcode ?: "") }
+    var carType by remember { mutableStateOf(initialItem?.carType ?: "") }
+    var carName by remember { mutableStateOf(initialItem?.carName ?: "") }
+    var carTypeDropdownExpanded by remember { mutableStateOf(false) }
+    val allCarTypes = remember(existingCarTypes, carType) {
+        (existingCarTypes + carType.trim().takeIf { it.isNotBlank() }.orEmpty())
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sorted()
+    }
 
     val packageUnitOptions = remember(unitsList) {
         unitsList.map { it.name }.distinct().ifEmpty { listOf("صندوق") }
@@ -975,8 +1001,9 @@ private fun ItemFormDialog(
     var hasSerialNumbers by remember { mutableStateOf(initialItem?.hasSerialNumbers ?: false) }
 
     var category by remember { mutableStateOf(initialItem?.category ?: categoriesList.firstOrNull()?.name ?: "عام") }
-    var minStock by remember { mutableStateOf(initialItem?.minStockLevel?.toInt()?.toString() ?: "5") }
-    var purchasePrice by remember { mutableStateOf(initialItem?.purchasePrice?.toString() ?: "0.0") }
+    var minStock by remember { mutableStateOf(initialItem?.minStockLevel?.toInt()?.toString() ?: "0") }
+    var purchasePrice by remember { mutableStateOf(initialItem?.purchasePrice?.toString() ?: "0") }
+    var salePrice by remember { mutableStateOf(initialItem?.salePrice?.toString() ?: "0") }
     var notes by remember { mutableStateOf(initialItem?.notes ?: "") }
 
     // Attachment
@@ -1051,7 +1078,7 @@ private fun ItemFormDialog(
                             Icon(Icons.Default.Warning, contentDescription = null, tint = WarningOrange, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "ملاحظة: هذا الصنف تمت عليه حركات مخزنية، لذا تم قفل الاسم والباركود والوحدات والكمية الافتتاحية حمايةً للبيانات. يُسمح بتعديل حد الطلب وسعر الشراء والأرقام التسلسلية والملاحظات والمرفق.",
+                                text = "ملاحظة: هذا الصنف تمت عليه حركات مخزنية، لذا تم قفل الاسم والباركود ونوع السيارة واسمها والوحدات والكمية الافتتاحية حمايةً للبيانات. يُسمح بتعديل حد الطلب والأسعار والأرقام التسلسلية والملاحظات والمرفق.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = WarningOrange,
                                 fontWeight = FontWeight.Bold
@@ -1187,6 +1214,60 @@ private fun ItemFormDialog(
                         }
                     }
                 }
+
+                if (!hasTransactions) {
+                    ExposedDropdownMenuBox(
+                        expanded = carTypeDropdownExpanded,
+                        onExpandedChange = { carTypeDropdownExpanded = !carTypeDropdownExpanded },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = carType,
+                            onValueChange = {
+                                carType = it
+                                carTypeDropdownExpanded = true
+                            },
+                            enabled = true,
+                            label = { Text("نوع السيارة") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = carTypeDropdownExpanded) },
+                            modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            singleLine = true
+                        )
+                        ExposedDropdownMenu(
+                            expanded = carTypeDropdownExpanded && allCarTypes.isNotEmpty(),
+                            onDismissRequest = { carTypeDropdownExpanded = false }
+                        ) {
+                            allCarTypes.forEach { type ->
+                                DropdownMenuItem(
+                                    text = { Text(type) },
+                                    onClick = {
+                                        carType = type
+                                        carTypeDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = carType,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("نوع السيارة") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                OutlinedTextField(
+                    value = carName,
+                    onValueChange = { carName = it },
+                    readOnly = hasTransactions,
+                    enabled = !hasTransactions,
+                    label = { Text("اسم السيارة") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
 
                 // Package Unit & Filtered Smaller Unit Row (No + Add Unit button!)
                 Row(
@@ -1622,6 +1703,14 @@ private fun ItemFormDialog(
                         singleLine = true
                     )
                 }
+                OutlinedTextField(
+                    value = salePrice,
+                    onValueChange = { salePrice = it },
+                    label = { Text("سعر البيع الافتراضي") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
 
                 OutlinedTextField(
                     value = notes,
@@ -1729,8 +1818,9 @@ private fun ItemFormDialog(
                     val smallerCap = (smallerUnitCapacityText.toDoubleOrNull() ?: 1.0).coerceAtLeast(0.01)
 
                     val opening = computedOpeningStock
-                    val minStockVal = minStock.toDoubleOrNull() ?: 5.0
+                    val minStockVal = minStock.toDoubleOrNull() ?: 0.0
                     val priceVal = purchasePrice.toDoubleOrNull() ?: 0.0
+                    val salePriceVal = salePrice.toDoubleOrNull() ?: 0.0
 
                     val updated = (initialItem ?: Item(name = name)).copy(
                         name = name.trim(),
@@ -1746,8 +1836,11 @@ private fun ItemFormDialog(
                         openingStock = opening,
                         hasSerialNumbers = hasSerialNumbers,
                         category = category.trim().ifBlank { "عام" },
+                        carType = carType.trim(),
+                        carName = carName.trim(),
                         minStockLevel = minStockVal,
                         purchasePrice = priceVal,
+                        salePrice = salePriceVal,
                         notes = notes.trim(),
                         attachmentUri = attachmentUri,
                         attachmentType = attachmentType

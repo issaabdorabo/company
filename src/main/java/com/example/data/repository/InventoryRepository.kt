@@ -1261,6 +1261,8 @@ class InventoryRepository(
                 put("smallUnitsPerMedium", i.smallUnitsPerMedium)
                 put("openingStock", i.openingStock)
                 put("category", i.category)
+                put("carType", i.carType)
+                put("carName", i.carName)
                 put("minStockLevel", i.minStockLevel)
                 put("purchasePrice", i.purchasePrice)
                 put("salePrice", i.salePrice)
@@ -1529,7 +1531,9 @@ class InventoryRepository(
                             smallUnitsPerMedium = obj.optDouble("smallUnitsPerMedium", 1.0),
                             openingStock = obj.optDouble("openingStock", 0.0),
                             category = obj.optString("category", "عام"),
-                            minStockLevel = obj.optDouble("minStockLevel", 5.0),
+                            carType = obj.optString("carType", ""),
+                            carName = obj.optString("carName", ""),
+                            minStockLevel = obj.optDouble("minStockLevel", 0.0),
                             purchasePrice = obj.optDouble("purchasePrice", 0.0),
                             salePrice = obj.optDouble("salePrice", 0.0),
                             notes = obj.optString("notes", ""),
@@ -2019,6 +2023,8 @@ class InventoryRepository(
                         "smallUnitsPerMedium" to i.smallUnitsPerMedium,
                         "openingStock" to i.openingStock,
                         "category" to i.category,
+                        "carType" to i.carType,
+                        "carName" to i.carName,
                         "minStockLevel" to i.minStockLevel,
                         "purchasePrice" to i.purchasePrice,
                         "salePrice" to i.salePrice,
@@ -2402,7 +2408,9 @@ class InventoryRepository(
                                 smallUnitsPerMedium = asDouble(p, "smallUnitsPerMedium", 1.0),
                                 openingStock = asDouble(p, "openingStock", 0.0),
                                 category = asStr(p, "category", "عام"),
-                                minStockLevel = asDouble(p, "minStockLevel", 5.0),
+                                carType = asStr(p, "carType"),
+                                carName = asStr(p, "carName"),
+                                minStockLevel = asDouble(p, "minStockLevel", 0.0),
                                 purchasePrice = asDouble(p, "purchasePrice", 0.0),
                                 salePrice = asDouble(p, "salePrice", 0.0),
                                 notes = asStr(p, "notes"),
