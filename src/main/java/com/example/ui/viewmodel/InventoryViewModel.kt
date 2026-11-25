@@ -590,10 +590,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun offlineWarehouseConflict(
         grants: List<WarehousePermission>,
+        existingDevices: List<LinkedSubDevice>,
         excludingSlotId: String?
     ): String? {
         val requested = grants.filter { it.canWorkOffline && it.canView }
-        val devices = linkedSubDevices.value.filter {
+        val devices = existingDevices.filter {
             it.id != excludingSlotId && !it.isKicked && !it.wasUnlinked
         }
         val conflict = requested.firstNotNullOfOrNull { grant ->
@@ -808,7 +809,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (!requireMainDeviceForDeviceManagement()) return@launch
             val cleanName = deviceName.trim().ifBlank { "جهاز فرعي #${linkedSubDevices.value.size + 1}" }
             val currentDevices = preferences.getLinkedSubDevicesSnapshot()
-            val offlineConflict = offlineWarehouseConflict(warehousePermissions, excludingSlotId = null)
+            val offlineConflict = offlineWarehouseConflict(warehousePermissions, currentDevices, excludingSlotId = null)
             if (offlineConflict != null) {
                 _userMessage.emit(offlineConflict)
                 return@launch
@@ -907,7 +908,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx >= 0) {
-                val offlineConflict = offlineWarehouseConflict(warehousePermissions, excludingSlotId = slotId)
+                val offlineConflict = offlineWarehouseConflict(warehousePermissions, current, excludingSlotId = slotId)
                 if (offlineConflict != null) {
                     _userMessage.emit(offlineConflict)
                     return@launch
