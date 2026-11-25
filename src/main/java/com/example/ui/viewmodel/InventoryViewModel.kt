@@ -1033,14 +1033,25 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx >= 0) {
-                val targetName = current[idx].deviceName
-                current[idx] = current[idx].copy(
+                val previous = current[idx]
+                val targetName = previous.deviceName
+                current[idx] = previous.copy(
                     isKicked = true,
+                    warehousePermissions = previous.warehousePermissions.map { it.copy(canWorkOffline = false) },
                     sessionToken = UUID.randomUUID().toString(), // invalidate existing token
                     updatedAt = System.currentTimeMillis()
                 )
                 preferences.saveLinkedSubDevices(current)
                 preferences.incrementSyncRevision()
+                val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                if (workspaceId.isNotBlank() && previous.boundInstallationId.isNotBlank()) {
+                    runCatching {
+                        cloudCollaborationRepo.clearOfflineWarehouseDesignationsForDevice(
+                            workspaceId,
+                            previous.boundInstallationId
+                        )
+                    }
+                }
                 repository.recordOperation(OperationAuditLog(actorName = userName.value.ifBlank { "المسؤول" }, deviceName = "الجهاز الرئيسي", operationType = "KICK_DEVICE", title = "طرد جهاز فرعي", details = "تم طرد الجهاز ($targetName) وإبطال رمز جلسته. سيُمسح محتواه عند أول اتصال يصل إليه أمر الإيقاف"))
                 notificationManager.notifyOperation("طرد جهاز فرعي", "تم طرد الجهاز ($targetName)", false)
                 _userMessage.emit("تم إبطال جلسة ($targetName). سيُمسح محتواه تلقائياً فور وصول أمر الإيقاف إليه عبر الاتصال")
