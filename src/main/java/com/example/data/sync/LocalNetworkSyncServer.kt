@@ -698,7 +698,8 @@ class LocalNetworkSyncServer(
                 )
             }
 
-            val legacyGlobalGrant = slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty()
+            val globalWarehouseGrant = slot.canViewAllWarehouses
+            val legacyGlobalGrant = globalWarehouseGrant && slot.warehousePermissions.isEmpty()
             val allowed = if (actionType == "BACKUP_RESTORE") {
                 slot.canBackup
             } else if (actionType == "ADD_OR_MANAGE_CATALOG") {
@@ -712,7 +713,7 @@ class LocalNetworkSyncServer(
                         legacyGlobalGrant && when (actionType) {
                             "INWARD" -> slot.canInward
                             "DISBURSEMENT", "DISBURSE_OR_TRANSFER" -> slot.canDisburse
-                            "TRANSFER" -> slot.canDisburse
+                            "TRANSFER" -> false
                             "EDIT_OR_DELETE" -> slot.canEditDelete
                             "ADJUST_STOCK" -> slot.canEditInventory
                             "EDIT_INVENTORY", "EDIT_SERIALS" -> slot.canEditInventory
@@ -721,7 +722,7 @@ class LocalNetworkSyncServer(
                             "DELETE_ISSUE_VOUCHER" -> slot.canDeleteIssueVoucher
                             "EDIT_SUPPLY_VOUCHER" -> slot.canEditSupplyVoucher
                             "DELETE_SUPPLY_VOUCHER" -> slot.canDeleteSupplyVoucher
-                            "VIEW_REPORTS" -> true
+                            "VIEW_REPORTS" -> false
                             else -> false
                         }
                     } else when (actionType) {
