@@ -72,6 +72,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as InventoryApp
@@ -80,6 +81,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudBackupRepo = app.cloudBackupRepository
     private val cloudCollaborationRepo = CloudCollaborationRepository()
     private val notificationManager = AppNotificationManager(application)
+
+    private val activeAuthorizedActions = AtomicInteger(0)
+    private val _isOperationRunning = MutableStateFlow(false)
+    val isOperationRunning: StateFlow<Boolean> = _isOperationRunning.asStateFlow()
 
     private val syncClient = LocalNetworkSyncClient()
 
@@ -561,6 +566,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             onDenied = { viewModelScope.launch { _userMessage.emit(deniedMessage) } }
         ) {
             viewModelScope.launch {
+                if (activeAuthorizedActions.incrementAndGet() == 1) _isOperationRunning.value = true
                 try {
                     validateCloudWarehousePermission(action, warehouseIds)
                     operation()
@@ -568,7 +574,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     throw cancelled
                 } catch (error: Exception) {
                     val detail = error.localizedMessage ?: error.javaClass.simpleName
-                    _userMessage.emit("تم منع العملية عبر صلاحيات السحابة: $detail")
+                    _userMessage.emit("تعذر تنفيذ العملية: $detail")
+                } finally {
+                    if (activeAuthorizedActions.decrementAndGet() <= 0) {
+                        activeAuthorizedActions.set(0)
+                        _isOperationRunning.value = false
+                    }
                 }
             }
         }
