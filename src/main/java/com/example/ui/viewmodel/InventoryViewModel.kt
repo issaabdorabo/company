@@ -1119,6 +1119,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 current.removeAll { it.id == slotId }
                 preferences.saveLinkedSubDevices(current)
                 preferences.incrementSyncRevision()
+                val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                if (workspaceId.isNotBlank() && removed.boundInstallationId.isNotBlank()) {
+                    runCatching {
+                        cloudCollaborationRepo.clearOfflineWarehouseDesignationsForDevice(
+                            workspaceId,
+                            removed.boundInstallationId
+                        )
+                    }
+                }
                 _userMessage.emit("تم حذف سجل الجهاز (${removed.deviceName})")
             }
         }
