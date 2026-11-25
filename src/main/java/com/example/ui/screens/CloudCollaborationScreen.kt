@@ -1377,34 +1377,42 @@ private fun ChatConversationPanel(
     }
 
     if (emojiDialogExpanded) {
-        val emojis = listOf(
-            "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "😉", "😊",
-            "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "😋", "😛", "😜", "🤪", "😎",
-            "🤔", "🫡", "🤫", "🤭", "🥱", "😴", "😢", "😭", "😤", "😡", "🤯", "🥳",
-            "😱", "🤗", "🫣", "😶", "🙄", "😬", "🤐", "🥺", "😔", "😌", "🤒", "🤕",
-            "👍", "👎", "👌", "✌️", "🤞", "🤟", "🤘", "👏", "🙌", "👐", "🤲", "🙏",
-            "💪", "🫶", "👋", "🤝", "👀", "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤",
-            "🤍", "💔", "💕", "💞", "💯", "💢", "💥", "💫", "💦", "💤", "🔥", "✨",
-            "🎉", "🎊", "🎁", "🏆", "✅", "❌", "⚠️", "⭐", "🌟", "📦", "🚚", "💰"
+        val categories = linkedMapOf(
+            "الوجوه" to listOf("😀","😃","😄","😁","😆","😅","🤣","😂","🙂","🙃","😉","😊","😇","🥰","😍","🤩","😘","😋","😎","🤔","🫡","🤫","🥱","😴","😢","😭","😤","😡","🤯","🥳","😱","🤗","🥺","😔","😌","🙄","😬","🤐"),
+            "الأشخاص" to listOf("👍","👎","👌","✌️","🤞","🤟","🤘","👏","🙌","👐","🤲","🙏","💪","🫶","👋","🤝","👀","👶","👨","👩","🧑","👮","🧑‍💼"),
+            "القلوب" to listOf("❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","💕","💞","💓","💗","💖","💘","💝","💟"),
+            "الرموز" to listOf("💯","💢","💥","💫","💦","💤","🔥","✨","🎉","🎊","✅","❌","⚠️","⭐","🌟","☑️","❗","❓","💬"),
+            "الأشياء" to listOf("🎁","🏆","📦","🚚","💰","📱","💻","🔧","🔨","🛠️","🚗","🏠","📅","📎","📌","📝")
         )
+        val emojis = categories[selectedEmojiCategory] ?: categories.values.first()
         AlertDialog(
             onDismissRequest = { emojiDialogExpanded = false },
             title = { Text("اختر إيموجي") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    emojis.chunked(6).forEach { group ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            group.forEach { emoji ->
-                                TextButton(
-                                    onClick = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        categories.keys.forEach { category ->
+                            FilterChip(
+                                selected = selectedEmojiCategory == category,
+                                onClick = { selectedEmojiCategory = category },
+                                label = { Text(category) }
+                            )
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        emojis.chunked(6).forEach { group ->
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                group.forEach { emoji ->
+                                    TextButton(onClick = {
                                         onMessageChange(messageText + emoji)
                                         emojiDialogExpanded = false
-                                    }
-                                ) {
-                                    Text(emoji, style = MaterialTheme.typography.titleLarge)
+                                    }) { Text(emoji, style = MaterialTheme.typography.titleLarge) }
                                 }
                             }
                         }
