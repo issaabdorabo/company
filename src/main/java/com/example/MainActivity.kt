@@ -491,7 +491,8 @@ fun MainApp(
                                 AppNavDestination.DEVICES -> DeviceManagementScreen(viewModel = viewModel)
                                 AppNavDestination.CLOUD_COLLABORATION -> CloudCollaborationScreen(
                                     viewModel = cloudViewModel,
-                                    onOpenSettings = { currentDestination = AppNavDestination.SETTINGS }
+                                    onOpenSettings = { currentDestination = AppNavDestination.SETTINGS },
+                                    onBeforeOpen = { viewModel.flushPendingOperationsBeforeCollaboration() }
                                 )
                             }
                         }
