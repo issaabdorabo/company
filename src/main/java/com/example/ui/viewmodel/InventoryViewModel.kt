@@ -1517,6 +1517,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         return System.currentTimeMillis()
     }
 
+    suspend fun flushPendingOperationsBeforeCollaboration() {
+        val localPendingOk = if (!isMainDevice.value && isSubConnected.value) {
+            flushPendingSubDeviceSyncOperations()
+        } else true
+        val cloudPendingOk = flushCloudPendingSyncOperations()
+        if (!localPendingOk || !cloudPendingOk) {
+            _lastSyncError.value = "توجد عمليات محفوظة محلياً لم تكتمل مزامنتها بعد؛ ستبقى محفوظة حتى نجاح الرفع."
+        }
+    }
+
     private suspend fun flushCloudPendingSyncOperations(): Boolean = cloudPushMutex.withLock {
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
         val deviceId = preferences.cloudDeviceIdFlow.first()
