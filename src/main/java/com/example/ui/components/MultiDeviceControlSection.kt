@@ -807,13 +807,13 @@ private fun SubDeviceManagementCard(
     var editGeneral by remember(slot.id) { mutableStateOf(slot.canEditDelete) }
     var expanded by remember(slot.id) { mutableStateOf(false) }
 
-    val isOnline = slot.isClaimed && !slot.isKicked &&
+    val isOnline = slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
         System.currentTimeMillis() - slot.lastSeenAt < 15_000L
     val statusText = when {
+        slot.wasUnlinked -> "تم فك الارتباط – جاهز لإعادة الاتصال"
         slot.isKicked -> "موقوف"
         isOnline -> "متصل الآن"
         slot.isClaimed -> "غير متصل"
-        slot.wasUnlinked -> "تم فك الارتباط"
         else -> "بانتظار الربط"
     }
     val statusColor = when {
@@ -944,7 +944,7 @@ private fun SubDeviceManagementCard(
                         Text("رمز الربط", fontSize = 12.sp)
                     }
                 }
-                if (!slot.isKicked) {
+                if (!slot.isKicked && !slot.wasUnlinked) {
                     OutlinedButton(
                         onClick = onKick,
                         modifier = Modifier.weight(1f).testTag("kick_device_btn_${slot.id}"),
@@ -965,12 +965,12 @@ private fun SubDeviceManagementCard(
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(17.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("إعادة التفعيل", fontSize = 12.sp)
+                        Text(if (slot.wasUnlinked) "إعادة الاتصال" else "إعادة التفعيل", fontSize = 12.sp)
                     }
                 }
             }
 
-            if (expanded && !slot.isKicked) {
+            if (expanded && !slot.isKicked && !slot.wasUnlinked) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Text(
                     "إعدادات وصلاحيات الجهاز",
