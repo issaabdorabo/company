@@ -78,7 +78,8 @@ object LocalSyncJson {
                         canReports = g.optBoolean("canReports", false),
                         canEdit = g.optBoolean("canEdit", false),
                         canEditInventory = g.optBoolean("canEditInventory", g.optBoolean("canEdit", false)),
-                        canDeleteItem = g.optBoolean("canDeleteItem", g.optBoolean("canEdit", false))
+                        canDeleteItem = g.optBoolean("canDeleteItem", g.optBoolean("canEdit", false)),
+                        canWorkOffline = g.optBoolean("canWorkOffline", false)
                     ))
                 }
             }
