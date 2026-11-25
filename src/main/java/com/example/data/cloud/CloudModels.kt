@@ -15,7 +15,8 @@ data class WarehousePermission(
     val canReports: Boolean = false,
     val canEdit: Boolean = false,
     val canEditInventory: Boolean = canEdit,
-    val canDeleteItem: Boolean = canEdit
+    val canDeleteItem: Boolean = canEdit,
+    val canWorkOffline: Boolean = false
 )
 
 data class DevicePermissions(
