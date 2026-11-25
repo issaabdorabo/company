@@ -398,6 +398,7 @@ class LocalNetworkSyncServer(
                 put("permissions", LocalSyncJson.permissionsToJson(slot.toPermissions()))
                 put("syncVersion", syncVersion)
                 put("entities", LocalSyncJson.upsertsToJsonArray(entities))
+                put("auditLogs", LocalSyncJson.auditLogsToJsonArray(onExportAuditLogs(slot.deviceName)))
             }
         )
     }
