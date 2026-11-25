@@ -156,7 +156,6 @@ fun CloudCollaborationScreen(
                 viewModel.sendAttachment(name, mime, bytes)
             },
             onDeleteMessage = { messageId -> viewModel.hideMessageForMe(messageId) },
-                            onEditMessage = { messageId, body -> viewModel.editMessage(messageId, body) },
             onEditMessage = { messageId, body -> viewModel.editMessage(messageId, body) },
             onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
             onBack = { viewModel.closeConversation() },
@@ -587,6 +586,7 @@ fun CloudCollaborationScreen(
                                 viewModel.sendAttachment(name, mime, bytes)
                             },
                             onDeleteMessage = { messageId -> viewModel.hideMessageForMe(messageId) },
+                            onEditMessage = { messageId, body -> viewModel.editMessage(messageId, body) },
                             onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
                             onBack = { viewModel.closeConversation() },
                             enabled = !busy
