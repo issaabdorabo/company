@@ -715,7 +715,7 @@ class LocalNetworkSyncServer(
                             "DISBURSEMENT", "DISBURSE_OR_TRANSFER" -> slot.canDisburse
                             "TRANSFER" -> false
                             "EDIT_OR_DELETE" -> slot.canEditDelete
-                            "ADJUST_STOCK" -> slot.canEditInventory
+                            "ADJUST_STOCK" -> false
                             "EDIT_INVENTORY", "EDIT_SERIALS" -> slot.canEditInventory
                             "DELETE_ITEM" -> slot.canDeleteItem
                             "EDIT_ISSUE_VOUCHER" -> slot.canEditIssueVoucher
