@@ -1032,7 +1032,7 @@ private fun WarehousePermissionsEditor(
                 if (warehouseExpanded) {
                 if (!allWarehouses) {
                     PermissionSwitchRow("إظهار هذا المخزن", current.canView) { enabled ->
-                        val updated = current.copy(canView = enabled)
+                        val updated = current.copy(canView = enabled, canWorkOffline = if (enabled) current.canWorkOffline else false)
                         onGrantsChange((grants.filterNot { it.warehouseId == warehouse.id } + updated))
                     }
                 }
