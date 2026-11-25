@@ -769,7 +769,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val detail = exception.localizedMessage.orEmpty()
             when {
                 detail.contains("WAREHOUSE_LOCKED_BY_ASSIGNED_USER", ignoreCase = true) ->
-                    throw IllegalStateException("هذا المخزن مخصص لجهاز فرعي محدد للعمل دون اتصال، ولا يمكن للأجهزة الأخرى تنفيذ عمليات عليه حتى إلغاء التخصيص.", exception)
+                    throw IllegalStateException("الجهاز الفرعي المخصص لهذا المخزن يستخدمه حالياً؛ انتظر حتى ينتهي أو ألغِ تخصيصه.", exception)
                 detail.contains("WAREHOUSE_ACCESS_DENIED", ignoreCase = true) ->
                     throw IllegalStateException("لا تملك الصلاحية المطلوبة لتنفيذ هذه العملية في المخزن المحدد.", exception)
                 else -> throw exception
