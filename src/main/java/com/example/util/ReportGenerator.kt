@@ -20,7 +20,7 @@ object ReportGenerator {
     enum class ReportColumn(val id: String, val titleAr: String) {
         SERIAL("serial", "م"),
         VOUCHER_NUMBER("voucher_num", "رقم الحركة"),
-        ITEM_NAME("name", "اسم الصنف"),
+        ITEM_NAME("name", "الصنف / السيارة"),
         ITEM_UNIT("unit", "الوحدة"),
         WAREHOUSE("warehouse", "المخزن"),
         BENEFICIARY("beneficiary", "الجهة المستفيدة"),

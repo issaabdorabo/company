@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -148,6 +149,17 @@ fun ReportsScreen(
     }
     val reportWarehouseIds = warehouses.map { it.id }.toSet()
     val allItems = snapshot?.items ?: emptyList()
+    val reportItemNames = remember(allItems) {
+        allItems.associate { item ->
+            val label = listOf(item.name, item.carType, item.carName)
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .joinToString(" • ")
+            item.id to label
+        }
+    }
+    fun reportItemName(itemId: Long, fallback: String): String =
+        reportItemNames[itemId]?.takeIf { it.isNotBlank() } ?: fallback
     val allVouchers = (snapshot?.vouchers ?: emptyList()).filter { v ->
         (v.voucher.sourceWarehouseId == null || v.voucher.sourceWarehouseId in reportWarehouseIds) &&
             (v.voucher.destinationWarehouseId == null || v.voucher.destinationWarehouseId in reportWarehouseIds)
@@ -206,7 +218,7 @@ fun ReportsScreen(
                         ReportGenerator.ReportRowData(
                             voucherNumber = "-",
                             warehouseName = stock.warehouseName,
-                            itemName = stock.itemName,
+                            itemName = reportItemName(stock.itemId, stock.itemName),
                             itemUnit = stock.itemUnit,
                             beneficiaryName = "-",
                             receiverName = "-",
@@ -274,7 +286,7 @@ fun ReportsScreen(
                                 ReportGenerator.ReportRowData(
                                     voucherNumber = v.voucherNumber,
                                     warehouseName = wName,
-                                    itemName = itm.itemName,
+                                    itemName = reportItemName(itm.itemId, itm.itemName),
                                     itemUnit = itm.itemUnit,
                                     beneficiaryName = v.beneficiaryName.ifBlank { "-" },
                                     supplierName = v.supplierName.ifBlank { "-" },
@@ -325,7 +337,7 @@ fun ReportsScreen(
                                         ReportGenerator.ReportRowData(
                                             voucherNumber = "${v.voucherNumber} ($direction)",
                                             warehouseName = wName,
-                                            itemName = itm.itemName,
+                                            itemName = reportItemName(itm.itemId, itm.itemName),
                                             itemUnit = itm.itemUnit,
                                             beneficiaryName = v.beneficiaryName.ifBlank { "-" },
                                             supplierName = v.supplierName.ifBlank { "-" },
@@ -925,7 +937,11 @@ fun ReportsScreen(
                             .horizontalScroll(horizontalScrollState)
                             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
                     ) {
-                        Column {
+                        Column(
+                            modifier = Modifier
+                                .heightIn(max = 360.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
                             // Header Row
                             Row(
                                 modifier = Modifier

@@ -132,8 +132,9 @@ fun ItemsScreen(
     var restrictedActionName by remember { mutableStateOf<String?>(null) }
 
     val itemsList = snapshot?.itemStockInfos ?: emptyList()
-    val existingCarTypes = remember(itemsList) {
-        itemsList.mapNotNull { it.item.carType.trim().takeIf(String::isNotEmpty) }
+    val existingCarTypes = remember(snapshot?.items) {
+        snapshot?.items.orEmpty()
+            .mapNotNull { it.carType.trim().takeIf(String::isNotEmpty) }
             .distinct()
             .sorted()
     }
