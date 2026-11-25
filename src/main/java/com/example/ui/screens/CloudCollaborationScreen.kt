@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -140,16 +141,16 @@ fun CloudCollaborationScreen(
             error = error,
             notice = notice,
             onMessageChange = { messageText = it },
-            onSend = {
-                if (messageText.isNotBlank()) {
-                    viewModel.sendMessage(messageText)
+            onSend = { body, replyId ->
+                if (body.isNotBlank()) {
+                    viewModel.sendMessage(body, replyId)
                     messageText = ""
                 }
             },
             onSendAttachment = { name, mime, bytes ->
                 viewModel.sendAttachment(name, mime, bytes)
             },
-            onDeleteMessage = { messageId -> viewModel.deleteMessage(messageId) },
+            onDeleteMessage = { messageId -> viewModel.hideMessageForMe(messageId) },
             onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
             onBack = { viewModel.closeConversation() },
             enabled = !busy
@@ -571,14 +572,14 @@ fun CloudCollaborationScreen(
                             error = error,
                             notice = notice,
                             onMessageChange = { messageText = it },
-                            onSend = {
-                                viewModel.sendMessage(messageText)
+                            onSend = { body, replyId ->
+                                if (body.isNotBlank()) viewModel.sendMessage(body, replyId)
                                 messageText = ""
                             },
                             onSendAttachment = { name, mime, bytes ->
                                 viewModel.sendAttachment(name, mime, bytes)
                             },
-                            onDeleteMessage = { messageId -> viewModel.deleteMessage(messageId) },
+                            onDeleteMessage = { messageId -> viewModel.hideMessageForMe(messageId) },
                             onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
                             onBack = { viewModel.closeConversation() },
                             enabled = !busy
@@ -697,7 +698,7 @@ private fun ChatConversationPanel(
     error: String?,
     notice: String?,
     onMessageChange: (String) -> Unit,
-    onSend: () -> Unit,
+    onSend: (String, String?) -> Unit,
     onSendAttachment: (String, String, ByteArray) -> Unit,
     onDeleteMessage: (String) -> Unit,
     onResolveAttachment: suspend (String) -> String,
@@ -712,6 +713,8 @@ private fun ChatConversationPanel(
     var attachmentMenuExpanded by remember { mutableStateOf(false) }
     var emojiDialogExpanded by remember { mutableStateOf(false) }
     var pendingDeleteMessageId by remember { mutableStateOf<String?>(null) }
+    var selectedMessageId by remember { mutableStateOf<String?>(null) }
+    var replyToMessageId by remember { mutableStateOf<String?>(null) }
     var audioRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
     var recordedAudioFile by remember { mutableStateOf<File?>(null) }
@@ -963,6 +966,16 @@ private fun ChatConversationPanel(
             }
         }
 
+        selectedMessageId?.let { selectedId ->
+            val selected = messages.firstOrNull { it.id == selectedId }
+            if (selected != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { replyToMessageId = selected.id; selectedMessageId = null }) { Text("رد على الرسالة") }
+                    TextButton(onClick = { selectedMessageId = null }) { Text("إلغاء التحديد") }
+                }
+            }
+        }
+
         error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
@@ -999,7 +1012,10 @@ private fun ChatConversationPanel(
                             horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start
                         ) {
                             Surface(
-                                modifier = Modifier.fillMaxWidth(0.88f),
+                                modifier = Modifier.fillMaxWidth(0.88f).combinedClickable(
+                                    onClick = { selectedMessageId = if (selectedMessageId == message.id) null else message.id },
+                                    onLongClick = { selectedMessageId = message.id }
+                                ),
                                 color = if (mine) MaterialTheme.colorScheme.primaryContainer
                                 else MaterialTheme.colorScheme.surface,
                                 shape = RoundedCornerShape(
@@ -1055,6 +1071,16 @@ private fun ChatConversationPanel(
                                         }
                                     }
 
+                                    message.replyToMessageId?.let { replyId ->
+                                        messages.firstOrNull { it.id == replyId }?.let { replied ->
+                                            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
+                                                Column(Modifier.fillMaxWidth().padding(7.dp)) {
+                                                    Text("رد على رسالة", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                                    Text(replied.body, maxLines = 2, style = MaterialTheme.typography.bodySmall)
+                                                }
+                                            }
+                                        }
+                                    }
                                     Text(message.body, style = MaterialTheme.typography.bodyMedium)
 
                                     message.attachmentPath?.let { attachmentPath ->
@@ -1101,7 +1127,7 @@ private fun ChatConversationPanel(
                                     }
 
                                     Text(
-                                        message.createdAt.replace("T", " ").take(16),
+                                        message.createdAt.replace("T", " ").take(16) + if (message.editedAt != null) " • تم التعديل ${message.editedAt.replace("T", " ").take(16)}" else "",
                                         modifier = Modifier.align(Alignment.End),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1110,6 +1136,19 @@ private fun ChatConversationPanel(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        if (replyToMessageId != null) {
+            val replied = messages.firstOrNull { it.id == replyToMessageId }
+            if (replied != null) {
+                Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("الرد على رسالة", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+                        Text(replied.body, maxLines = 1, style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = { replyToMessageId = null }) { Icon(Icons.Default.Delete, contentDescription = "إلغاء الرد") }
                 }
             }
         }
@@ -1217,7 +1256,7 @@ private fun ChatConversationPanel(
                 }
 
                 FilledIconButton(
-                    onClick = onSend,
+                    onClick = { onSend(messageText, replyToMessageId); replyToMessageId = null },
                     enabled = enabled && messageText.isNotBlank() && !isRecording
                 ) {
                     Icon(Icons.Default.Send, contentDescription = "إرسال")
