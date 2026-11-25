@@ -2987,7 +2987,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         DiagnosticCheckItem(
                             title = "فحص قاعدة البيانات المحلية (Room)",
                             passed = false,
-                            detail = "خطأ في الفحص المحلي: ${err.localizedMessage}",
+                            detail = "تعذر فحص قاعدة البيانات المحلية. تحقق من سلامة البيانات ثم أعد الفحص.",
                             status = DiagnosticStatus.FAIL
                         )
                     )
