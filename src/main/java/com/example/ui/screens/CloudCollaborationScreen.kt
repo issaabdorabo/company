@@ -46,6 +46,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.time.Instant
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -154,6 +155,8 @@ fun CloudCollaborationScreen(
                 viewModel.sendAttachment(name, mime, bytes)
             },
             onDeleteMessage = { messageId -> viewModel.hideMessageForMe(messageId) },
+                            onEditMessage = { messageId, body -> viewModel.editMessage(messageId, body) },
+            onEditMessage = { messageId, body -> viewModel.editMessage(messageId, body) },
             onResolveAttachment = { attachmentPath -> viewModel.resolveAttachmentUrl(attachmentPath) },
             onBack = { viewModel.closeConversation() },
             enabled = !busy
@@ -705,6 +708,7 @@ private fun ChatConversationPanel(
     onSend: (String, String?) -> Unit,
     onSendAttachment: (String, String, ByteArray) -> Unit,
     onDeleteMessage: (String) -> Unit,
+    onEditMessage: (String, String) -> Unit,
     onResolveAttachment: suspend (String) -> String,
     onBack: () -> Unit,
     enabled: Boolean
@@ -718,6 +722,9 @@ private fun ChatConversationPanel(
     var emojiDialogExpanded by remember { mutableStateOf(false) }
     var pendingDeleteMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
+    var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var editingMessageId by remember { mutableStateOf<String?>(null) }
+    var editDraft by remember { mutableStateOf("") }
     var replyToMessageId by remember { mutableStateOf<String?>(null) }
     var audioRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
@@ -970,12 +977,28 @@ private fun ChatConversationPanel(
             }
         }
 
-        selectedMessageId?.let { selectedId ->
+        if (selectedMessageIds.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text("تم تحديد ${selectedMessageIds.size} رسالة", modifier = Modifier.weight(1f))
+                TextButton(onClick = {
+                    selectedMessageIds.toList().forEach(onDeleteMessage)
+                    selectedMessageIds = emptySet()
+                    selectedMessageId = null
+                }) { Text("حذف من جهازي") }
+                TextButton(onClick = { selectedMessageIds = emptySet(); selectedMessageId = null }) { Text("إلغاء") }
+            }
+        } else selectedMessageId?.let { selectedId ->
             val selected = messages.firstOrNull { it.id == selectedId }
             if (selected != null) {
+                val editable = selected.senderUserId == currentUserId && runCatching {
+                    Instant.now().toEpochMilli() - Instant.parse(selected.createdAt).toEpochMilli() <= 10 * 60 * 1000
+                }.getOrDefault(false)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { replyToMessageId = selected.id; selectedMessageId = null }) { Text("رد على الرسالة") }
-                    TextButton(onClick = { selectedMessageId = null }) { Text("إلغاء التحديد") }
+                    TextButton(onClick = { replyToMessageId = selected.id; selectedMessageId = null }) { Text("رد") }
+                    if (editable) TextButton(onClick = { editingMessageId = selected.id; editDraft = selected.body }) { Text("تعديل") }
+                    TextButton(onClick = { onDeleteMessage(selected.id); selectedMessageId = null }) { Text("حذف من جهازي") }
+                    TextButton(onClick = { selectedMessageIds = setOf(selected.id); selectedMessageId = null }) { Text("تحديد") }
+                    TextButton(onClick = { selectedMessageId = null }) { Text("إلغاء") }
                 }
             }
         }
@@ -1017,8 +1040,15 @@ private fun ChatConversationPanel(
                         ) {
                             Surface(
                                 modifier = Modifier.fillMaxWidth(0.88f).combinedClickable(
-                                    onClick = { selectedMessageId = if (selectedMessageId == message.id) null else message.id },
-                                    onLongClick = { selectedMessageId = message.id }
+                                    onClick = {
+                                        if (selectedMessageIds.isNotEmpty()) {
+                                            selectedMessageIds = if (message.id in selectedMessageIds) selectedMessageIds - message.id else selectedMessageIds + message.id
+                                        } else selectedMessageId = if (selectedMessageId == message.id) null else message.id
+                                    },
+                                    onLongClick = {
+                                        selectedMessageIds = if (message.id in selectedMessageIds) selectedMessageIds - message.id else selectedMessageIds + message.id
+                                        selectedMessageId = null
+                                    }
                                 ),
                                 color = if (mine) MaterialTheme.colorScheme.primaryContainer
                                 else MaterialTheme.colorScheme.surface,
@@ -1253,6 +1283,32 @@ private fun ChatConversationPanel(
                 }
             }
         }
+    }
+
+    editingMessageId?.let { messageId ->
+        AlertDialog(
+            onDismissRequest = { editingMessageId = null },
+            title = { Text("تعديل الرسالة") },
+            text = {
+                OutlinedTextField(
+                    value = editDraft,
+                    onValueChange = { editDraft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("نص الرسالة") },
+                    minLines = 2
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (editDraft.isNotBlank()) onEditMessage(messageId, editDraft.trim())
+                    editingMessageId = null
+                    selectedMessageId = null
+                }) { Text("حفظ التعديل") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingMessageId = null }) { Text("إلغاء") }
+            }
+        )
     }
 
     if (showRecordingDialog) {
