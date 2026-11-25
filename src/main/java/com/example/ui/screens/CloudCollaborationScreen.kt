@@ -27,13 +27,10 @@ import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -754,7 +751,6 @@ private fun ChatConversationPanel(
         myBubbleColor = selected.second.second
         otherBubbleColor = selected.third
     }
-    var pendingDeleteMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var editingMessageId by remember { mutableStateOf<String?>(null) }
@@ -1422,22 +1418,4 @@ private fun ChatConversationPanel(
         )
     }
 
-    pendingDeleteMessageId?.let { messageId ->
-        AlertDialog(
-            onDismissRequest = { pendingDeleteMessageId = null },
-            title = { Text("حذف الرسالة") },
-            text = { Text("هل تريد حذف هذه الرسالة ومرفقها من المحادثة؟") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onDeleteMessage(messageId)
-                        pendingDeleteMessageId = null
-                    }
-                ) { Text("حذف") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteMessageId = null }) { Text("إلغاء") }
-            }
-        )
-    }
 }
