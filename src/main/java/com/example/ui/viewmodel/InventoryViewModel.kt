@@ -1066,9 +1066,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val workspaceId = preferences.cloudWorkspaceIdFlow.first()
                 if (workspaceId.isNotBlank() && previous.boundInstallationId.isNotBlank()) {
                     runCatching {
-                        cloudCollaborationRepo.clearOfflineWarehouseDesignationsForDevice(
+                        cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(
                             workspaceId,
-                            previous.boundInstallationId
+                            current[idx]
                         )
                     }
                 }
@@ -1493,8 +1493,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         if (workspaceId.isBlank()) return
         val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
             slot.boundInstallationId.isNotBlank() &&
-                !slot.isKicked && !slot.wasUnlinked &&
-                slot.warehousePermissions.any { it.canWorkOffline && it.canView }
+                !slot.wasUnlinked &&
+                (slot.isKicked || slot.warehousePermissions.any { it.canWorkOffline && it.canView })
         }
         slots.forEach { slot ->
             runCatching {
