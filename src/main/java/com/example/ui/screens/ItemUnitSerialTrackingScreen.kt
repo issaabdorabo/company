@@ -801,116 +801,119 @@ private fun UnitSerialCard(
                 }
             }
 
-            // Row 2: Serial Input & Status Dropdown
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
+            // Row 2: Serial number
+OutlinedTextField(
                     value = serialRecord.serialNumber,
                     onValueChange = {
                         onUpdate(serialRecord.copy(serialNumber = it))
                     },
                     label = { Text("الرقم المميز / السيريال") },
                     placeholder = { Text("SN-000$unitNumber") },
-                    modifier = Modifier.weight(1.2f),
+                    modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
 
                 // Status Dropdown with inline Edit & Delete for unused statuses
-                Box(modifier = Modifier.weight(1f)) {
-                    ExposedDropdownMenuBox(
-                        expanded = statusDropdownExpanded,
-                        onExpandedChange = { if (canManageCatalog) statusDropdownExpanded = !statusDropdownExpanded },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        OutlinedTextField(
-                            value = serialRecord.status.ifBlank { "موجود" },
-                            onValueChange = {},
-                            readOnly = true,
-                            enabled = canManageCatalog,
-                            label = { Text("الحالة") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = statusDropdownExpanded) },
-                            modifier = Modifier
-                                .menuAnchor()
-                                .fillMaxWidth()
-                                .testTag("serial_status_dropdown_$unitNumber")
-                        )
-                        ExposedDropdownMenu(
+
+            // Row 3: Status and sub-unit selectors
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+    Box(modifier = Modifier.weight(1f)) {
+                        ExposedDropdownMenuBox(
                             expanded = statusDropdownExpanded,
-                            onDismissRequest = { statusDropdownExpanded = false }
+                            onExpandedChange = { if (canManageCatalog) statusDropdownExpanded = !statusDropdownExpanded },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            statusOptions.forEach { opt ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(opt, modifier = Modifier.weight(1f), maxLines = 1)
-                                            if (canManageCatalog) {
-                                                IconButton(onClick = { statusDropdownExpanded = false; onEditStatus(opt) }, modifier = Modifier.size(32.dp)) {
-                                                    Icon(Icons.Default.Edit, contentDescription = "تعديل الحالة", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                                }
-                                                IconButton(onClick = { statusDropdownExpanded = false; onDeleteStatus(opt) }, modifier = Modifier.size(32.dp)) {
-                                                    Icon(Icons.Default.Delete, contentDescription = "حذف الحالة", tint = DangerRed, modifier = Modifier.size(16.dp))
+                            OutlinedTextField(
+                                value = serialRecord.status.ifBlank { "موجود" },
+                                onValueChange = {},
+                                readOnly = true,
+                                enabled = canManageCatalog,
+                                label = { Text("الحالة") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = statusDropdownExpanded) },
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .fillMaxWidth()
+                                    .testTag("serial_status_dropdown_$unitNumber")
+                            )
+                            ExposedDropdownMenu(
+                                expanded = statusDropdownExpanded,
+                                onDismissRequest = { statusDropdownExpanded = false }
+                            ) {
+                                statusOptions.forEach { opt ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(opt, modifier = Modifier.weight(1f), maxLines = 1)
+                                                if (canManageCatalog) {
+                                                    IconButton(onClick = { statusDropdownExpanded = false; onEditStatus(opt) }, modifier = Modifier.size(32.dp)) {
+                                                        Icon(Icons.Default.Edit, contentDescription = "تعديل الحالة", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                                    }
+                                                    IconButton(onClick = { statusDropdownExpanded = false; onDeleteStatus(opt) }, modifier = Modifier.size(32.dp)) {
+                                                        Icon(Icons.Default.Delete, contentDescription = "حذف الحالة", tint = DangerRed, modifier = Modifier.size(16.dp))
+                                                    }
                                                 }
                                             }
+                                        },
+                                        onClick = {
+                                            onUpdate(serialRecord.copy(status = opt))
+                                            statusDropdownExpanded = false
                                         }
-                                    },
-                                    onClick = {
-                                        onUpdate(serialRecord.copy(status = opt))
-                                        statusDropdownExpanded = false
-                                    }
-                                )
-                            }
-                            if (canManageCatalog) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("+ إضافة حالة جديدة", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                                        }
-                                    },
-                                    onClick = { statusDropdownExpanded = false; onAddNewStatus() }
-                                )
+                                    )
+                                }
+                                if (canManageCatalog) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("+ إضافة حالة جديدة", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                            }
+                                        },
+                                        onClick = { statusDropdownExpanded = false; onAddNewStatus() }
+                                    )
+                                }
                             }
                         }
                     }
-                }
-            }
-
-            ExposedDropdownMenuBox(
-                expanded = subUnitDropdownExpanded,
-                onExpandedChange = { if (canManageCatalog) subUnitDropdownExpanded = !subUnitDropdownExpanded },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                OutlinedTextField(
-                    value = serialRecord.subUnit,
-                    onValueChange = {}, readOnly = true, enabled = canManageCatalog,
-                    label = { Text("الوحدة الفرعية") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = subUnitDropdownExpanded) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth()
-                )
-                ExposedDropdownMenu(expanded = subUnitDropdownExpanded, onDismissRequest = { subUnitDropdownExpanded = false }) {
-                    subUnitOptions.forEach { option ->
-                        DropdownMenuItem(
-                            text = {
-                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(option, modifier = Modifier.weight(1f))
-                                    if (canManageCatalog) {
-                                        IconButton(onClick = { subUnitDropdownExpanded = false; onEditSubUnit(option) }) { Icon(Icons.Default.Edit, contentDescription = "تعديل الوحدة", tint = MaterialTheme.colorScheme.primary) }
-                                        IconButton(onClick = { subUnitDropdownExpanded = false; onDeleteSubUnit(option) }) { Icon(Icons.Default.Delete, contentDescription = "حذف الوحدة", tint = DangerRed) }
+                Box(modifier = Modifier.weight(1f)) {
+    ExposedDropdownMenuBox(
+                    expanded = subUnitDropdownExpanded,
+                    onExpandedChange = { subUnitDropdownExpanded = !subUnitDropdownExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = serialRecord.subUnit,
+                        onValueChange = {}, readOnly = true, enabled = true,
+                        label = { Text("الوحدة الفرعية") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = subUnitDropdownExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = subUnitDropdownExpanded, onDismissRequest = { subUnitDropdownExpanded = false }) {
+                        subUnitOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(option, modifier = Modifier.weight(1f))
+                                        if (canManageCatalog) {
+                                            IconButton(onClick = { subUnitDropdownExpanded = false; onEditSubUnit(option) }) { Icon(Icons.Default.Edit, contentDescription = "تعديل الوحدة", tint = MaterialTheme.colorScheme.primary) }
+                                            IconButton(onClick = { subUnitDropdownExpanded = false; onDeleteSubUnit(option) }) { Icon(Icons.Default.Delete, contentDescription = "حذف الوحدة", tint = DangerRed) }
+                                        }
                                     }
-                                }
-                            },
-                            onClick = { onUpdate(serialRecord.copy(subUnit = option)); subUnitDropdownExpanded = false }
-                        )
+                                },
+                                onClick = { onUpdate(serialRecord.copy(subUnit = option)); subUnitDropdownExpanded = false }
+                            )
+                        }
+                        if (canManageCatalog) DropdownMenuItem(text = { Text("+ إضافة وحدة فرعية", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }, onClick = { subUnitDropdownExpanded = false; onAddNewSubUnit() })
                     }
-                    if (canManageCatalog) DropdownMenuItem(text = { Text("+ إضافة وحدة فرعية", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }, onClick = { subUnitDropdownExpanded = false; onAddNewSubUnit() })
+                }
                 }
             }
 

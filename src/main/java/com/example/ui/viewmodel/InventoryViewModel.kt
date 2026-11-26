@@ -92,12 +92,22 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val connectivityManager = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     private val connectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            viewModelScope.launch {
-                delay(1_500L)
-                if (hasValidatedInternetConnection()) {
-                    if (!isMainDevice.value && isSubConnected.value) runCatching { flushPendingSubDeviceSyncOperations() }
-                    runCatching { flushCloudPendingSyncOperations() }
-                }
+            flushPendingQueuesWhenInternetReturns()
+        }
+
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                flushPendingQueuesWhenInternetReturns()
+            }
+        }
+    }
+
+    private fun flushPendingQueuesWhenInternetReturns() {
+        viewModelScope.launch {
+            delay(1_000L)
+            if (hasValidatedInternetConnection()) {
+                if (!isMainDevice.value && isSubConnected.value) runCatching { flushPendingSubDeviceSyncOperations() }
+                runCatching { flushCloudPendingSyncOperations() }
             }
         }
     }
