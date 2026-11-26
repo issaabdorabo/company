@@ -1,5 +1,7 @@
 package com.example.data.cloud
 
+import android.util.Base64
+
 import io.github.jan.supabase.auth.auth
 import com.example.data.sync.LocalSyncJson
 import com.example.data.model.Warehouse
