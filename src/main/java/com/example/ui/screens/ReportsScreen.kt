@@ -52,6 +52,7 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +65,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.ItemUnitSerialRecord
 import com.example.data.model.VoucherType
 import com.example.data.model.Warehouse
 import com.example.data.repository.StockSnapshot
@@ -115,6 +117,8 @@ fun ReportsScreen(
     val selectedDisbursers = remember { mutableStateListOf<String>() }
     val selectedBeneficiaryEntities = remember { mutableStateListOf<String>() }
     val selectedItemIds = remember { mutableStateListOf<Long>() }
+    val selectedStatuses = remember { mutableStateListOf<String>() }
+    val selectedSubUnits = remember { mutableStateListOf<String>() }
 
     // Multi-entity layout display mode: HORIZONTAL (single unified column) vs VERTICAL (dedicated column per entity)
     var entitiesDisplayMode by remember { mutableStateOf("HORIZONTAL") }
@@ -134,6 +138,8 @@ fun ReportsScreen(
             ReportGenerator.ReportColumn.VOUCHER_NUMBER,
             ReportGenerator.ReportColumn.ITEM_NAME,
             ReportGenerator.ReportColumn.ITEM_UNIT,
+            ReportGenerator.ReportColumn.STATUS,
+            ReportGenerator.ReportColumn.SUB_UNIT,
             ReportGenerator.ReportColumn.WAREHOUSE,
             ReportGenerator.ReportColumn.TOTAL_QUANTITY,
             ReportGenerator.ReportColumn.PURCHASE_PRICE,
@@ -149,6 +155,12 @@ fun ReportsScreen(
     }
     val reportWarehouseIds = warehouses.map { it.id }.toSet()
     val allItems = snapshot?.items ?: emptyList()
+    var reportSerials by remember { mutableStateOf<List<ItemUnitSerialRecord>>(emptyList()) }
+    LaunchedEffect(warehouses.map { it.id }) {
+        reportSerials = warehouses.flatMap { warehouse -> viewModel.getAllSerialsForWarehouse(warehouse.id) }
+    }
+    val availableStatuses = remember(reportSerials) { reportSerials.map { it.status }.filter { it.isNotBlank() }.distinct().sorted() }
+    val availableSubUnits = remember(reportSerials) { reportSerials.map { it.subUnit }.filter { it.isNotBlank() }.distinct().sorted() }
     val reportItemNames = remember(allItems) {
         allItems.associate { item ->
             val label = listOf(item.name, item.carType, item.carName)
@@ -185,6 +197,9 @@ fun ReportsScreen(
         selectedDisbursers.toList(),
         selectedBeneficiaryEntities.toList(),
         selectedItemIds.toList(),
+        selectedStatuses.toList(),
+        selectedSubUnits.toList(),
+        reportSerials,
         entitiesDisplayMode,
         warehouseDisplayMode,
         receiverDisplayMode,
@@ -210,22 +225,38 @@ fun ReportsScreen(
                         "LOW_STOCK" -> itemStock.currentStock > 0 && itemStock.currentStock <= itemStock.minStockLevel
                         else -> true
                     }
-                    matchesWarehouse && matchesItem && matchesCategoryState
+                    val itemSerials = reportSerials.filter { it.warehouseId == itemStock.warehouseId && it.itemId == itemStock.itemId }
+                    val filteredSerials = itemSerials.filter { serial ->
+                        (selectedStatuses.isEmpty() || serial.status in selectedStatuses) &&
+                            (selectedSubUnits.isEmpty() || serial.subUnit in selectedSubUnits)
+                    }
+                    val serialFilterMatches = (selectedStatuses.isEmpty() && selectedSubUnits.isEmpty()) || filteredSerials.isNotEmpty()
+                    matchesWarehouse && matchesItem && matchesCategoryState && serialFilterMatches
                 }
 
                 for (stock in filteredStocks) {
+                    val itemSerials = reportSerials.filter { it.warehouseId == stock.warehouseId && it.itemId == stock.itemId }
+                    val shownSerials = itemSerials.filter { serial ->
+                        (selectedStatuses.isEmpty() || serial.status in selectedStatuses) &&
+                            (selectedSubUnits.isEmpty() || serial.subUnit in selectedSubUnits)
+                    }
+                    val shownStatuses = shownSerials.map { it.status }.filter { it.isNotBlank() }.distinct()
+                    val shownSubUnits = shownSerials.map { it.subUnit }.filter { it.isNotBlank() }.distinct()
+                    val displayedQuantity = if (selectedStatuses.isNotEmpty() || selectedSubUnits.isNotEmpty()) shownSerials.size.toDouble() else stock.currentStock
                     rows.add(
                         ReportGenerator.ReportRowData(
                             voucherNumber = "-",
                             warehouseName = stock.warehouseName,
                             itemName = reportItemName(stock.itemId, stock.itemName),
                             itemUnit = stock.itemUnit,
+                            status = shownStatuses.joinToString("، ").ifBlank { "-" },
+                            subUnit = shownSubUnits.joinToString("، ").ifBlank { "-" },
                             beneficiaryName = "-",
                             receiverName = "-",
                             disburserName = "-",
                             voucherDate = "-",
-                            quantity = stock.currentStock,
-                            totalQuantity = stock.currentStock,
+                            quantity = displayedQuantity,
+                            totalQuantity = displayedQuantity,
                             minStockLevel = stock.minStockLevel,
                             unitPrice = stock.purchasePrice,
                             totalValue = stock.currentStock * stock.purchasePrice,
@@ -288,6 +319,7 @@ fun ReportsScreen(
                                     warehouseName = wName,
                                     itemName = reportItemName(itm.itemId, itm.itemName),
                                     itemUnit = itm.itemUnit,
+                                    status = itm.itemStatus,
                                     beneficiaryName = v.beneficiaryName.ifBlank { "-" },
                                     supplierName = v.supplierName.ifBlank { "-" },
                                     receiverName = v.receiverName.ifBlank { "-" },
@@ -339,6 +371,7 @@ fun ReportsScreen(
                                             warehouseName = wName,
                                             itemName = reportItemName(itm.itemId, itm.itemName),
                                             itemUnit = itm.itemUnit,
+                                            status = itm.itemStatus,
                                             beneficiaryName = v.beneficiaryName.ifBlank { "-" },
                                             supplierName = v.supplierName.ifBlank { "-" },
                                             receiverName = v.receiverName.ifBlank { "-" },
@@ -385,6 +418,8 @@ fun ReportsScreen(
                     warehouseName = warehouseValues.keys.joinToString("، ").ifBlank { itemRows.map { it.warehouseName }.distinct().joinToString("، ") },
                     itemName = first.itemName,
                     itemUnit = first.itemUnit,
+                    status = itemRows.map { it.status }.filter { it.isNotBlank() }.distinct().joinToString("، "),
+                    subUnit = itemRows.map { it.subUnit }.filter { it.isNotBlank() }.distinct().joinToString("، "),
                     beneficiaryName = if (entityValues.size == 1) entityValues.keys.first() else "متعدد",
                     supplierName = itemRows.map { it.supplierName }.filter { it.isNotBlank() }.distinct().joinToString("، "),
                     receiverName = receiverValues.keys.joinToString("، ").ifBlank { itemRows.map { it.receiverName }.filter { it.isNotBlank() }.distinct().joinToString("، ") },
@@ -658,6 +693,27 @@ fun ReportsScreen(
                             Text(if (count == 0) "الصارفين" else "الصارفين ($count)", fontSize = 10.sp)
                         }
                     }
+                    if (selectedReportCategory in listOf("ALL_STOCK", "OUT_OF_STOCK", "LOW_STOCK")) {
+                        Text("حالات الصنف والوحدات الفرعية (اختيار متعدد):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(selected = selectedStatuses.isEmpty(), onClick = { selectedStatuses.clear() }, label = { Text("كل الحالات", fontSize = 10.sp) })
+                            availableStatuses.forEach { status ->
+                                val count = reportSerials.count { it.status == status }
+                                val selected = status in selectedStatuses
+                                FilterChip(selected = selected, onClick = { if (selected) selectedStatuses.remove(status) else selectedStatuses.add(status) }, label = { Text("$status ($count)", fontSize = 10.sp) })
+                            }
+                        }
+                        if (availableSubUnits.isNotEmpty()) {
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                FilterChip(selected = selectedSubUnits.isEmpty(), onClick = { selectedSubUnits.clear() }, label = { Text("كل الوحدات", fontSize = 10.sp) })
+                                availableSubUnits.forEach { unit ->
+                                    val count = reportSerials.count { it.subUnit == unit }
+                                    val selected = unit in selectedSubUnits
+                                    FilterChip(selected = selected, onClick = { if (selected) selectedSubUnits.remove(unit) else selectedSubUnits.add(unit) }, label = { Text("$unit ($count)", fontSize = 10.sp) })
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -901,6 +957,8 @@ fun ReportsScreen(
                                     ReportGenerator.ReportColumn.VOUCHER_NUMBER -> row.voucherNumber
                                     ReportGenerator.ReportColumn.ITEM_NAME -> row.itemName
                                     ReportGenerator.ReportColumn.ITEM_UNIT -> row.itemUnit
+                                    ReportGenerator.ReportColumn.STATUS -> row.status
+                                    ReportGenerator.ReportColumn.SUB_UNIT -> row.subUnit
                                     ReportGenerator.ReportColumn.WAREHOUSE -> row.warehouseName
                                     ReportGenerator.ReportColumn.BENEFICIARY -> row.beneficiaryName
                                     ReportGenerator.ReportColumn.RECEIVER -> row.receiverName
@@ -1033,6 +1091,8 @@ fun ReportsScreen(
                                                 ReportGenerator.ReportColumn.VOUCHER_NUMBER -> rowItem.voucherNumber
                                                 ReportGenerator.ReportColumn.ITEM_NAME -> rowItem.itemName
                                                 ReportGenerator.ReportColumn.ITEM_UNIT -> rowItem.itemUnit
+                                                ReportGenerator.ReportColumn.STATUS -> rowItem.status
+                                                ReportGenerator.ReportColumn.SUB_UNIT -> rowItem.subUnit
                                                 ReportGenerator.ReportColumn.WAREHOUSE -> rowItem.warehouseName
                                                 ReportGenerator.ReportColumn.BENEFICIARY -> rowItem.beneficiaryName
                                                 ReportGenerator.ReportColumn.RECEIVER -> rowItem.receiverName

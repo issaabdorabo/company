@@ -1135,6 +1135,7 @@ private fun WarehouseReportExportDialog(
 
     // Multi-selected statuses for detailed mode
     val selectedStatuses = remember { mutableStateListOf<String>() }
+    val selectedSubUnits = remember { mutableStateListOf<String>() }
 
     var allSerialsList by remember { mutableStateOf<List<ItemUnitSerialRecord>>(emptyList()) }
 
@@ -1146,6 +1147,9 @@ private fun WarehouseReportExportDialog(
         val base = listOf("موجود", "مفقود", "مدمر", "عاطل")
         val fromSerials = allSerialsList.map { it.status }
         (base + fromSerials).filter { it.isNotBlank() }.distinct()
+    }
+    val allAvailableSubUnits = remember(allSerialsList) {
+        allSerialsList.map { it.subUnit }.filter { it.isNotBlank() }.distinct().sorted()
     }
 
     // Columns selection for summary mode (Warehouse column eliminated)
@@ -1161,6 +1165,7 @@ private fun WarehouseReportExportDialog(
     val showSerialNumDetailed = remember { mutableStateOf(true) } // "رقم الصنف"
     val showStatusDetailed = remember { mutableStateOf(true) } // "حالة الصنف"
     val showNotesDetailed = remember { mutableStateOf(true) } // "الملاحظات"
+    val showSubUnitDetailed = remember { mutableStateOf(true) } // "الوحدة الفرعية"
 
     val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd", Locale.getDefault()) }
     val dateStr = dateFormat.format(Date())
@@ -1175,7 +1180,7 @@ private fun WarehouseReportExportDialog(
     }
 
     // Prepare table rows based on mode and filters
-    val rowsData = remember(reportMode, activeItems, selectedStatuses.toList(), allSerialsList) {
+    val rowsData = remember(reportMode, activeItems, selectedStatuses.toList(), selectedSubUnits.toList(), allSerialsList) {
         if (reportMode == "SUMMARY") {
             activeItems.map { itm ->
                 ReportGenerator.ReportRowData(
@@ -1205,17 +1210,22 @@ private fun WarehouseReportExportDialog(
                 for (idx in 0 until count) {
                     val rec = itemSerials.getOrNull(idx)
                     val st = rec?.status ?: "موجود"
+                    val subUnit = rec?.subUnit.orEmpty()
                     val sn = rec?.serialNumber?.ifBlank { "SN-${rec.unitIndex}" } ?: "SN-${idx + 1}"
                     val nt = rec?.notes ?: ""
 
-                    if (selectedStatuses.isEmpty() || selectedStatuses.contains(st)) {
+                    val matchesStatus = selectedStatuses.isEmpty() || st in selectedStatuses
+                    val matchesSubUnit = selectedSubUnits.isEmpty() || subUnit in selectedSubUnits
+                    if (matchesStatus && matchesSubUnit) {
                         rows.add(
                             ReportGenerator.ReportRowData(
                                 voucherNumber = sn,
                                 warehouseName = warehouse.name,
                                 itemName = itm.itemName,
                                 itemUnit = itm.itemUnit,
-                                beneficiaryName = st, // maps to "حالة الصنف"
+                                status = st,
+                                subUnit = subUnit,
+                                beneficiaryName = st, // legacy compatibility for older export columns
                                 receiverName = nt, // maps to "الملاحظات"
                                 disburserName = "-",
                                 voucherDate = dateStr,
@@ -1249,12 +1259,13 @@ private fun WarehouseReportExportDialog(
 
     val detailedSelectedColumns = remember(
         showItemNameDetailed.value, showSerialNumDetailed.value,
-        showStatusDetailed.value, showNotesDetailed.value
+        showStatusDetailed.value, showNotesDetailed.value, showSubUnitDetailed.value
     ) {
         mutableSetOf(ReportGenerator.ReportColumn.SERIAL).apply {
             if (showItemNameDetailed.value) add(ReportGenerator.ReportColumn.ITEM_NAME)
             if (showSerialNumDetailed.value) add(ReportGenerator.ReportColumn.VOUCHER_NUMBER)
-            if (showStatusDetailed.value) add(ReportGenerator.ReportColumn.BENEFICIARY)
+            if (showStatusDetailed.value) add(ReportGenerator.ReportColumn.STATUS)
+            if (showSubUnitDetailed.value) add(ReportGenerator.ReportColumn.SUB_UNIT)
             if (showNotesDetailed.value) add(ReportGenerator.ReportColumn.RECEIVER)
         }
     }
@@ -1263,13 +1274,15 @@ private fun WarehouseReportExportDialog(
         ReportGenerator.ReportColumn.SERIAL,
         ReportGenerator.ReportColumn.ITEM_NAME,
         ReportGenerator.ReportColumn.VOUCHER_NUMBER,
-        ReportGenerator.ReportColumn.BENEFICIARY,
+        ReportGenerator.ReportColumn.STATUS,
+        ReportGenerator.ReportColumn.SUB_UNIT,
         ReportGenerator.ReportColumn.RECEIVER
     )
 
     val detailedCustomTitles = mapOf(
         ReportGenerator.ReportColumn.VOUCHER_NUMBER to "رقم الصنف",
-        ReportGenerator.ReportColumn.BENEFICIARY to "حالة الصنف",
+        ReportGenerator.ReportColumn.STATUS to "حالة الصنف",
+        ReportGenerator.ReportColumn.SUB_UNIT to "الوحدة الفرعية",
         ReportGenerator.ReportColumn.RECEIVER to "الملاحظات"
     )
 
@@ -1386,6 +1399,12 @@ private fun WarehouseReportExportDialog(
                             Text("الملاحظات", style = MaterialTheme.typography.labelSmall)
                         }
                     }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Checkbox(checked = showSubUnitDetailed.value, onCheckedChange = { showSubUnitDetailed.value = it })
+                            Text("الوحدة الفرعية", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
 
                     // Status filter for detailed mode with ALL saved statuses
                     Text("تصفية بحسب الحالة (اختياري):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
@@ -1409,8 +1428,30 @@ private fun WarehouseReportExportDialog(
                                     if (isStSelected) selectedStatuses.remove(st)
                                     else selectedStatuses.add(st)
                                 },
-                                label = { Text(st, fontSize = 10.sp) }
+                                label = { Text("$st (${allSerialsList.count { record -> record.status == st }})", fontSize = 10.sp) }
                             )
+                        }
+                    }
+                    if (allAvailableSubUnits.isNotEmpty()) {
+                        Text("تصفية بحسب الوحدة الفرعية (اختياري):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedSubUnits.isEmpty(),
+                                onClick = { selectedSubUnits.clear() },
+                                label = { Text("كل الوحدات", fontSize = 10.sp) }
+                            )
+                            allAvailableSubUnits.forEach { subUnit ->
+                                val count = allSerialsList.count { it.subUnit == subUnit }
+                                val selected = subUnit in selectedSubUnits
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { if (selected) selectedSubUnits.remove(subUnit) else selectedSubUnits.add(subUnit) },
+                                    label = { Text("$subUnit ($count)", fontSize = 10.sp) }
+                                )
+                            }
                         }
                     }
                 }
@@ -1454,6 +1495,7 @@ private fun WarehouseReportExportDialog(
                             } else {
                                 if (showSerialNumDetailed.value) Text("رقم الصنف", fontWeight = FontWeight.Bold, fontSize = 10.sp, modifier = Modifier.width(80.dp))
                                 if (showStatusDetailed.value) Text("حالة الصنف", fontWeight = FontWeight.Bold, fontSize = 10.sp, modifier = Modifier.width(70.dp))
+                                if (showSubUnitDetailed.value) Text("الوحدة الفرعية", fontWeight = FontWeight.Bold, fontSize = 10.sp, modifier = Modifier.width(85.dp))
                                 if (showNotesDetailed.value) Text("الملاحظات", fontWeight = FontWeight.Bold, fontSize = 10.sp, modifier = Modifier.width(100.dp))
                             }
                         }
@@ -1476,7 +1518,8 @@ private fun WarehouseReportExportDialog(
                                     if (showTotalValue.value) Text("%.1f".format(r.totalValue), fontSize = 9.sp, modifier = Modifier.width(65.dp))
                                 } else {
                                     if (showSerialNumDetailed.value) Text(r.voucherNumber, fontSize = 9.sp, modifier = Modifier.width(80.dp))
-                                    if (showStatusDetailed.value) Text(r.beneficiaryName, fontSize = 9.sp, modifier = Modifier.width(70.dp))
+                                    if (showStatusDetailed.value) Text(r.status, fontSize = 9.sp, modifier = Modifier.width(70.dp))
+                                    if (showSubUnitDetailed.value) Text(r.subUnit.ifBlank { "-" }, fontSize = 9.sp, modifier = Modifier.width(85.dp))
                                     if (showNotesDetailed.value) Text(r.receiverName.ifBlank { "-" }, fontSize = 9.sp, modifier = Modifier.width(100.dp))
                                 }
                             }
