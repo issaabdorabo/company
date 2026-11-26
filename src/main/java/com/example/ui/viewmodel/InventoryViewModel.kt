@@ -2162,7 +2162,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val targetVouchers = longIdsFromJson(body.optJSONArray("targetVoucherIds")?.toString().orEmpty())
         if (actionType == DeviceAction.DELETE_ITEM.name) {
             merged.entries.removeAll { (_, entity) ->
-                (entity.entityType == "serial" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems) ||
+                (entity.entityType == "item" && entity.localId in targetItems) ||
+                    (entity.entityType == "serial" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems) ||
                     (entity.entityType == "association" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems)
             }
         }
@@ -2170,8 +2171,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             actionType == DeviceAction.DELETE_SUPPLY_VOUCHER.name
         ) {
             merged.entries.removeAll { (_, entity) ->
-                entity.entityType == "voucher_item" &&
-                    (entity.payload["voucherId"] as? Number)?.toLong() in targetVouchers
+                (entity.entityType == "voucher" && entity.localId in targetVouchers) ||
+                    (entity.entityType == "voucher_item" &&
+                        (entity.payload["voucherId"] as? Number)?.toLong() in targetVouchers)
             }
         }
 
