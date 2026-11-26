@@ -14,6 +14,7 @@ import com.google.zxing.qrcode.QRCodeReader
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import org.json.JSONObject
+import java.security.SecureRandom
 
 data class QrPairingPayload(
     val host: String = "",
@@ -22,15 +23,32 @@ data class QrPairingPayload(
     val cloudWorkspaceId: String = "",
     val mainCloudDeviceId: String = "",
     val deviceSlotId: String = "",
-    val sessionToken: String = ""
+    val sessionToken: String = "",
+    val inviteCode: String = ""
 ) {
+    val isCloudInviteCode: Boolean
+        get() = QrPairingHelper.normalizeCloudInviteCode(inviteCode).matches(Regex("^[A-HJ-NP-Z2-9]{20}$"))
+
     val isCloudPairing: Boolean
-        get() = cloudWorkspaceId.isNotBlank() && mainCloudDeviceId.isNotBlank() &&
-            deviceSlotId.isNotBlank() && sessionToken.isNotBlank()
+        get() = isCloudInviteCode || (cloudWorkspaceId.isNotBlank() && mainCloudDeviceId.isNotBlank() &&
+            deviceSlotId.isNotBlank() && sessionToken.isNotBlank())
 }
 
 object QrPairingHelper {
     private const val PAYLOAD_TYPE = "SMART_INV_PAIR"
+    private const val CLOUD_INVITE_TYPE = "SMART_INV_CLOUD_INVITE"
+    private const val INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    private val secureRandom = SecureRandom()
+
+    fun generateCloudInviteCode(): String = buildString(20) {
+        repeat(20) { append(INVITE_ALPHABET[secureRandom.nextInt(INVITE_ALPHABET.length)]) }
+    }
+
+    fun normalizeCloudInviteCode(raw: String): String =
+        raw.trim().uppercase().filter { it.isLetterOrDigit() }
+
+    fun formatCloudInviteCode(raw: String): String =
+        normalizeCloudInviteCode(raw).chunked(4).joinToString("-")
 
     fun encodePairingPayload(
         hostAddress: String,
@@ -45,20 +63,14 @@ object QrPairingHelper {
         }.toString()
     }
 
-    fun encodeCloudPairingPayload(
-        workspaceId: String,
-        mainDeviceId: String,
-        deviceSlotId: String,
-        sessionToken: String
-    ): String {
-        require(workspaceId.isNotBlank() && mainDeviceId.isNotBlank() &&
-            deviceSlotId.isNotBlank() && sessionToken.isNotBlank())
+    fun encodeCloudPairingPayload(inviteCode: String): String {
+        val normalized = normalizeCloudInviteCode(inviteCode)
+        require(normalized.matches(Regex("^[A-HJ-NP-Z2-9]{20}$"))) {
+            "رمز دعوة الربط غير صالح"
+        }
         return JSONObject().apply {
-            put("t", "SMART_INV_CLOUD_PAIR")
-            put("workspace", workspaceId)
-            put("mainDevice", mainDeviceId)
-            put("slot", deviceSlotId)
-            put("secret", sessionToken)
+            put("t", CLOUD_INVITE_TYPE)
+            put("code", normalized)
         }.toString()
     }
 
@@ -68,6 +80,11 @@ object QrPairingHelper {
         return try {
             val obj = JSONObject(trimmed)
             when (obj.optString("t")) {
+                CLOUD_INVITE_TYPE -> {
+                    val inviteCode = normalizeCloudInviteCode(obj.optString("code"))
+                    if (!inviteCode.matches(Regex("^[A-HJ-NP-Z2-9]{20}$"))) return null
+                    QrPairingPayload(inviteCode = inviteCode)
+                }
                 "SMART_INV_CLOUD_PAIR" -> {
                     val workspace = obj.optString("workspace").trim()
                     val mainDevice = obj.optString("mainDevice").trim()
