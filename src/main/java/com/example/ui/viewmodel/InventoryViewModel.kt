@@ -1661,7 +1661,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
             !slot.isKicked && !slot.wasUnlinked &&
                 warehouseIds.any { warehouseId ->
-                    slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+                    slot.canViewAllWarehouses ||
+                        slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
                 }
         }
         if (slots.isEmpty()) return
@@ -1680,7 +1681,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 "المخزن مخصص للجهاز (" + slot.deviceName + ") لكنه لم يُربط بعد."
             }
             val assignedWarehouseIds = warehouseIds.filter { warehouseId ->
-                slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+                slot.canViewAllWarehouses ||
+                    slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
             }.toSet()
             require(assignedWarehouseIds.isNotEmpty()) {
                 "لم يتم تحديد مخزن صالح للجهاز الفرعي (" + slot.deviceName + ")"
