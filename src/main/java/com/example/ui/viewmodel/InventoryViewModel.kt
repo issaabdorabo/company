@@ -1738,13 +1738,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val cloudDevices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
         val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
             slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-                warehouseIds.all { warehouseId ->
+                warehouseIds.any { warehouseId ->
                     slot.warehousePermissions.any {
                         it.warehouseId == warehouseId && it.canView && it.canWorkOffline
                     }
                 }
         }
         for (slot in slots) {
+            val slotWarehouseIds = warehouseIds.filter { warehouseId ->
+                slot.warehousePermissions.any {
+                    it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                }
+            }.toSet()
             val target = cloudDevices.firstOrNull {
                 it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
             } ?: error("تعذر العثور على اتصال الجهاز الفرعي (${slot.deviceName})")
@@ -1756,7 +1761,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("senderUserId", senderUserId)
                 put("targetDeviceId", target.id)
                 put("actionType", action.name)
-                put("warehouseIds", JSONArray(warehouseIds.toList()).toString())
+                put("warehouseIds", JSONArray(slotWarehouseIds.toList()).toString())
             }
             val ack = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
                 workspaceId, target.id, event, transportSecret = slot.sessionToken, expectedSenderDeviceId = target.id
