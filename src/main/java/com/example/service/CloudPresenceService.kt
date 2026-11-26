@@ -44,6 +44,7 @@ class CloudPresenceService : Service() {
                 val preferences = app.preferencesManager
                 val repository = CloudCollaborationRepository()
                 while (isActive) {
+                    app.ensureCloudCoordinator()
                     try {
                         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
                         val deviceId = preferences.cloudDeviceIdFlow.first()
