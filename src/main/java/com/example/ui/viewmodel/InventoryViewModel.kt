@@ -935,11 +935,24 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val plainPassword = ""
             val salt = SecurityUtils.generateSalt()
             val passwordHash = SecurityUtils.hashPassword(plainPassword, salt)
-            val sessionToken = UUID.randomUUID().toString()
+            val sessionToken = QrPairingHelper.generateCloudInviteCode()
             val now = System.currentTimeMillis()
+            val newSlotId = UUID.randomUUID().toString()
+            val inviteExpiresAt = try {
+                cloudCollaborationRepo.createDevicePairingInvite(
+                    workspaceId = cloudWorkspaceId,
+                    mainDeviceId = mainCloudDeviceId,
+                    slotId = newSlotId,
+                    inviteCode = sessionToken,
+                    ttlSeconds = 600
+                )
+            } catch (failure: Exception) {
+                _userMessage.emit("تعذر إنشاء دعوة الربط السحابية: ${failure.localizedMessage ?: "تحقق من الإنترنت"}")
+                return@launch
+            }
 
             val newSlot = LinkedSubDevice(
-                id = UUID.randomUUID().toString(),
+                id = newSlotId,
                 deviceName = cleanName,
                 passwordSalt = salt,
                 passwordHash = passwordHash,
@@ -983,7 +996,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 plainPassword = plainPassword,
                 cloudWorkspaceId = if (cloudPairingReady) cloudWorkspaceId else "",
                 mainCloudDeviceId = if (cloudPairingReady) mainCloudDeviceId else "",
-                sessionToken = if (cloudPairingReady) sessionToken else ""
+                sessionToken = if (cloudPairingReady) sessionToken else "",
+                inviteExpiresAt = inviteExpiresAt
             )
             _sessionPairingCredentials.value = _sessionPairingCredentials.value + (newSlot.id to creds)
             _createdDeviceCredentials.value = creds
@@ -994,29 +1008,56 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun showSessionCredentialsQr(slotId: String) {
         if (!isMainDevice.value) return
         viewModelScope.launch {
-            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+            val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
+            val index = current.indexOfFirst {
                 it.id == slotId && !it.isClaimed && !it.isKicked && !it.wasUnlinked
-            } ?: run {
-                _userMessage.emit("رمز ربط هذا الجهاز غير متاح أو تم استخدامه بالفعل.")
+            }
+            if (index < 0) {
+                _userMessage.emit("رمز دعوة هذا الجهاز غير متاح أو تم استخدامه بالفعل.")
                 return@launch
             }
             val workspaceId = preferences.cloudWorkspaceIdFlow.first()
             val mainDeviceId = preferences.cloudDeviceIdFlow.first()
-            if (!cloudAuthorizationEnabled.value || workspaceId.isBlank() || mainDeviceId.isBlank() || slot.sessionToken.isBlank()) {
-                _userMessage.emit("تعذر استعادة رمز الربط. افتح التعاون السحابي وتأكد من تسجيل الجهاز الرئيسي.")
+            if (!cloudAuthorizationEnabled.value || workspaceId.isBlank() || mainDeviceId.isBlank()) {
+                _userMessage.emit("تعذر إصدار دعوة جديدة. تحقق من تسجيل الجهاز الرئيسي في التعاون السحابي.")
                 return@launch
             }
+
+            val previous = current[index]
+            val newCode = QrPairingHelper.generateCloudInviteCode()
+            val expiresAt = try {
+                cloudCollaborationRepo.createDevicePairingInvite(
+                    workspaceId = workspaceId,
+                    mainDeviceId = mainDeviceId,
+                    slotId = previous.id,
+                    inviteCode = newCode,
+                    ttlSeconds = 600
+                )
+            } catch (failure: Exception) {
+                _userMessage.emit("تعذر إصدار رمز جديد: ${failure.localizedMessage ?: "تحقق من الإنترنت"}")
+                return@launch
+            }
+
+            val updated = previous.copy(
+                sessionToken = newCode,
+                updatedAt = System.currentTimeMillis()
+            )
+            current[index] = updated
+            preferences.saveLinkedSubDevices(current)
+            startCloudOutboxCoordinator()
+
             val credentials = CreatedDeviceCredentials(
-                deviceSlotId = slot.id,
-                deviceName = slot.deviceName,
+                deviceSlotId = updated.id,
+                deviceName = updated.deviceName,
                 workspaceCode = "CLOUD-" + workspaceId.take(8),
                 hostAddress = "",
                 plainPassword = "",
                 cloudWorkspaceId = workspaceId,
                 mainCloudDeviceId = mainDeviceId,
-                sessionToken = slot.sessionToken
+                sessionToken = newCode,
+                inviteExpiresAt = expiresAt
             )
-            _sessionPairingCredentials.value = _sessionPairingCredentials.value + (slotId to credentials)
+            _sessionPairingCredentials.value = _sessionPairingCredentials.value + (updated.id to credentials)
             _createdDeviceCredentials.value = credentials
         }
     }
@@ -1162,6 +1203,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 preferences.saveLinkedSubDevices(current)
                 preferences.incrementSyncRevision()
                 val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+                if (workspaceId.isNotBlank() && mainDeviceId.isNotBlank()) {
+                    runCatching {
+                        cloudCollaborationRepo.revokeDevicePairingInvite(workspaceId, mainDeviceId, previous.id)
+                    }
+                }
                 if (workspaceId.isNotBlank() && previous.boundInstallationId.isNotBlank()) {
                     runCatching {
                         cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(
@@ -1195,7 +1242,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx < 0) return@launch
             val previous = current[idx]
-            val newSecret = UUID.randomUUID().toString()
+            val newSecret = QrPairingHelper.generateCloudInviteCode()
+            val inviteExpiresAt = try {
+                cloudCollaborationRepo.createDevicePairingInvite(
+                    workspaceId = workspaceId,
+                    mainDeviceId = mainDeviceId,
+                    slotId = previous.id,
+                    inviteCode = newSecret,
+                    ttlSeconds = 600
+                )
+            } catch (failure: Exception) {
+                _userMessage.emit("تعذر إصدار دعوة إعادة الربط: ${failure.localizedMessage ?: "تحقق من الإنترنت"}")
+                return@launch
+            }
             current[idx] = previous.copy(
                 isKicked = false,
                 isClaimed = false,
@@ -1214,7 +1273,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 plainPassword = "",
                 cloudWorkspaceId = workspaceId,
                 mainCloudDeviceId = mainDeviceId,
-                sessionToken = newSecret
+                sessionToken = newSecret,
+                inviteExpiresAt = inviteExpiresAt
             )
             _sessionPairingCredentials.value = _sessionPairingCredentials.value + (previous.id to credentials)
             _createdDeviceCredentials.value = credentials
@@ -1241,6 +1301,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 preferences.saveLinkedSubDevices(current)
                 preferences.incrementSyncRevision()
                 val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+                if (workspaceId.isNotBlank() && mainDeviceId.isNotBlank()) {
+                    runCatching {
+                        cloudCollaborationRepo.revokeDevicePairingInvite(workspaceId, mainDeviceId, removed.id)
+                    }
+                }
                 if (workspaceId.isNotBlank() && removed.boundInstallationId.isNotBlank()) {
                     runCatching {
                         cloudCollaborationRepo.clearOfflineWarehouseDesignationsForDevice(
@@ -1257,7 +1323,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun pairWithCloudMainDevice(payload: QrPairingPayload) {
         viewModelScope.launch {
             if (preferences.deviceRoleFlow.first() != DeviceRole.SUB) {
-                _pairingError.value = "حوّل هذا الجهاز إلى وضع الجهاز الفرعي قبل مسح رمز الربط."
+                _pairingError.value = "حوّل هذا الجهاز إلى وضع الجهاز الفرعي قبل إدخال رمز الربط."
                 return@launch
             }
             if (preferences.subSessionTokenFlow.first().isNotBlank()) {
@@ -1272,53 +1338,44 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _isPairingInProgress.value = true
             _pairingError.value = null
             try {
-                require(payload.isCloudPairing) { "رمز الربط السحابي غير مكتمل" }
+                require(payload.isCloudInviteCode) { "الباركود قديم أو لا يحتوي على دعوة ربط سحابية صالحة" }
+                val inviteCode = QrPairingHelper.normalizeCloudInviteCode(payload.inviteCode)
+                require(inviteCode.matches(Regex("^[A-HJ-NP-Z2-9]{20}$"))) {
+                    "رمز الربط غير صالح. امسح QR جديداً أو أدخل الرمز يدوياً."
+                }
                 val userId = cloudCollaborationRepo.currentUserIdOrNull()
                     ?: error("سجّل الدخول بحساب الجهاز الفرعي في شاشة التعاون السحابي أولاً")
-                val workspace = cloudCollaborationRepo.getWorkspace(payload.cloudWorkspaceId)
-                require(workspace.ownerUserId != userId) {
-                    "استخدم حساباً فرعياً مختلفاً عن حساب الجهاز الرئيسي"
-                }
-                require(cloudCollaborationRepo.listWorkspaceMembers(payload.cloudWorkspaceId)
-                    .any { it.userId == userId && it.isActive }) {
-                    "هذا الحساب غير مضاف إلى مساحة تعاون الجهاز الرئيسي"
-                }
-
-                val savedWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
-                if (savedWorkspaceId != payload.cloudWorkspaceId) {
-                    preferences.saveCloudWorkspace(workspace.id, workspace.name)
-                }
                 val fingerprint = preferences.getOrCreateInstallationId()
-                val existingDeviceId = preferences.cloudDeviceIdFlow.first()
-                val registeredDevices = cloudCollaborationRepo.listWorkspaceDevices(payload.cloudWorkspaceId)
-                val validSavedDevice = registeredDevices.firstOrNull {
-                    it.id == existingDeviceId && it.userId == userId &&
-                        it.deviceFingerprint == fingerprint && !it.isRevoked
-                }
-                val existingDevice = registeredDevices.firstOrNull {
-                    it.userId == userId && it.deviceFingerprint == fingerprint && !it.isRevoked
-                }
-                val registeredDeviceId = (validSavedDevice?.id ?: existingDevice?.id ?: cloudCollaborationRepo.registerDevice(
-                    payload.cloudWorkspaceId,
-                    preferences.deviceNameFlow.first().ifBlank { "Android " + android.os.Build.MODEL.orEmpty().take(40) },
-                    fingerprint
-                )).also { preferences.saveCloudDeviceId(it) }
+                val subDeviceName = preferences.deviceNameFlow.first()
+                    .ifBlank { "Android " + android.os.Build.MODEL.orEmpty().take(40) }
+                val redemption = cloudCollaborationRepo.redeemDevicePairingInvite(
+                    inviteCode = inviteCode,
+                    deviceName = subDeviceName,
+                    deviceFingerprint = fingerprint
+                )
+                val workspaceId = redemption.workspaceId
+                val mainDeviceId = redemption.mainDeviceId
+                val slotId = redemption.deviceSlotId
+                val sessionToken = redemption.sessionToken
+                val registeredDeviceId = redemption.deviceId
+                preferences.saveCloudWorkspace(workspaceId, redemption.workspaceName)
+                preferences.saveCloudDeviceId(registeredDeviceId)
 
                 val claimOperationId = UUID.randomUUID().toString()
                 val claim = buildJsonObject {
                     put("type", "PAIR_CLAIM")
                     put("operationId", claimOperationId)
-                    put("slotId", payload.deviceSlotId)
+                    put("slotId", slotId)
                     put("senderDeviceId", registeredDeviceId)
                     put("senderUserId", userId)
-                    put("targetDeviceId", payload.mainCloudDeviceId)
+                    put("targetDeviceId", mainDeviceId)
                 }
                 val claimAck = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                    payload.cloudWorkspaceId,
-                    payload.mainCloudDeviceId,
+                    workspaceId,
+                    mainDeviceId,
                     claim,
-                    transportSecret = payload.sessionToken,
-                    expectedSenderDeviceId = payload.mainCloudDeviceId,
+                    transportSecret = sessionToken,
+                    expectedSenderDeviceId = mainDeviceId,
                     timeoutMillis = 45_000L
                 )
                 require(claimAck["success"]?.jsonPrimitive?.contentOrNull == "true") {
@@ -1342,19 +1399,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     val request = buildJsonObject {
                         put("type", "INITIAL_SYNC_REQUEST")
                         put("operationId", requestId)
-                        put("slotId", payload.deviceSlotId)
+                        put("slotId", slotId)
                         put("senderDeviceId", registeredDeviceId)
                         put("senderUserId", userId)
-                        put("targetDeviceId", payload.mainCloudDeviceId)
+                        put("targetDeviceId", mainDeviceId)
                         put("chunkIndex", chunkIndex)
                         put("snapshotRevision", snapshotRevision)
                     }
                     val chunkAck = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                        payload.cloudWorkspaceId,
-                        payload.mainCloudDeviceId,
+                        workspaceId,
+                        mainDeviceId,
                         request,
-                        transportSecret = payload.sessionToken,
-                        expectedSenderDeviceId = payload.mainCloudDeviceId,
+                        transportSecret = sessionToken,
+                        expectedSenderDeviceId = mainDeviceId,
                         timeoutMillis = 45_000L
                     )
                     require(chunkAck["success"]?.jsonPrimitive?.contentOrNull == "true") {
@@ -1376,7 +1433,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     val records = upserts.map { entity ->
                         CloudEntityRecord(
                             id = entity.docId,
-                            workspaceId = payload.cloudWorkspaceId,
+                            workspaceId = workspaceId,
                             entityType = entity.entityType,
                             localId = entity.localId,
                             payload = entity.payload,
@@ -1388,10 +1445,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 repository.importOperationLogsFromMain(LocalSyncJson.auditLogsFromJsonArray(auditLogs))
                 preferences.savePairedSubDevice(
                     hostUrl = "",
-                    workspaceCode = "CLOUD-" + payload.cloudWorkspaceId.take(8),
-                    deviceSlotId = payload.deviceSlotId,
+                    workspaceCode = "CLOUD-" + workspaceId.take(8),
+                    deviceSlotId = slotId,
                     deviceName = deviceName,
-                    sessionToken = payload.sessionToken,
+                    sessionToken = sessionToken,
                     permissions = permissions,
                     appliedRevision = snapshotRevision
                 )
@@ -1402,18 +1459,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val completeOperationId = UUID.randomUUID().toString()
                 runCatching {
                     cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                        payload.cloudWorkspaceId,
-                        payload.mainCloudDeviceId,
+                        workspaceId,
+                        mainDeviceId,
                         buildJsonObject {
                             put("type", "PAIR_COMPLETE")
                             put("operationId", completeOperationId)
-                            put("slotId", payload.deviceSlotId)
+                            put("slotId", slotId)
                             put("senderDeviceId", registeredDeviceId)
                             put("senderUserId", userId)
-                            put("targetDeviceId", payload.mainCloudDeviceId)
+                            put("targetDeviceId", mainDeviceId)
                         },
-                        transportSecret = payload.sessionToken,
-                        expectedSenderDeviceId = payload.mainCloudDeviceId,
+                        transportSecret = sessionToken,
+                        expectedSenderDeviceId = mainDeviceId,
                         timeoutMillis = 20_000L
                     )
                 }
@@ -1422,7 +1479,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                val detail = failure.localizedMessage ?: "تعذر إكمال الربط عبر الإنترنت"
+                val rawDetail = failure.localizedMessage ?: "تعذر إكمال الربط عبر الإنترنت"
+                val detail = when {
+                    rawDetail.contains("PAIRING_CODE_EXPIRED", ignoreCase = true) ->
+                        "انتهت صلاحية رمز الربط. اطلب من الجهاز الرئيسي إصدار رمز جديد."
+                    rawDetail.contains("PAIRING_CODE_ALREADY_USED", ignoreCase = true) ->
+                        "تم استخدام رمز الربط على جهاز آخر. اطلب رمزاً جديداً."
+                    rawDetail.contains("PAIRING_CODE_INVALID", ignoreCase = true) ||
+                        rawDetail.contains("PAIRING_CODE_FORMAT_INVALID", ignoreCase = true) ->
+                        "رمز الربط غير صحيح. تحقق من الرمز أو امسح الباركود مرة أخرى."
+                    rawDetail.contains("WORKSPACE_MEMBERSHIP_REVOKED", ignoreCase = true) ->
+                        "هذا الحساب موقوف في مساحة التعاون. اطلب من المسؤول إعادة تفعيله."
+                    else -> rawDetail
+                }
                 val lock = preferences.recordPairingFailure()
                 _pairingError.value = if (lock.second > System.currentTimeMillis()) {
                     "تم قفل محاولات الربط مؤقتاً بسبب تكرار المحاولات. $detail"
