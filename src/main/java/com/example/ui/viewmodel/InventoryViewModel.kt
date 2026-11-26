@@ -1018,9 +1018,36 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun showSessionCredentialsQr(slotId: String) {
         if (!isMainDevice.value) return
-        val cached = _sessionPairingCredentials.value[slotId]
-        if (cached != null) {
-            _createdDeviceCredentials.value = cached
+        viewModelScope.launch {
+            val cached = _sessionPairingCredentials.value[slotId]
+            if (cached != null) {
+                _createdDeviceCredentials.value = cached
+                return@launch
+            }
+            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+                it.id == slotId && !it.isClaimed && !it.isKicked && !it.wasUnlinked
+            } ?: run {
+                _userMessage.emit("رمز ربط هذا الجهاز غير متاح أو تم استخدامه بالفعل.")
+                return@launch
+            }
+            val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+            val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+            if (workspaceId.isBlank() || mainDeviceId.isBlank() || slot.sessionToken.isBlank()) {
+                _userMessage.emit("تعذر استعادة رمز الربط. افتح التعاون السحابي وتأكد من تسجيل الجهاز الرئيسي.")
+                return@launch
+            }
+            val credentials = CreatedDeviceCredentials(
+                deviceSlotId = slot.id,
+                deviceName = slot.deviceName,
+                workspaceCode = "CLOUD-" + workspaceId.take(8),
+                hostAddress = "",
+                plainPassword = "",
+                cloudWorkspaceId = workspaceId,
+                mainCloudDeviceId = mainDeviceId,
+                sessionToken = slot.sessionToken
+            )
+            _sessionPairingCredentials.value = _sessionPairingCredentials.value + (slotId to credentials)
+            _createdDeviceCredentials.value = credentials
         }
     }
 
