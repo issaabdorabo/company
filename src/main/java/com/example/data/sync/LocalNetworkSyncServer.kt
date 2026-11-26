@@ -834,6 +834,24 @@ class LocalNetworkSyncServer(
         }
     }
 
+    /**
+     * Applies a Realtime-delivered operation through the same authorization, merge,
+     * duplicate-protection and audit path used by the local network endpoint.
+     */
+    suspend fun applyCloudOperation(sessionToken: String, rawBody: String): JSONObject {
+        require(sessionToken.isNotBlank()) { "جلسة الجهاز الفرعي غير صالحة" }
+        val response = handleEntitiesPush(
+            headers = mapOf("authorization" to "Bearer $sessionToken"),
+            rawBody = rawBody
+        )
+        val body = runCatching { JSONObject(response.body) }
+            .getOrElse { JSONObject().put("message", "استجابة الجهاز الرئيسي غير صالحة") }
+        if (response.statusCode !in 200..299) {
+            error(body.optString("message", "رفض الجهاز الرئيسي العملية"))
+        }
+        return body
+    }
+
     private fun extractBearerToken(headers: Map<String, String>): String? {
         val auth = headers["authorization"] ?: return null
         if (!auth.startsWith("Bearer ", ignoreCase = true)) return null
