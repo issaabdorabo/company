@@ -77,6 +77,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -425,6 +426,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private var subSyncJob: Job? = null
     private var cloudOutboxJob: Job? = null
     private var cloudRealtimeJob: Job? = null
+    private var cloudRealtimeWorkspaceId: String = ""
     private val subSyncMutex = Mutex()
     private val pendingPushMutex = Mutex()
     private val cloudPushMutex = Mutex()
@@ -496,6 +498,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         subSyncJob?.cancel()
         cloudOutboxJob?.cancel()
         cloudRealtimeJob?.cancel()
+        cloudRealtimeWorkspaceId = ""
         runCatching { connectivityManager?.unregisterNetworkCallback(connectivityCallback) }
         syncServer.stop()
     }
@@ -541,11 +544,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (assignedWarehouseUnavailable) {
                 viewModelScope.launch {
                     _userMessage.emit(
-                        if (offlineDesignatedDeviceActive) {
-                            "هذا المخزن مخصص لجهاز فرعي محدد للعمل دون اتصال؛ لا يمكن تنفيذ عمليات متزامنة من الجهاز الرئيسي."
-                        } else {
-                            "لا يمكن تنفيذ العملية على هذا المخزن إلا عند توفر إنترنت موثّق وظهور الجهاز الفرعي المرتبط به متصلاً."
-                        }
+                        "لا يمكن تنفيذ العملية على هذا المخزن إلا عند توفر إنترنت موثّق وظهور الجهاز الفرعي المرتبط به متصلاً."
                     )
                 }
                 onDenied()
@@ -1521,7 +1520,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val cloudDevices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
         val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
             slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-                slot.warehousePermissions.any { it.warehouseId in warehouseIds && it.canView }
+                (slot.warehousePermissions.any { it.warehouseId in warehouseIds && it.canView } ||
+                    (slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty()))
         }
         for (slot in slots) {
             val target = cloudDevices.firstOrNull {
@@ -1537,7 +1537,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("actionType", action.name)
                 put("warehouseIds", JSONArray(warehouseIds.toList()).toString())
             }
-            val ack = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(workspaceId, event)
+            val ack = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                workspaceId, event, expectedSenderDeviceId = target.id
+            )
             val accepted = ack["success"]?.jsonPrimitive?.contentOrNull == "true"
             if (!accepted) {
                 error(ack["error"]?.jsonPrimitive?.contentOrNull ?: "لم يؤكد الجهاز الفرعي جاهزيته لاستلام العملية")
@@ -1565,20 +1567,20 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val relatedVouchers = all.filter { entity ->
             entity.entityType == "voucher" &&
                 (entity.localId in targetVoucherIds ||
-                    entity.payload.number("sourceWarehouseId") in warehouseIds ||
-                    entity.payload.number("destinationWarehouseId") in warehouseIds)
+                    entity.payload.number("sourceWarehouseId")?.let { it in warehouseIds } == true ||
+                    entity.payload.number("destinationWarehouseId")?.let { it in warehouseIds } == true)
         }.map { it.localId }.toSet() + targetVoucherIds
 
         val selected = all.filter { entity ->
             when (entity.entityType) {
                 "warehouse" -> entity.localId in warehouseIds
                 "voucher" -> entity.localId in relatedVouchers
-                "voucher_item" -> entity.payload.number("voucherId") in relatedVouchers
-                "serial" -> entity.payload.number("warehouseId") in warehouseIds &&
+                "voucher_item" -> entity.payload.number("voucherId")?.let { it in relatedVouchers } == true
+                "serial" -> entity.payload.number("warehouseId")?.let { it in warehouseIds } == true &&
                     entity.payload.number("itemId").matches(targetItemIds)
-                "adjustment" -> entity.payload.number("warehouseId") in warehouseIds &&
+                "adjustment" -> entity.payload.number("warehouseId")?.let { it in warehouseIds } == true &&
                     entity.payload.number("itemId").matches(targetItemIds)
-                "association" -> entity.payload.number("warehouseId") in warehouseIds &&
+                "association" -> entity.payload.number("warehouseId")?.let { it in warehouseIds } == true &&
                     entity.payload.number("itemId").matches(targetItemIds)
                 "item" -> entity.localId in targetItemIds || catalogAction
                 "item_status", "serial_sub_unit", "unit", "smaller_unit", "category",
@@ -1622,7 +1624,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("operationId", operationId)
                 put("success", success)
                 put("error", error)
-                put("senderDeviceId", senderDeviceId)
+                put("senderDeviceId", senderDeviceId.ifBlank { preferences.cloudDeviceIdFlow.first() })
             }
         )
     }
@@ -1765,6 +1767,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
                 val cloudWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
                 if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank() && cloudWorkspaceId.isNotBlank()) {
+                    if (cloudRealtimeWorkspaceId != cloudWorkspaceId) {
+                        cloudRealtimeJob?.cancel()
+                        cloudRealtimeWorkspaceId = cloudWorkspaceId
+                    }
                     if (cloudRealtimeJob?.isActive != true) {
                         cloudRealtimeJob = viewModelScope.launch {
                             runCatching {
@@ -1803,6 +1809,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 } else {
                     cloudRealtimeJob?.cancel()
                     cloudRealtimeJob = null
+                    cloudRealtimeWorkspaceId = ""
                 }
                 val now = System.currentTimeMillis()
                 if (now - lastOfflinePermissionSyncAt >= 60_000L) {
@@ -1883,7 +1890,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     put("operation", body.toString())
                 }
                 val ack = runCatching {
-                    cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(workspaceId, event)
+                    cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                        workspaceId, event, expectedSenderDeviceId = remoteDevice.id
+                    )
                 }.getOrElse { failure ->
                     repository.recordCloudPendingSyncFailure(
                         operation.operationId,

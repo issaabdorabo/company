@@ -319,7 +319,7 @@ class CloudCollaborationRepository {
         }
         try {
             channel.subscribe(blockUntilSubscribed = true)
-            channel.broadcast(event = "inventory_event", payload = payload)
+            channel.broadcast(event = "inventory_event", message = payload)
         } finally {
             runCatching { client.realtime.removeChannel(channel) }
         }
@@ -332,7 +332,8 @@ class CloudCollaborationRepository {
     suspend fun sendWorkspaceEventAndAwaitAck(
         workspaceId: String,
         payload: JsonObject,
-        timeoutMillis: Long = 25_000L
+        timeoutMillis: Long = 25_000L,
+        expectedSenderDeviceId: String? = null
     ): JsonObject = coroutineScope {
         require(workspaceId.isNotBlank()) { "معرّف مساحة العمل غير صالح" }
         val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
@@ -346,14 +347,16 @@ class CloudCollaborationRepository {
             acknowledgements.collect { response ->
                 val responseId = response["operationId"]?.jsonPrimitive?.contentOrNull
                 val type = response["type"]?.jsonPrimitive?.contentOrNull
-                if (type == "ACK" && responseId == operationId) {
+                val senderId = response["senderDeviceId"]?.jsonPrimitive?.contentOrNull
+                val expectedSenderMatches = expectedSenderDeviceId == null || senderId == expectedSenderDeviceId
+                if (type == "ACK" && responseId == operationId && expectedSenderMatches) {
                     ack.complete(response)
                 }
             }
         }
         try {
             channel.subscribe(blockUntilSubscribed = true)
-            channel.broadcast(event = "inventory_event", payload = payload)
+            channel.broadcast(event = "inventory_event", message = payload)
             withTimeout(timeoutMillis) { ack.await() }
         } finally {
             collector.cancelAndJoin()
