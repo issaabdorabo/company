@@ -363,22 +363,20 @@ class CloudCollaborationRepository {
         workspaceId: String,
         transportSecret: String,
         envelope: JsonObject
-    ): JsonObject? = runCatching {
-        if (envelope["secureVersion"]?.jsonPrimitive?.contentOrNull != "1") return null
-        val nonce = Base64.decode(
-            envelope["nonce"]?.jsonPrimitive?.contentOrNull ?: return null,
-            Base64.NO_WRAP
-        )
-        val encrypted = Base64.decode(
-            envelope["ciphertext"]?.jsonPrimitive?.contentOrNull ?: return null,
-            Base64.NO_WRAP
-        )
-        if (nonce.size != 12) return null
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
-        val plaintext = cipher.doFinal(encrypted)
-        Json.parseToJsonElement(String(plaintext, Charsets.UTF_8)) as? JsonObject
-    }.getOrNull()
+    ): JsonObject? {
+        return runCatching {
+            if (envelope["secureVersion"]?.jsonPrimitive?.contentOrNull != "1") return@runCatching null
+            val nonceText = envelope["nonce"]?.jsonPrimitive?.contentOrNull ?: return@runCatching null
+            val encryptedText = envelope["ciphertext"]?.jsonPrimitive?.contentOrNull ?: return@runCatching null
+            val nonce = Base64.decode(nonceText, Base64.NO_WRAP)
+            val encrypted = Base64.decode(encryptedText, Base64.NO_WRAP)
+            if (nonce.size != 12) return@runCatching null
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
+            val plaintext = cipher.doFinal(encrypted)
+            Json.parseToJsonElement(String(plaintext, Charsets.UTF_8)) as? JsonObject
+        }.getOrNull()
+    }
 
     suspend fun broadcastWorkspaceEvent(
         workspaceId: String,
