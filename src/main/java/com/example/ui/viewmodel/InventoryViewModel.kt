@@ -1890,7 +1890,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             "PAIR_CLAIM" -> if (isMainDevice.value) handleCloudPairClaim(workspaceId, event)
             "INITIAL_SYNC_REQUEST" -> if (isMainDevice.value) handleCloudInitialSyncRequest(workspaceId, event)
             "PAIR_COMPLETE" -> if (isMainDevice.value) handleCloudPairComplete(workspaceId, event)
-            "MAIN_OPERATION", "PREPARE_MAIN_OPERATION" ->
+            "MAIN_OPERATION", "PREPARE_MAIN_OPERATION", "SYNC_REQUEST" ->
                 if (!isMainDevice.value) handleCloudMainCommand(workspaceId, event, type)
         }
     }
@@ -2157,6 +2157,17 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
                 it.id == senderDeviceId && it.userId == workspace.ownerUserId && !it.isRevoked
             } ?: error("جهاز المستخدم الرئيسي غير مسجل أو تم إيقافه")
+            if (type == "SYNC_REQUEST") {
+                require(flushPendingSubDeviceOperationsOverCloud()) {
+                    "توجد عمليات محلية لم يتمكن الجهاز الرئيسي من استلامها بعد"
+                }
+                sendCloudAck(
+                    workspaceId, operationId, true,
+                    recipientDeviceId = senderDeviceId,
+                    transportSecret = transportSecret
+                )
+                return
+            }
             if (type == "PREPARE_MAIN_OPERATION") {
                 val warehouseIds = longIdsFromJson(event["warehouseIds"]?.jsonPrimitive?.contentOrNull.orEmpty())
                 require(flushPendingSubDeviceOperationsOverCloud()) {
