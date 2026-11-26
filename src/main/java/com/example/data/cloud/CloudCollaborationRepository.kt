@@ -303,9 +303,10 @@ class CloudCollaborationRepository {
     }
 
     /**
-     * Public Broadcast topics are scoped by a hash of each pairing secret and all
-     * event bodies are separately encrypted end-to-end with AES-GCM. The main device
-     * listens on one independently derived topic per active linked sub-device.
+     * Private Broadcast topics are scoped by a hash of each pairing secret and all
+     * event bodies are separately encrypted end-to-end with AES-GCM. Realtime RLS
+     * limits access to active members of the workspace; each device still listens
+     * only on its independently derived topic.
      */
     fun observeWorkspaceEvents(
         workspaceId: String,
