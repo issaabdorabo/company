@@ -1396,6 +1396,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     appliedRevision = snapshotRevision
                 )
                 preferences.resetPairingFailures()
+                // Reconnect the sub-device's private Realtime listener immediately after
+                // its shared pairing secret has been persisted.
+                startCloudOutboxCoordinator()
                 val completeOperationId = UUID.randomUUID().toString()
                 runCatching {
                     cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
