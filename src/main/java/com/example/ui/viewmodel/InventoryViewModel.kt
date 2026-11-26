@@ -488,14 +488,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                                     if (cloudAuthorizationEnabled.value) {
                                         delay(15_000L)
                                     } else {
-                                        try {
-                                            pullFromMainOnce(silent = true)
-                                        } catch (cancelled: CancellationException) {
-                                            throw cancelled
-                                        } catch (error: Exception) {
-                                            _lastSyncError.value = "تعذر تحديث بيانات الجهاز حالياً"
-                                        }
-                                        delay(3000L)
+                                        _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الجهاز في التعاون السحابي للمزامنة عبر الإنترنت."
+                                        delay(15_000L)
                                     }
                                 }
                             }
@@ -1493,23 +1487,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             _userMessage.emit("تمت مزامنة العمليات في الاتجاهين بين الجهاز الرئيسي والأجهزة الفرعية.")
                         }
                     } else {
-                        preferences.incrementSyncRevision()
-                        refreshMainServerInfo()
+                        _lastSyncError.value = "المزامنة عبر الشبكة المحلية متوقفة. سجّل الدخول في التعاون السحابي لاستخدام الإنترنت."
+                        _userMessage.emit(_lastSyncError.value.orEmpty())
                     }
                     _userMessage.emit("اكتملت محاولة المزامنة وتحديث حالة الأجهزة.")
                 } else if (cloudAuthorizationEnabled.value) {
-                _isSyncingNow.value = true
-                try {
                     val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
                     if (cloudDeviceId.isNotBlank()) cloudCollaborationRepo.heartbeat(cloudDeviceId)
                     val delivered = flushPendingSubDeviceSyncOperations()
                     if (!delivered) _userMessage.emit("توجد عمليات محلية تنتظر تأكيد وصولها إلى الجهاز الرئيسي.")
-                    else _userMessage.emit("تم تحديث حالة الاتصال وإرسال العمليات المعلقة عند توفر الشبكة.")
-                } finally {
-                    _isSyncingNow.value = false
-                }
+                    else _userMessage.emit("تم تحديث حالة الاتصال وإرسال العمليات المعلقة عبر الإنترنت.")
                 } else {
-                    pullFromMainOnce(silent = false)
+                    _lastSyncError.value = "المزامنة عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الدخول في التعاون السحابي."
+                    _userMessage.emit(_lastSyncError.value.orEmpty())
                 }
             } finally {
                 _isSyncingNow.value = false
@@ -1580,86 +1570,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private suspend fun pullFromMainOnce(silent: Boolean): Unit = subSyncMutex.withLock {
-        if (!silent) _isSyncingNow.value = true
-        try {
-            val host = preferences.mainHostUrlFlow.first()
-            val token = preferences.subSessionTokenFlow.first()
-            if (host.isBlank() || token.isBlank()) {
-                _lastSyncError.value = "بيانات اتصال الجهاز الرئيسي غير مكتملة"
-                return@withLock
-            }
-
-            // Send locally queued changes before pulling the main snapshot. Pulling first can
-            // overwrite an offline voucher that has not yet reached the main device.
-            if (!flushPendingSubDeviceSyncOperations()) {
-                if (!silent) _userMessage.emit("توجد عمليات محفوظة بانتظار المزامنة؛ لم يتم استبدال البيانات المحلية.")
-                return@withLock
-            }
-
-            val result = syncClient.fetchSyncSnapshot(host, token)
-            result.onSuccess { snapshot ->
-                _lastSyncError.value = null
-                if (snapshot.isKicked) {
-                    handleSubDeviceKicked("تم طرد هذا الجهاز وإلغاء ارتباطه من الجهاز الرئيسي.")
-                    return@onSuccess
-                }
-
-                preferences.updateSubDevicePermissions(snapshot.permissions)
-                // History is synchronized independently of the inventory revision and deduplicated
-                // by the repository, so late audit writes are not missed.
-                repository.importOperationLogsFromMain(snapshot.auditLogs)
-                val lastApplied = preferences.lastAppliedRevisionFlow.first()
-                if (snapshot.syncVersion < lastApplied) {
-                    _lastSyncError.value = "وصلت نسخة أقدم من بيانات الجهاز الرئيسي؛ تم تجاهلها للحفاظ على أحدث بيانات محلية."
-                    return@onSuccess
-                }
-                if (snapshot.syncVersion != lastApplied) {
-                    if (snapshot.entities.isEmpty()) {
-                        val localEntities = repository.exportAllEntitiesForCloud()
-                        if (localEntities.isNotEmpty()) {
-                            // An empty remote response can be transient or incomplete. Never erase
-                            // an existing warehouse database from an empty snapshot.
-                            _lastSyncError.value = "وصلت لقطة مزامنة فارغة رغم وجود بيانات محلية؛ تم الاحتفاظ بالبيانات وإعادة المحاولة لاحقاً."
-                            return@onSuccess
-                        }
-                    } else {
-                        // Advance the revision only after the database replacement succeeds.
-                        // The previous code ignored Result.failure and marked the snapshot applied,
-                        // leaving the device on stale/partial inventory indefinitely.
-                        repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.entities).getOrThrow()
-                    }
-                    preferences.updateLastSync(snapshot.syncVersion)
-                } else {
-                    preferences.updateLastSync(lastApplied)
-                }
-
-                if (!silent) {
-                    _userMessage.emit("تمت المزامنة مع الجهاز الرئيسي بنجاح")
-                }
-            }.onFailure { err ->
-                val apiErr = err as? SyncApiException
-                if (apiErr?.errorCode == "KICKED") {
-                    handleSubDeviceKicked(apiErr.message ?: "تم طرد هذا الجهاز وإلغاء ارتباطه من الجهاز الرئيسي.")
-                } else {
-                    _lastSyncError.value = "بانتظار توفر الجهاز الرئيسي على الشبكة المحلية"
-                    if (!silent) {
-                        _userMessage.emit("تعذر الوصول للجهاز الرئيسي حالياً. تأكد من الاتصال بنفس الشبكة.")
-                    }
-                }
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            // Covers DataStore, JSON, Room transaction and permission-update failures as well
-            // as HTTP failures so no background sync exception can crash the app.
-            _lastSyncError.value = "تعذر تحديث بيانات الجهاز: " + (error.localizedMessage?.take(100).orEmpty())
-            if (!silent) {
-                _userMessage.emit("تعذر إكمال المزامنة. سيحاول التطبيق مرة أخرى تلقائياً.")
-            }
-        } finally {
-            if (!silent) _isSyncingNow.value = false
-        }
+    @Deprecated("LAN synchronization is disabled; cloud Realtime is the only supported transport.")
+    private suspend fun pullFromMainOnce(silent: Boolean): Unit {
+        _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. استخدم التعاون السحابي عبر الإنترنت."
+        if (!silent) _userMessage.emit(_lastSyncError.value.orEmpty())
     }
 
     private suspend fun handleSubDeviceKicked(reason: String) {
@@ -2594,59 +2508,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }.getOrDefault(emptySet())
 
     private suspend fun flushPendingSubDeviceSyncOperations(): Boolean = pendingPushMutex.withLock {
-        if (cloudAuthorizationEnabled.value) {
-            return@withLock flushPendingSubDeviceOperationsOverCloud()
+        if (!cloudAuthorizationEnabled.value) {
+            _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الجهاز في التعاون السحابي."
+            return@withLock false
         }
-        val host = preferences.mainHostUrlFlow.first()
-        val token = preferences.subSessionTokenFlow.first()
-        if (host.isBlank() || token.isBlank()) return@withLock false
-
-        val pending = repository.getPendingSyncOperations()
-        for (operation in pending) {
-            val entities = runCatching {
-                LocalSyncJson.upsertsFromJsonArray(JSONArray(operation.entitiesJson))
-            }.getOrElse { error ->
-                repository.recordPendingSyncFailure(operation.operationId, "تعذر قراءة بيانات العملية: ${error.localizedMessage}")
-                _lastSyncError.value = "توجد عملية محفوظة لا يمكن قراءة بياناتها؛ لم يتم تجاوزها."
-                return@withLock false
-            }
-
-            val result = syncClient.pushEntitiesToMain(
-                rawHost = host,
-                sessionToken = token,
-                actionType = operation.actionType,
-                entities = entities,
-                operationTitle = operation.operationTitle,
-                operationDetails = operation.operationDetails,
-                actorName = operation.actorName,
-                warehouseIds = longIdsFromJson(operation.warehouseIdsJson),
-                targetItemIds = longIdsFromJson(operation.targetItemIdsJson),
-                targetVoucherIds = longIdsFromJson(operation.targetVoucherIdsJson),
-                clientOperationId = operation.operationId
-            )
-
-            if (result.isSuccess) {
-                val newRevision = result.getOrThrow()
-                repository.removePendingSyncOperation(operation.operationId)
-                preferences.updateLastSync(newRevision)
-                _lastSyncError.value = null
-            } else {
-                val error = result.exceptionOrNull() ?: IllegalStateException("فشل غير معروف في المزامنة")
-                repository.recordPendingSyncFailure(operation.operationId, error.localizedMessage ?: error.javaClass.simpleName)
-                val apiError = error as? SyncApiException
-                when (apiError?.errorCode) {
-                    "KICKED" -> handleSubDeviceKicked(
-                        apiError.message ?: "تم إيقاف هذا الجهاز من الجهاز الرئيسي."
-                    )
-                    "PERMISSION_DENIED" -> _userMessage.emit(
-                        apiError.message ?: "رفض الجهاز الرئيسي العملية بسبب الصلاحيات؛ بقيت محفوظة في قائمة المزامنة."
-                    )
-                }
-                _lastSyncError.value = error.localizedMessage ?: "تعذر إرسال العمليات المحفوظة"
-                return@withLock false
-            }
-        }
-        true
+        flushPendingSubDeviceOperationsOverCloud()
     }
 
     private suspend fun flushPendingSubDeviceOperationsOverCloud(): Boolean {
