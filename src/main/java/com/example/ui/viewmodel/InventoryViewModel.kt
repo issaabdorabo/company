@@ -1707,6 +1707,164 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun chunkInitialCloudEntities(entities: List<CloudEntityUpsert>): List<List<CloudEntityUpsert>> {
+        val maxPlaintextBytes = 110 * 1024
+        val chunks = mutableListOf<List<CloudEntityUpsert>>()
+        var current = mutableListOf<CloudEntityUpsert>()
+        var currentBytes = 2
+        entities.sortedBy { it.docId }.forEach { entity ->
+            val entityBytes = LocalSyncJson.upsertsToJsonArray(listOf(entity))
+                .toString().toByteArray(Charsets.UTF_8).size
+            require(entityBytes + 2 < maxPlaintextBytes) {
+                "يوجد سجل مخزني أكبر من الحد الآمن لنقله عبر قناة المزامنة"
+            }
+            if (current.isNotEmpty() && currentBytes + entityBytes + 1 > maxPlaintextBytes) {
+                chunks += current.toList()
+                current = mutableListOf()
+                currentBytes = 2
+            }
+            current += entity
+            currentBytes += entityBytes + 1
+        }
+        if (current.isNotEmpty() || chunks.isEmpty()) chunks += current.toList()
+        return chunks
+    }
+
+    private suspend fun handleCloudPairClaim(workspaceId: String, event: JsonObject) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val slotId = event["slotId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        var transportSecret = ""
+        try {
+            val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+            require(targetDeviceId == mainDeviceId) { "طلب الربط موجّه إلى جهاز رئيسي آخر" }
+            val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
+            require(workspace.ownerUserId == cloudCollaborationRepo.currentUserIdOrNull()) {
+                "اعتماد الربط متاح للمستخدم الرئيسي فقط"
+            }
+            val devices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
+            val remoteDevice = devices.firstOrNull {
+                it.id == senderDeviceId && it.userId == senderUserId && !it.isRevoked
+            } ?: error("حساب الجهاز الفرعي غير مسجل في مساحة العمل")
+            require(senderUserId != workspace.ownerUserId) { "يجب أن يستخدم الجهاز الفرعي حساباً مختلفاً عن حساب الرئيسي" }
+            cloudCollaborationRepo.listWorkspaceMembers(workspaceId)
+                .firstOrNull { it.userId == senderUserId && it.isActive }
+                ?: error("يجب إضافة حساب الجهاز الفرعي إلى مساحة التعاون أولاً")
+
+            val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
+            val slotIndex = current.indexOfFirst { it.id == slotId }
+            require(slotIndex >= 0) { "رمز ربط الجهاز غير موجود أو تم حذفه" }
+            val slot = current[slotIndex]
+            transportSecret = slot.sessionToken
+            require(transportSecret.isNotBlank() && !slot.isKicked && !slot.wasUnlinked) {
+                "رمز الربط ملغى أو غير صالح"
+            }
+            require(!slot.isClaimed || slot.boundInstallationId == remoteDevice.deviceFingerprint) {
+                "تم استخدام رمز الربط على جهاز آخر بالفعل"
+            }
+            val now = System.currentTimeMillis()
+            val claimedSlot = slot.copy(
+                isClaimed = true,
+                wasUnlinked = false,
+                boundInstallationId = remoteDevice.deviceFingerprint,
+                updatedAt = now,
+                lastSeenAt = now
+            )
+            current[slotIndex] = claimedSlot
+            preferences.saveLinkedSubDevices(current)
+            cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(workspaceId, claimedSlot)
+
+            val revision = preferences.syncRevisionFlow.first()
+            val chunks = chunkInitialCloudEntities(repository.exportAllEntitiesForCloud())
+            val logs = repository.getOperationLogsForSyncToDevice(claimedSlot.deviceName)
+            pairingSnapshots[slotId] = CloudPairingSnapshot(
+                revision = revision,
+                entityChunks = chunks,
+                auditLogs = logs,
+                deviceName = claimedSlot.deviceName,
+                permissions = claimedSlot.toPermissions()
+            )
+            sendCloudAck(
+                workspaceId = workspaceId,
+                operationId = operationId,
+                success = true,
+                recipientDeviceId = senderDeviceId,
+                transportSecret = transportSecret,
+                extra = buildJsonObject {
+                    put("deviceName", claimedSlot.deviceName)
+                    put("permissions", LocalSyncJson.permissionsToJson(claimedSlot.toPermissions()).toString())
+                    put("totalChunks", chunks.size)
+                    put("snapshotRevision", revision)
+                }
+            )
+            _userMessage.emit("تم ربط الجهاز الفرعي (" + claimedSlot.deviceName + ") عبر الإنترنت")
+        } catch (failure: Exception) {
+            if (transportSecret.isNotBlank()) {
+                runCatching {
+                    sendCloudAck(
+                        workspaceId, operationId, false, senderDeviceId, transportSecret,
+                        failure.localizedMessage ?: "تعذر اعتماد ربط الجهاز الفرعي"
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun handleCloudInitialSyncRequest(workspaceId: String, event: JsonObject) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val slotId = event["slotId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        var transportSecret = ""
+        try {
+            require(targetDeviceId == preferences.cloudDeviceIdFlow.first()) {
+                "طلب المزامنة الأولية موجّه إلى جهاز رئيسي آخر"
+            }
+            val remoteDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
+                it.id == senderDeviceId && it.userId == senderUserId && !it.isRevoked
+            } ?: error("الجهاز الفرعي غير مسجل أو تم إيقافه")
+            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+                it.id == slotId && it.isClaimed && !it.isKicked && !it.wasUnlinked &&
+                    it.boundInstallationId == remoteDevice.deviceFingerprint
+            } ?: error("الجهاز غير مرتبط بهذا الحساب")
+            transportSecret = slot.sessionToken
+            val snapshot = pairingSnapshots[slotId] ?: error("انتهت جلسة نقل النسخة الأولية؛ أعد مسح رمز الربط")
+            val requestedRevision = event["snapshotRevision"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+            require(requestedRevision == snapshot.revision &&
+                preferences.syncRevisionFlow.first() == snapshot.revision
+            ) { "تغيرت بيانات المخزون أثناء الربط؛ أعد محاولة المزامنة الأولية" }
+            val chunkIndex = event["chunkIndex"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                ?: error("رقم جزء المزامنة غير صالح")
+            require(chunkIndex in snapshot.entityChunks.indices) { "جزء المزامنة المطلوب غير موجود" }
+            val isLastChunk = chunkIndex == snapshot.entityChunks.lastIndex
+            val extra = buildJsonObject {
+                put("chunkIndex", chunkIndex)
+                put("totalChunks", snapshot.entityChunks.size)
+                put("entitiesChunk", LocalSyncJson.upsertsToJsonArray(snapshot.entityChunks[chunkIndex]).toString())
+                if (isLastChunk) {
+                    put("auditLogs", LocalSyncJson.auditLogsToJsonArray(snapshot.auditLogs).toString())
+                    put("deviceName", snapshot.deviceName)
+                }
+            }
+            sendCloudAck(
+                workspaceId, operationId, true, senderDeviceId, transportSecret, extra = extra
+            )
+            if (isLastChunk) pairingSnapshots.remove(slotId)
+        } catch (failure: Exception) {
+            if (transportSecret.isNotBlank()) {
+                runCatching {
+                    sendCloudAck(
+                        workspaceId, operationId, false, senderDeviceId, transportSecret,
+                        failure.localizedMessage ?: "تعذر إرسال جزء من المزامنة الأولية"
+                    )
+                }
+            }
+        }
+    }
+
     private suspend fun handleCloudSubOperation(workspaceId: String, event: JsonObject) {
         val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
         val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
