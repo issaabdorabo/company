@@ -427,6 +427,12 @@ fun MultiDeviceControlSection(
             } else {
                 // SUB-DEVICE MODE
                 if (!isSubConnected) {
+                    Text(
+                        text = "للربط عبر الإنترنت: أضف حساب هذا الجهاز إلى مساحة التعاون أولاً، ثم امسح رمز QR الذي أنشأه الجهاز الرئيسي. لا يلزم أن يكون الجهازان على شبكة Wi-Fi واحدة.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
                     // Quick Camera QR Scan Button
                     Button(
                         onClick = { showQrScanner = true },
