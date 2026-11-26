@@ -15,6 +15,7 @@ import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.CloudCollaborationRepository
 import com.example.data.cloud.CloudOperationAuditEntry
 import com.example.data.cloud.CloudEntityRecord
+import com.example.data.cloud.CloudEntityUpsert
 import com.example.data.cloud.CloudUserNotification
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
@@ -53,6 +54,7 @@ import com.example.data.sync.SyncApiException
 import com.example.ui.theme.AppTheme
 import com.example.util.AppNotificationManager
 import com.example.util.SecurityUtils
+import com.example.util.QrPairingPayload
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -83,8 +85,18 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
 
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
+    private data class CloudPairingSnapshot(
+        val revision: Long,
+        val entityChunks: List<List<CloudEntityUpsert>>,
+        val auditLogs: List<OperationAuditLog>,
+        val deviceName: String,
+        val permissions: DevicePermissions
+    )
+
+    private val pairingSnapshots = ConcurrentHashMap<String, CloudPairingSnapshot>()
     private val app = application as InventoryApp
     private val repository = app.repository
     private val preferences = app.preferencesManager
