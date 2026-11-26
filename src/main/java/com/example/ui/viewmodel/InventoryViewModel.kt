@@ -519,12 +519,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private fun isAssignedSubDeviceOnline(warehouseId: Long): Boolean {
         val now = System.currentTimeMillis()
         return linkedSubDevicesForWarehouse(warehouseId).any { slot ->
-            val hasOfflineGrant = slot.warehousePermissions.any {
-                it.warehouseId == warehouseId && it.canView && it.canWorkOffline
-            }
             val cloudLastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
             val effectiveLastSeen = if (cloudAuthorizationEnabled.value) cloudLastSeen else slot.lastSeenAt
-            slot.isClaimed && hasOfflineGrant &&
+            slot.isClaimed && slot.boundInstallationId.isNotBlank() &&
                 now - effectiveLastSeen in 0L..45_000L
         }
     }
@@ -548,25 +545,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val perms = devicePermissions.value
         if (perms.isMainDevice) {
             val assignedWarehouses = warehouseIds.filter { linkedSubDevicesForWarehouse(it).isNotEmpty() }
-            val assignedWarehouseWithoutOfflineGrant = assignedWarehouses.any { warehouseId ->
-                linkedSubDevicesForWarehouse(warehouseId).none { slot ->
-                    slot.warehousePermissions.any {
-                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
-                    }
-                }
-            }
             val assignedWarehouseUnavailable = assignedWarehouses.isNotEmpty() &&
                 (!hasValidatedInternetConnection() ||
-                    assignedWarehouseWithoutOfflineGrant ||
                     assignedWarehouses.any { !isAssignedSubDeviceOnline(it) })
             if (assignedWarehouseUnavailable) {
                 viewModelScope.launch {
-                    val reason = if (assignedWarehouseWithoutOfflineGrant) {
-                        "يجب تفعيل صلاحية العمل دون اتصال للمستخدم الفرعي على هذا المخزن أولاً."
-                    } else {
-                        "يجب أن يكون الجهاز الفرعي متصلاً فعلياً بالإنترنت."
-                    }
-                    _userMessage.emit("لا يمكن تنفيذ العملية على المخزن الفرعي. $reason")
+                    _userMessage.emit(
+                        "لا يمكن تنفيذ العملية على المخزن الفرعي. يجب أن يكون الجهاز الفرعي متصلاً فعلياً بالإنترنت."
+                    )
                 }
                 onDenied()
                 return
@@ -1686,13 +1672,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             require(assignedWarehouseIds.isNotEmpty()) {
                 "لم يتم تحديد مخزن صالح للجهاز الفرعي (" + slot.deviceName + ")"
             }
-            require(assignedWarehouseIds.all { warehouseId ->
-                slot.warehousePermissions.any {
-                    it.warehouseId == warehouseId && it.canView && it.canWorkOffline
-                }
-            }) {
-                "لا يمكن للمستخدم الرئيسي العمل على مخزن (" + slot.deviceName + ") قبل تفعيل صلاحية العمل دون اتصال لهذا المخزن."
-            }
+            // Online main-device operations require the assigned sub-device to ACK below;
+            // the separate canWorkOffline permission is only for offline work on the sub-device.
             val slotWarehouseIds = assignedWarehouseIds
             val target = cloudDevices.firstOrNull {
                 it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
@@ -2303,26 +2284,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val warehouseIds = longIdsFromJson(operation.warehouseIdsJson)
             val targetItemIds = longIdsFromJson(data.optJSONArray("targetItemIds")?.toString().orEmpty())
             val targetVoucherIds = longIdsFromJson(data.optJSONArray("targetVoucherIds")?.toString().orEmpty())
-            val assignedSlots = slots.filter { slot ->
+            val targetSlots = slots.filter { slot ->
                 if (warehouseIds.isEmpty()) {
                     if (operation.actionType == DeviceAction.EDIT_CATALOG_ITEMS.name) slot.canEditCatalogItems
                     else slot.canAddItems
                 } else {
-                    slot.warehousePermissions.any { it.warehouseId in warehouseIds && it.canView } ||
-                        (slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty())
+                    warehouseIds.any { warehouseId ->
+                        slot.canViewAllWarehouses ||
+                            slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+                    }
                 }
-            }
-            val targetSlots = if (warehouseIds.isEmpty()) assignedSlots else assignedSlots.filter { slot ->
-                slot.warehousePermissions.any {
-                    it.warehouseId in warehouseIds && it.canView && it.canWorkOffline
-                }
-            }
-            if (assignedSlots.isNotEmpty() && targetSlots.isEmpty()) {
-                repository.recordCloudPendingSyncFailure(
-                    operation.operationId,
-                    "لم تُفعّل صلاحية العمل دون اتصال لأي جهاز فرعي مخصص للمخزن."
-                )
-                return@withLock false
             }
             if (targetSlots.isEmpty()) {
                 repository.removeCloudPendingSyncOperation(operation.operationId)
@@ -2331,9 +2302,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
             for (slot in targetSlots) {
                 val slotWarehouseIds = if (warehouseIds.isEmpty()) emptySet() else warehouseIds.filter { warehouseId ->
-                    slot.warehousePermissions.any {
-                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
-                    }
+                    slot.canViewAllWarehouses ||
+                        slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
                 }.toSet()
                 val remoteDevice = cloudDevices.firstOrNull {
                     it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
