@@ -734,11 +734,15 @@ fun MultiDeviceControlSection(
         CreatedCredentialsDialog(
             credentials = creds,
             onCopyAll = {
-                val text = buildString {
-                    appendLine("بيانات ربط الجهاز الفرعي (${creds.deviceName}):")
-                    appendLine("عنوان الجهاز الرئيسي: ${creds.hostAddress}")
-                    appendLine("رمز القاعدة: ${creds.workspaceCode}")
-                    appendLine("كلمة المرور المنفردة: ${creds.plainPassword}")
+                val text = if (creds.cloudWorkspaceId.isNotBlank()) {
+                    "ربط الجهاز الفرعي (${creds.deviceName}) يتم عبر مسح رمز QR من الجهاز الفرعي بعد تسجيل حسابه في مساحة التعاون. لا يحتاج الجهازان إلى شبكة Wi-Fi واحدة."
+                } else {
+                    buildString {
+                        appendLine("بيانات ربط الجهاز الفرعي (${creds.deviceName}):")
+                        appendLine("عنوان الجهاز الرئيسي: ${creds.hostAddress}")
+                        appendLine("رمز القاعدة: ${creds.workspaceCode}")
+                        appendLine("كلمة المرور المنفردة: ${creds.plainPassword}")
+                    }
                 }
                 copyToClipboard(context, text)
                 Toast.makeText(context, "تم نسخ كامل بيانات الربط", Toast.LENGTH_SHORT).show()
@@ -782,15 +786,20 @@ fun MultiDeviceControlSection(
         QrScannerDialog(
             onQrScanned = { payload ->
                 showQrScanner = false
-                hostInput = payload.host
-                codeInput = payload.code
-                passwordInput = payload.pwd
-                Toast.makeText(context, "تمت قراءة باركود الربط، جاري الاتصال...", Toast.LENGTH_SHORT).show()
-                viewModel.pairWithMainDevice(
-                    hostAddress = payload.host,
-                    workspaceCodeInput = payload.code,
+                if (payload.isCloudPairing) {
+                    Toast.makeText(context, "تمت قراءة رمز الربط السحابي، جاري الاتصال عبر الإنترنت...", Toast.LENGTH_SHORT).show()
+                    viewModel.pairWithCloudMainDevice(payload)
+                } else {
+                    hostInput = payload.host
+                    codeInput = payload.code
                     passwordInput = payload.pwd
-                )
+                    Toast.makeText(context, "تمت قراءة باركود الربط المحلي، جاري الاتصال...", Toast.LENGTH_SHORT).show()
+                    viewModel.pairWithMainDevice(
+                        hostAddress = payload.host,
+                        workspaceCodeInput = payload.code,
+                        passwordInput = payload.pwd
+                    )
+                }
             },
             onInvalidQrDetected = {
                 Toast.makeText(context, "هذا الباركود لا يخص ربط مخزني الذكي", Toast.LENGTH_SHORT).show()
@@ -1170,11 +1179,20 @@ private fun CreatedCredentialsDialog(
     onDismiss: () -> Unit
 ) {
     val qrBitmap = remember(credentials) {
-        val payload = QrPairingHelper.encodePairingPayload(
-            hostAddress = credentials.hostAddress,
-            workspaceCode = credentials.workspaceCode,
-            plainPassword = credentials.plainPassword
-        )
+        val payload = if (credentials.cloudWorkspaceId.isNotBlank()) {
+            QrPairingHelper.encodeCloudPairingPayload(
+                workspaceId = credentials.cloudWorkspaceId,
+                mainDeviceId = credentials.mainCloudDeviceId,
+                deviceSlotId = credentials.deviceSlotId,
+                sessionToken = credentials.sessionToken
+            )
+        } else {
+            QrPairingHelper.encodePairingPayload(
+                hostAddress = credentials.hostAddress,
+                workspaceCode = credentials.workspaceCode,
+                plainPassword = credentials.plainPassword
+            )
+        }
         QrPairingHelper.generateQrBitmap(payload, sizePx = 520)
     }
 
@@ -1230,14 +1248,25 @@ private fun CreatedCredentialsDialog(
                         )
                     }
                 }
-                CredentialLine("عنوان الجهاز الرئيسي", credentials.hostAddress)
-                CredentialLine("رمز قاعدة البيانات", credentials.workspaceCode)
-                CredentialLine("كلمة المرور المنفردة", credentials.plainPassword)
-                Text(
-                    text = "ملاحظة أمنية: يتم تشفير كلمة المرور بالبصمة الملحية (SHA-256) ولن تظهر مرة أخرى بعد إغلاق الجلسة.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WarningOrange
-                )
+                if (credentials.cloudWorkspaceId.isNotBlank()) {
+                    CredentialLine("طريقة الربط", "سحابي عبر الإنترنت — لا يحتاج إلى عنوان IP أو شبكة Wi-Fi مشتركة")
+                    CredentialLine("مساحة التعاون", credentials.cloudWorkspaceId.take(8))
+                    Text(
+                        text = "تأكد من إضافة حساب Google للجهاز الفرعي إلى مساحة التعاون، ثم امسح هذا الرمز من الجهاز الفرعي. يحتوي الرمز على مفتاح ربط خاص بهذا الجهاز ولا تشاركه مع أي شخص آخر.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarningOrange,
+                        textAlign = TextAlign.Center
+                    )
+                } else {
+                    CredentialLine("عنوان الجهاز الرئيسي", credentials.hostAddress)
+                    CredentialLine("رمز قاعدة البيانات", credentials.workspaceCode)
+                    CredentialLine("كلمة المرور المنفردة", credentials.plainPassword)
+                    Text(
+                        text = "ملاحظة أمنية: يتم تشفير كلمة المرور بالبصمة الملحية (SHA-256) ولن تظهر مرة أخرى بعد إغلاق الجلسة.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarningOrange
+                    )
+                }
             }
         },
         confirmButton = {
