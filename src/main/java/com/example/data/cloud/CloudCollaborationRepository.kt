@@ -288,47 +288,58 @@ class CloudCollaborationRepository {
         const val CHAT_ATTACHMENTS_BUCKET = "chat-attachments"
     }
 
-    private fun inventoryTopic(workspaceId: String, deviceId: String): String {
-        require(workspaceId.isNotBlank() && deviceId.isNotBlank()) { "بيانات قناة التعاون غير مكتملة" }
-        return "workspace:$workspaceId:device:$deviceId"
+    private fun inventoryTopic(workspaceId: String, deviceId: String, transportSecret: String): String {
+        require(workspaceId.isNotBlank() && deviceId.isNotBlank() && transportSecret.isNotBlank()) {
+            "بيانات قناة التعاون غير مكتملة"
+        }
+        // The topic itself is a capability: the random pairing secret is never placed
+        // in the topic, only its SHA-256 digest, making other workspace device topics
+        // impractical to enumerate or subscribe to.
+        val proof = MessageDigest.getInstance("SHA-256").digest(
+            "smart-inventory-topic-v1|$workspaceId|$deviceId|$transportSecret".toByteArray(Charsets.UTF_8)
+        ).joinToString("") { byte -> "%02x".format(byte) }
+        return "workspace:$workspaceId:device:$deviceId:pair:$proof"
     }
 
     /**
-     * Public Realtime topics are used because the managed Realtime table owner does not
-     * expose policy DDL to this project's SQL role. Every payload is encrypted end-to-end
-     * with the per-device pairing secret before it leaves the device. The main device
-     * supplies its linked-device secrets; a sub-device supplies only its own pairing secret.
+     * Public Broadcast topics are scoped by a hash of each pairing secret and all
+     * event bodies are separately encrypted end-to-end with AES-GCM. The main device
+     * listens on one independently derived topic per active linked sub-device.
      */
     fun observeWorkspaceEvents(
         workspaceId: String,
         deviceId: String,
         transportSecrets: List<String>
     ): Flow<JsonObject> = callbackFlow {
-        require(transportSecrets.any { it.isNotBlank() }) { "مفتاح قناة التعاون غير متوفر" }
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, deviceId))
-        val events = channel.broadcastFlow<JsonObject>("inventory_event")
-        val collector = launch {
-            events.collect { envelope ->
-                val decoded = transportSecrets.asSequence()
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .mapNotNull { secret -> decryptInventoryEnvelope(workspaceId, secret, envelope) }
-                    .firstOrNull()
-                if (decoded != null) trySend(decoded).isSuccess
-            }
+        val secrets = transportSecrets.filter { it.isNotBlank() }.distinct()
+        require(secrets.isNotEmpty()) { "مفتاح قناة التعاون غير متوفر" }
+        val channels = secrets.map { secret ->
+            secret to client.realtime.channel(inventoryTopic(workspaceId, deviceId, secret))
         }
+        val collectors = mutableListOf<Job>()
         try {
-            channel.subscribe(blockUntilSubscribed = true)
+            channels.forEach { (secret, channel) ->
+                val events = channel.broadcastFlow<JsonObject>("inventory_event")
+                collectors += launch {
+                    events.collect { envelope ->
+                        val decoded = decryptInventoryEnvelope(workspaceId, secret, envelope)
+                        if (decoded != null) trySend(decoded).isSuccess
+                    }
+                }
+            }
+            channels.forEach { (_, channel) -> channel.subscribe(blockUntilSubscribed = true) }
         } catch (failure: Exception) {
-            collector.cancel()
-            runCatching { client.realtime.removeChannel(channel) }
+            collectors.forEach { it.cancel() }
+            channels.forEach { (_, channel) -> runCatching { client.realtime.removeChannel(channel) } }
             close(failure)
             return@callbackFlow
         }
         awaitClose {
-            collector.cancel()
+            collectors.forEach { it.cancel() }
             CoroutineScope(Dispatchers.IO).launch {
-                runCatching { client.realtime.removeChannel(channel) }
+                channels.forEach { (_, channel) ->
+                    runCatching { client.realtime.removeChannel(channel) }
+                }
             }
         }
     }
@@ -384,7 +395,7 @@ class CloudCollaborationRepository {
         payload: JsonObject,
         transportSecret: String
     ) {
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId))
+        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId, transportSecret))
         try {
             channel.subscribe(blockUntilSubscribed = true)
             channel.broadcast(
@@ -416,8 +427,8 @@ class CloudCollaborationRepository {
         val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف العملية غير موجود")
 
-        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId))
-        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId))
+        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId, transportSecret))
+        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId, transportSecret))
         val ack = CompletableDeferred<JsonObject>()
         val acknowledgements = senderChannel.broadcastFlow<JsonObject>("inventory_event")
         val collector = launch {
