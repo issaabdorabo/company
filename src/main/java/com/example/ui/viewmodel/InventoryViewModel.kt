@@ -2424,14 +2424,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     return@withLock false
                 }
-                val lastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
-                if (System.currentTimeMillis() - lastSeen !in 0L..45_000L) {
-                    repository.recordCloudPendingSyncFailure(
-                        operation.operationId,
-                        "الجهاز الفرعي " + slot.deviceName + " غير متصل حالياً"
-                    )
-                    return@withLock false
-                }
+                // The awaited private-channel ACK below is the authoritative live-online
+                // proof. Do not reject a reachable device using a stale heartbeat snapshot.
                 val scopedEntities = operationEntitiesForScope(
                     all = repository.exportAllEntitiesForCloud(),
                     actionType = operation.actionType,
