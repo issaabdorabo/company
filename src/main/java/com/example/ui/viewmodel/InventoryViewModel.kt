@@ -474,8 +474,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     subSyncJob?.cancel()
                     subSyncJob = null
 
-                    val code = preferences.ensureWorkspaceCode()
-                    val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
+                    if (cloudAuthorizationEnabled.value) {
+                        syncServer.stop()
+                    } else {
+                        preferences.ensureWorkspaceCode()
+                        syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
+                    }
                 } else {
                     syncServer.stop()
                     if (state.subToken.isBlank() || state.permissions.isKicked) {
@@ -941,23 +945,20 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _userMessage.emit("اسم الجهاز ($cleanName) مستخدم بالفعل. اختر اسماً مختلفاً.")
                 return@launch
             }
-            val cloudWorkspaceId = if (cloudAuthorizationEnabled.value) preferences.cloudWorkspaceIdFlow.first() else ""
-            val mainCloudDeviceId = if (cloudWorkspaceId.isNotBlank()) preferences.cloudDeviceIdFlow.first() else ""
-            val cloudPairingReady = cloudWorkspaceId.isNotBlank() && mainCloudDeviceId.isNotBlank()
-            if (cloudAuthorizationEnabled.value && !cloudPairingReady) {
-                _userMessage.emit("افتح شاشة التعاون السحابي وسجّل الجهاز الرئيسي في مساحة العمل قبل إنشاء رمز الربط عبر الإنترنت.")
+            // Cloud-only pairing: never issue LAN/IP or hotspot credentials.
+            if (!cloudAuthorizationEnabled.value) {
+                _userMessage.emit("لإنشاء باركود ربط عبر الإنترنت، سجّل دخول الجهاز الرئيسي في مساحة التعاون السحابي أولاً. الربط المحلي ونقطة الاتصال غير مستخدمين.")
                 return@launch
             }
-            val code = if (cloudPairingReady) "CLOUD-" + cloudWorkspaceId.take(8) else preferences.ensureWorkspaceCode()
-            val hostDisplay = if (cloudPairingReady) {
-                ""
-            } else {
-                val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-                val ips = LocalNetworkSyncServer.getLocalLanIpAddresses()
-                (ips.firstOrNull() ?: "192.168.43.1") + ":" + (if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT)
+            val cloudWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
+            val mainCloudDeviceId = preferences.cloudDeviceIdFlow.first()
+            if (cloudWorkspaceId.isBlank() || mainCloudDeviceId.isBlank()) {
+                _userMessage.emit("تعذر إنشاء باركود الإنترنت: مساحة التعاون أو تسجيل الجهاز الرئيسي غير مكتمل.")
+                return@launch
             }
-
-            val plainPassword = if (cloudPairingReady) "" else SecurityUtils.generateUniqueDevicePassword(10)
+            val code = "CLOUD-" + cloudWorkspaceId.take(8)
+            val hostDisplay = ""
+            val plainPassword = ""
             val salt = SecurityUtils.generateSalt()
             val passwordHash = SecurityUtils.hashPassword(plainPassword, salt)
             val sessionToken = UUID.randomUUID().toString()
@@ -1019,11 +1020,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun showSessionCredentialsQr(slotId: String) {
         if (!isMainDevice.value) return
         viewModelScope.launch {
-            val cached = _sessionPairingCredentials.value[slotId]
-            if (cached != null) {
-                _createdDeviceCredentials.value = cached
-                return@launch
-            }
             val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
                 it.id == slotId && !it.isClaimed && !it.isKicked && !it.wasUnlinked
             } ?: run {
@@ -1032,7 +1028,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             val workspaceId = preferences.cloudWorkspaceIdFlow.first()
             val mainDeviceId = preferences.cloudDeviceIdFlow.first()
-            if (workspaceId.isBlank() || mainDeviceId.isBlank() || slot.sessionToken.isBlank()) {
+            if (!cloudAuthorizationEnabled.value || workspaceId.isBlank() || mainDeviceId.isBlank() || slot.sessionToken.isBlank()) {
                 _userMessage.emit("تعذر استعادة رمز الربط. افتح التعاون السحابي وتأكد من تسجيل الجهاز الرئيسي.")
                 return@launch
             }
@@ -1211,37 +1207,39 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun reactivateSubDevice(slotId: String) {
         viewModelScope.launch {
             if (!requireMainDeviceForDeviceManagement()) return@launch
+            if (!cloudAuthorizationEnabled.value) {
+                _userMessage.emit("سجّل الجهاز الرئيسي في مساحة التعاون السحابي لإعادة إصدار باركود الإنترنت.")
+                return@launch
+            }
+            val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+            val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+            if (workspaceId.isBlank() || mainDeviceId.isBlank()) {
+                _userMessage.emit("تعذر إعادة الربط: مساحة التعاون السحابي غير جاهزة.")
+                return@launch
+            }
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx < 0) return@launch
-
             val previous = current[idx]
-            val workspaceCode = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            val hostAddress = LocalNetworkSyncServer.getLocalLanIpAddresses().firstOrNull() ?: "192.168.43.1"
-            val hostDisplay = "$hostAddress:${if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT}"
-            val oneTimePassword = SecurityUtils.generateUniqueDevicePassword(10)
-            val passwordSalt = SecurityUtils.generateSalt()
-            val passwordHash = SecurityUtils.hashPassword(oneTimePassword, passwordSalt)
-
+            val newSecret = UUID.randomUUID().toString()
             current[idx] = previous.copy(
-                passwordSalt = passwordSalt,
-                passwordHash = passwordHash,
                 isKicked = false,
                 isClaimed = false,
                 boundInstallationId = "",
-                sessionToken = UUID.randomUUID().toString(),
+                sessionToken = newSecret,
                 updatedAt = System.currentTimeMillis()
             )
             preferences.saveLinkedSubDevices(current)
-            preferences.incrementSyncRevision()
-
+            startCloudOutboxCoordinator()
             val credentials = CreatedDeviceCredentials(
                 deviceSlotId = previous.id,
                 deviceName = previous.deviceName,
-                workspaceCode = workspaceCode,
-                hostAddress = hostDisplay,
-                plainPassword = oneTimePassword
+                workspaceCode = "CLOUD-" + workspaceId.take(8),
+                hostAddress = "",
+                plainPassword = "",
+                cloudWorkspaceId = workspaceId,
+                mainCloudDeviceId = mainDeviceId,
+                sessionToken = newSecret
             )
             _sessionPairingCredentials.value = _sessionPairingCredentials.value + (previous.id to credentials)
             _createdDeviceCredentials.value = credentials
@@ -1251,10 +1249,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     deviceName = "الجهاز الرئيسي",
                     operationType = "REACTIVATE_DEVICE",
                     title = "إعادة تفعيل جهاز فرعي",
-                    details = "تمت إعادة تفعيل الجهاز (${previous.deviceName}) وإصدار كلمة مرور جديدة للربط مع الاحتفاظ بصلاحياته."
+                    details = "تمت إعادة تفعيل الجهاز (" + previous.deviceName + ") وإصدار باركود ربط عبر الإنترنت."
                 )
             )
-            _userMessage.emit("تمت إعادة تفعيل ${previous.deviceName}. تظهر الآن كلمة مرور جديدة في نافذة بيانات الربط؛ لن تعمل كلمة المرور القديمة.")
+            _userMessage.emit("تمت إعادة تفعيل " + previous.deviceName + ". امسح باركود الإنترنت الجديد من الجهاز الفرعي.")
         }
     }
 
