@@ -528,7 +528,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 it.warehouseId == warehouseId && it.canView && it.canWorkOffline
             }
             val cloudLastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
-            val effectiveLastSeen = maxOf(slot.lastSeenAt, cloudLastSeen)
+            val effectiveLastSeen = if (cloudAuthorizationEnabled.value) cloudLastSeen else slot.lastSeenAt
             slot.isClaimed && hasOfflineGrant &&
                 now - effectiveLastSeen in 0L..45_000L
         }
