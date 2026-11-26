@@ -1842,17 +1842,24 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
             slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
                 warehouseIds.any { warehouseId ->
-                    slot.warehousePermissions.any {
-                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
-                    }
+                    slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
                 }
         }
         for (slot in slots) {
-            val slotWarehouseIds = warehouseIds.filter { warehouseId ->
+            val assignedWarehouseIds = warehouseIds.filter { warehouseId ->
+                slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+            }.toSet()
+            require(assignedWarehouseIds.isNotEmpty()) {
+                "لم يتم تحديد مخزن صالح للجهاز الفرعي (" + slot.deviceName + ")"
+            }
+            require(assignedWarehouseIds.all { warehouseId ->
                 slot.warehousePermissions.any {
                     it.warehouseId == warehouseId && it.canView && it.canWorkOffline
                 }
-            }.toSet()
+            }) {
+                "لا يمكن للمستخدم الرئيسي العمل على مخزن (" + slot.deviceName + ") قبل تفعيل صلاحية العمل دون اتصال لهذا المخزن."
+            }
+            val slotWarehouseIds = assignedWarehouseIds
             val target = cloudDevices.firstOrNull {
                 it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
             } ?: error("تعذر العثور على اتصال الجهاز الفرعي (${slot.deviceName})")
