@@ -3996,34 +3996,35 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 if (isMainDevice.value) {
-                    val srv = serverStatus.value
-                    val activeDevices = linkedSubDevices.value.count { !it.isKicked }
+                    val cloudReady = cloudAuthorizationEnabled.value && hasValidatedInternetConnection()
+                    val activeDevices = linkedSubDevices.value.count { slot ->
+                        slot.isClaimed && !slot.isKicked && !slot.wasUnlinked
+                    }
                     checks.add(
                         DiagnosticCheckItem(
-                            title = "خادم الربط المباشر بين الأجهزة",
-                            passed = srv.isRunning,
-                            detail = if (srv.isRunning) {
-                                "نشط على العنوان (${srv.primaryAddress}) • رمز القاعدة: ${srv.workspaceCode} • أجهزة مسجلة: $activeDevices"
+                            title = "اتصال التعاون السحابي",
+                            passed = cloudReady,
+                            detail = if (cloudReady) {
+                                "الاتصال بالإنترنت وقنوات Realtime متاحة • أجهزة فرعية مسجلة: $activeDevices"
                             } else {
-                                "متوقف مؤقتاً — اضغط تحديث خادم الربط أو فعّل شبكة Wi-Fi / نقطة الاتصال"
+                                "سجّل دخول الجهاز الرئيسي في مساحة التعاون وتحقق من اتصال الإنترنت. لا يستخدم التطبيق خادم LAN أو نقطة اتصال."
                             },
-                            status = if (srv.isRunning) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
+                            status = if (cloudReady) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
                         )
                     )
                 } else {
-                    val connected = isSubConnected.value
-                    val host = mainHostUrl.value
-                    val pingOk = if (host.isNotBlank()) syncClient.pingMainDevice(host).isSuccess else false
+                    val connected = isSubConnected.value && cloudAuthorizationEnabled.value
+                    val internetReady = hasValidatedInternetConnection()
                     checks.add(
                         DiagnosticCheckItem(
-                            title = "اتصال الجهاز الفرعي بالجهاز الرئيسي",
-                            passed = connected && pingOk,
+                            title = "اتصال الجهاز الفرعي عبر الإنترنت",
+                            passed = connected && internetReady,
                             detail = when {
-                                connected && pingOk -> "متصل مباشرة بالجهاز الرئيسي ($host) والمزامنة فعالة"
-                                connected -> "مرتبط بالجهاز ($host) لكنه غير متاح حالياً على الشبكة المحلية"
-                                else -> "غير مرتبط بعد — أدخل بيانات الربط من قسم ربط الأجهزة أعلاه"
+                                connected && internetReady -> "الجهاز مرتبط سحابياً والإنترنت متاح؛ المزامنة عبر Realtime."
+                                connected -> "الجهاز مرتبط سحابياً لكن اتصال الإنترنت غير متاح حالياً."
+                                else -> "سجّل حساب الجهاز الفرعي في مساحة التعاون وامسح باركود الإنترنت من الجهاز الرئيسي."
                             },
-                            status = if (connected && pingOk) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
+                            status = if (connected && internetReady) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
                         )
                     )
                 }
