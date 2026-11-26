@@ -42,7 +42,6 @@ import java.util.UUID
 import javax.crypto.spec.SecretKeySpec
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.Cipher
-import java.util.Base64
 import java.security.SecureRandom
 import java.security.MessageDigest
 import kotlin.time.Duration.Companion.hours
@@ -353,8 +352,8 @@ class CloudCollaborationRepository {
         val encrypted = cipher.doFinal(payload.toString().toByteArray(Charsets.UTF_8))
         return buildJsonObject {
             put("secureVersion", JsonPrimitive(1))
-            put("nonce", JsonPrimitive(Base64.getEncoder().encodeToString(nonce)))
-            put("ciphertext", JsonPrimitive(Base64.getEncoder().encodeToString(encrypted)))
+            put("nonce", JsonPrimitive(Base64.encodeToString(nonce, Base64.NO_WRAP)))
+            put("ciphertext", JsonPrimitive(Base64.encodeToString(encrypted, Base64.NO_WRAP)))
         }
     }
 
@@ -364,11 +363,13 @@ class CloudCollaborationRepository {
         envelope: JsonObject
     ): JsonObject? = runCatching {
         if (envelope["secureVersion"]?.jsonPrimitive?.contentOrNull != "1") return null
-        val nonce = Base64.getDecoder().decode(
-            envelope["nonce"]?.jsonPrimitive?.contentOrNull ?: return null
+        val nonce = Base64.decode(
+            envelope["nonce"]?.jsonPrimitive?.contentOrNull ?: return null,
+            Base64.NO_WRAP
         )
-        val encrypted = Base64.getDecoder().decode(
-            envelope["ciphertext"]?.jsonPrimitive?.contentOrNull ?: return null
+        val encrypted = Base64.decode(
+            envelope["ciphertext"]?.jsonPrimitive?.contentOrNull ?: return null,
+            Base64.NO_WRAP
         )
         if (nonce.size != 12) return null
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
