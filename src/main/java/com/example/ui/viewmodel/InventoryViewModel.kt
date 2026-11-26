@@ -14,6 +14,7 @@ import com.example.InventoryApp
 import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.CloudCollaborationRepository
 import com.example.data.cloud.CloudOperationAuditEntry
+import com.example.data.cloud.CloudEntityRecord
 import com.example.data.cloud.CloudUserNotification
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
@@ -66,9 +67,15 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -412,6 +419,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var subSyncJob: Job? = null
     private var cloudOutboxJob: Job? = null
+    private var cloudRealtimeJob: Job? = null
     private val subSyncMutex = Mutex()
     private val pendingPushMutex = Mutex()
     private val cloudPushMutex = Mutex()
@@ -482,6 +490,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         super.onCleared()
         subSyncJob?.cancel()
         cloudOutboxJob?.cancel()
+        cloudRealtimeJob?.cancel()
         runCatching { connectivityManager?.unregisterNetworkCallback(connectivityCallback) }
         syncServer.stop()
     }
@@ -521,20 +530,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val perms = devicePermissions.value
         if (perms.isMainDevice) {
             val assignedWarehouses = warehouseIds.filter { linkedSubDevicesForWarehouse(it).isNotEmpty() }
-            val offlineDesignatedDeviceActive = assignedWarehouses.any { warehouseId ->
-                val now = System.currentTimeMillis()
-                linkedSubDevicesForWarehouse(warehouseId).any { slot ->
-                    val cloudLastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
-                    val effectiveLastSeen = maxOf(slot.lastSeenAt, cloudLastSeen)
-                    slot.warehousePermissions.any {
-                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
-                    } && slot.isClaimed && now - effectiveLastSeen in 0L..45_000L
-                }
-            }
             val assignedWarehouseUnavailable = assignedWarehouses.isNotEmpty() &&
                 (!hasValidatedInternetConnection() ||
-                    assignedWarehouses.any { !isAssignedSubDeviceOnline(it) } ||
-                    offlineDesignatedDeviceActive)
+                    assignedWarehouses.any { !isAssignedSubDeviceOnline(it) })
             if (assignedWarehouseUnavailable) {
                 viewModelScope.launch {
                     _userMessage.emit(
@@ -653,6 +651,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 _isOperationRunning.value = true
                 try {
+                    if (isMainDevice.value && cloudAuthorizationEnabled.value && warehouseIds.isNotEmpty()) {
+                        awaitLinkedSubDevicesReady(action, warehouseIds)
+                    }
                     validateCloudWarehousePermission(action, warehouseIds)
                     operation()
                 } catch (cancelled: CancellationException) {
@@ -1494,6 +1495,254 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             targetItemIds = targetItemIds,
             targetVoucherIds = targetVoucherIds
         )
+    }
+
+    private suspend fun awaitLinkedSubDevicesReady(
+        action: DeviceAction,
+        warehouseIds: Set<Long>
+    ) {
+        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+        if (workspaceId.isBlank()) return
+        val senderDeviceId = preferences.cloudDeviceIdFlow.first()
+        val senderUserId = cloudCollaborationRepo.currentUserIdOrNull()
+            ?: error("انتهت جلسة حساب Google")
+        val cloudDevices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
+        val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
+            slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
+                slot.warehousePermissions.any { it.warehouseId in warehouseIds && it.canView }
+        }
+        for (slot in slots) {
+            val target = cloudDevices.firstOrNull {
+                it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
+            } ?: error("تعذر العثور على اتصال الجهاز الفرعي (${slot.deviceName})")
+            val operationId = UUID.randomUUID().toString()
+            val event = buildJsonObject {
+                put("type", "PREPARE_MAIN_OPERATION")
+                put("operationId", operationId)
+                put("senderDeviceId", senderDeviceId)
+                put("senderUserId", senderUserId)
+                put("targetDeviceId", target.id)
+                put("actionType", action.name)
+                put("warehouseIds", JSONArray(warehouseIds.toList()).toString())
+            }
+            val ack = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(workspaceId, event)
+            val accepted = ack["success"]?.jsonPrimitive?.contentOrNull == "true"
+            if (!accepted) {
+                error(ack["error"]?.jsonPrimitive?.contentOrNull ?: "لم يؤكد الجهاز الفرعي جاهزيته لاستلام العملية")
+            }
+        }
+    }
+
+    private fun operationEntitiesForScope(
+        all: List<com.example.data.cloud.CloudEntityUpsert>,
+        actionType: String,
+        warehouseIds: Set<Long>,
+        targetItemIds: Set<Long>,
+        targetVoucherIds: Set<Long>
+    ): List<com.example.data.cloud.CloudEntityUpsert> {
+        fun Long?.matches(ids: Set<Long>) = this != null && (ids.isEmpty() || this in ids)
+        fun Map<String, Any?>.number(key: String): Long? = when (val value = this[key]) {
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull()
+            else -> null
+        }
+        val catalogAction = actionType in setOf(
+            DeviceAction.ADD_OR_MANAGE_CATALOG.name,
+            DeviceAction.EDIT_CATALOG_ITEMS.name
+        )
+        val relatedVouchers = all.filter { entity ->
+            entity.entityType == "voucher" &&
+                (entity.localId in targetVoucherIds ||
+                    entity.payload.number("sourceWarehouseId") in warehouseIds ||
+                    entity.payload.number("destinationWarehouseId") in warehouseIds)
+        }.map { it.localId }.toSet() + targetVoucherIds
+
+        val selected = all.filter { entity ->
+            when (entity.entityType) {
+                "warehouse" -> entity.localId in warehouseIds
+                "voucher" -> entity.localId in relatedVouchers
+                "voucher_item" -> entity.payload.number("voucherId") in relatedVouchers
+                "serial" -> entity.payload.number("warehouseId") in warehouseIds &&
+                    entity.payload.number("itemId").matches(targetItemIds)
+                "adjustment" -> entity.payload.number("warehouseId") in warehouseIds &&
+                    entity.payload.number("itemId").matches(targetItemIds)
+                "association" -> entity.payload.number("warehouseId") in warehouseIds &&
+                    entity.payload.number("itemId").matches(targetItemIds)
+                "item" -> entity.localId in targetItemIds || catalogAction
+                "item_status", "serial_sub_unit", "unit", "smaller_unit", "category",
+                "supplier", "beneficiary", "party" -> catalogAction
+                else -> false
+            }
+        }.toMutableList()
+
+        if (actionType == DeviceAction.DELETE_ITEM.name) {
+            targetItemIds.forEach { id ->
+                selected += com.example.data.cloud.CloudEntityUpsert(
+                    docId = "item_$id", entityType = "item", localId = id,
+                    payload = emptyMap(), isDeleted = true
+                )
+            }
+        }
+        if (actionType == DeviceAction.DELETE_ISSUE_VOUCHER.name ||
+            actionType == DeviceAction.DELETE_SUPPLY_VOUCHER.name
+        ) {
+            targetVoucherIds.forEach { id ->
+                selected += com.example.data.cloud.CloudEntityUpsert(
+                    docId = "voucher_$id", entityType = "voucher", localId = id,
+                    payload = emptyMap(), isDeleted = true
+                )
+            }
+        }
+        return selected.distinctBy { it.docId }
+    }
+
+    private suspend fun sendCloudAck(
+        workspaceId: String,
+        operationId: String,
+        success: Boolean,
+        error: String = "",
+        senderDeviceId: String = ""
+    ) {
+        cloudCollaborationRepo.broadcastWorkspaceEvent(
+            workspaceId,
+            buildJsonObject {
+                put("type", "ACK")
+                put("operationId", operationId)
+                put("success", success)
+                put("error", error)
+                put("senderDeviceId", senderDeviceId)
+            }
+        )
+    }
+
+    private suspend fun handleCloudWorkspaceEvent(workspaceId: String, event: JsonObject) {
+        val type = event["type"]?.jsonPrimitive?.contentOrNull ?: return
+        when (type) {
+            "SUB_OPERATION" -> if (isMainDevice.value) handleCloudSubOperation(workspaceId, event)
+            "MAIN_OPERATION", "PREPARE_MAIN_OPERATION" ->
+                if (!isMainDevice.value) handleCloudMainCommand(workspaceId, event, type)
+        }
+    }
+
+    private suspend fun handleCloudSubOperation(workspaceId: String, event: JsonObject) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val operationBody = event["operation"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        try {
+            val remoteDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
+                .firstOrNull { it.id == senderDeviceId && !it.isRevoked && it.userId == senderUserId }
+                ?: error("الجهاز المرسل غير مسجل أو تم إيقافه")
+            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+                it.isClaimed && !it.isKicked && !it.wasUnlinked &&
+                    it.boundInstallationId == remoteDevice.deviceFingerprint
+            } ?: error("لا يوجد جهاز فرعي مرتبط مطابق لهذا الحساب")
+            syncServer.applyCloudOperation(slot.sessionToken, operationBody)
+            sendCloudAck(workspaceId, operationId, true)
+        } catch (failure: Exception) {
+            sendCloudAck(
+                workspaceId,
+                operationId,
+                false,
+                failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الرئيسي"
+            )
+        }
+    }
+
+    private suspend fun handleCloudMainCommand(
+        workspaceId: String,
+        event: JsonObject,
+        type: String
+    ) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val myDeviceId = preferences.cloudDeviceIdFlow.first()
+        try {
+            if (targetDeviceId != myDeviceId) return
+            val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
+            require(senderUserId == workspace.ownerUserId) { "العملية الواردة ليست من المستخدم الرئيسي" }
+            if (type == "PREPARE_MAIN_OPERATION") {
+                val warehouseIds = longIdsFromJson(event["warehouseIds"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                val permissions = devicePermissions.value
+                require(warehouseIds.all { id ->
+                    permissions.canViewAllWarehouses ||
+                        permissions.warehousePermissions.any { it.warehouseId == id && it.canView }
+                }) { "الجهاز غير مخول للوصول إلى أحد المخازن المستهدفة" }
+                sendCloudAck(workspaceId, operationId, true)
+                return
+            }
+
+            val operationBody = event["operation"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            applyMainOperationLocally(operationId, operationBody, workspaceId)
+            sendCloudAck(workspaceId, operationId, true)
+        } catch (failure: Exception) {
+            sendCloudAck(
+                workspaceId,
+                operationId,
+                false,
+                failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الفرعي"
+            )
+        }
+    }
+
+    private suspend fun applyMainOperationLocally(
+        operationId: String,
+        rawBody: String,
+        workspaceId: String
+    ) {
+        if (repository.hasAppliedSyncOperation(operationId)) return
+        val body = JSONObject(rawBody)
+        val actionType = body.optString("actionType", "GENERAL")
+        val warehouseIds = longIdsFromJson(body.optJSONArray("warehouseIds")?.toString().orEmpty())
+        val permissions = devicePermissions.value
+        require(warehouseIds.all { id ->
+            permissions.canViewAllWarehouses ||
+                permissions.warehousePermissions.any { it.warehouseId == id && it.canView }
+        }) { "لا تملك صلاحية عرض أحد المخازن المستهدفة" }
+
+        val incoming = LocalSyncJson.upsertsFromJsonArray(body.optJSONArray("entities"))
+        val merged = repository.exportAllEntitiesForCloud().associateBy { it.docId }.toMutableMap()
+        incoming.forEach { entity ->
+            if (entity.isDeleted) merged.remove(entity.docId) else merged[entity.docId] = entity
+        }
+        val targetItems = longIdsFromJson(body.optJSONArray("targetItemIds")?.toString().orEmpty())
+        val targetVouchers = longIdsFromJson(body.optJSONArray("targetVoucherIds")?.toString().orEmpty())
+        if (actionType == DeviceAction.DELETE_ITEM.name) {
+            merged.entries.removeAll { (_, entity) ->
+                (entity.entityType == "serial" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems) ||
+                    (entity.entityType == "association" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems)
+            }
+        }
+        if (actionType == DeviceAction.DELETE_ISSUE_VOUCHER.name ||
+            actionType == DeviceAction.DELETE_SUPPLY_VOUCHER.name
+        ) {
+            merged.entries.removeAll { (_, entity) ->
+                entity.entityType == "voucher_item" &&
+                    (entity.payload["voucherId"] as? Number)?.toLong() in targetVouchers
+            }
+        }
+
+        val records = merged.values.map { entity ->
+            CloudEntityRecord(
+                id = entity.docId,
+                workspaceId = workspaceId,
+                entityType = entity.entityType,
+                localId = entity.localId,
+                payload = entity.payload
+            )
+        }
+        repository.replaceDatabaseFromCloudEntitiesSafely(records).getOrThrow()
+        repository.recordOperation(
+            OperationAuditLog(
+                actorName = body.optString("actorName", "المستخدم الرئيسي"),
+                deviceName = "الجهاز الرئيسي",
+                operationType = actionType,
+                title = body.optString("operationTitle", "عملية من الجهاز الرئيسي"),
+                details = body.optString("operationDetails", "")
+            )
+        )
+        repository.markSyncOperationApplied(operationId)
     }
 
     private fun startCloudOutboxCoordinator() {
