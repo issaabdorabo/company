@@ -109,7 +109,6 @@ fun MultiDeviceControlSection(
     val isSyncingNow by viewModel.isSyncingNow.collectAsState()
     val lastSyncAt by viewModel.lastSyncAt.collectAsState()
     val lastSyncError by viewModel.lastSyncError.collectAsState()
-    val cloudDeviceLastSeenAt by viewModel.cloudDeviceLastSeenAt.collectAsState()
     val pairingLockedUntil by viewModel.pairingLockedUntil.collectAsState()
 
     var showCreateSubDialog by remember { mutableStateOf(false) }
@@ -405,7 +404,6 @@ fun MultiDeviceControlSection(
                             hasQrAvailable = !slot.isClaimed && !slot.isKicked && sessionPairingCredentials.containsKey(slot.id),
                             onShowQr = { viewModel.showSessionCredentialsQr(slot.id) },
                             warehouses = availableWarehouses,
-                            cloudDeviceLastSeenAt = cloudDeviceLastSeenAt,
                             onUpdatePermissions = { add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog ->
                                 viewModel.updateSubDevicePermissions(slot.id, add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog)
                             },
@@ -824,7 +822,6 @@ private fun PermissionBadge(label: String, granted: Boolean) {
 private fun SubDeviceManagementCard(
     slot: LinkedSubDevice,
     warehouses: List<Warehouse>,
-    cloudDeviceLastSeenAt: Map<String, Long>,
     hasQrAvailable: Boolean,
     onShowQr: () -> Unit,
     onUpdatePermissions: (Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, List<WarehousePermission>, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
@@ -843,12 +840,8 @@ private fun SubDeviceManagementCard(
     var editGeneral by remember(slot.id) { mutableStateOf(slot.canEditDelete) }
     var expanded by remember(slot.id) { mutableStateOf(false) }
 
-    val effectiveLastSeenAt = maxOf(
-        slot.lastSeenAt,
-        cloudDeviceLastSeenAt[slot.boundInstallationId] ?: 0L
-    )
     val isOnline = slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-        System.currentTimeMillis() - effectiveLastSeenAt in 0L..45_000L
+        System.currentTimeMillis() - slot.lastSeenAt < 15_000L
     val statusText = when {
         slot.wasUnlinked -> "تم فك الارتباط – جاهز لإعادة الاتصال"
         slot.isKicked -> "موقوف"
@@ -863,8 +856,8 @@ private fun SubDeviceManagementCard(
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val statusBackground = statusColor.copy(alpha = 0.12f)
-    val lastSeenText = if (effectiveLastSeenAt > 0L) {
-        "آخر اتصال: " + SimpleDateFormat("dd/MM/yyyy  hh:mm a", Locale.getDefault()).format(Date(effectiveLastSeenAt))
+    val lastSeenText = if (slot.lastSeenAt > 0L) {
+        "آخر اتصال: " + SimpleDateFormat("dd/MM/yyyy  hh:mm a", Locale.getDefault()).format(Date(slot.lastSeenAt))
     } else {
         "لم يتصل بعد"
     }
