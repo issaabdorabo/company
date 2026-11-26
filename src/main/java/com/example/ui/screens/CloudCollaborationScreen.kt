@@ -450,23 +450,11 @@ fun CloudCollaborationScreen(
                     }
 
                     if (activeWorkspace != null) {
-                        if (activeWorkspace?.ownerUserId == currentUserId) {
-                            Button(
-                                onClick = { viewModel.uploadLocalInventoryToCloud() },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text("رفع بيانات المخازن الحالية إلى السحابة") }
-                            Text(
-                                "ارفع بيانات الجهاز الرئيسي مرة واحدة لبدء مشاركة المخازن مع بقية المستخدمين.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        OutlinedButton(
-                            onClick = { viewModel.downloadCloudWorkspaceData() },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("مزامنة بيانات المخازن الآن") }
+                        Text(
+                            "قاعدة المخزون محلية على كل جهاز ولا تُرفع إلى Supabase. تُستخدم Supabase للصلاحيات والمحادثات وحالة اتصال الأجهزة، وتُحفظ النسخة الاحتياطية الكاملة عبر Google Drive.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     if (members.isNotEmpty()) {
@@ -547,7 +535,7 @@ fun CloudCollaborationScreen(
                     if (member == null) {
                         Text("لا يوجد مستخدم فرعي محدد.")
                     } else if (warehouses.isEmpty()) {
-                        Text("لا توجد مخازن مرفوعة إلى السحابة بعد.")
+                        Text("لا توجد مخازن مرتبطة بمساحة العمل بعد.")
                     } else {
                         warehouses.forEach { warehouse ->
                             val access = warehouseMemberships[warehouse.id].orEmpty()

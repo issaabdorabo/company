@@ -107,7 +107,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             delay(1_000L)
             if (hasValidatedInternetConnection()) {
                 if (!isMainDevice.value && isSubConnected.value) runCatching { flushPendingSubDeviceSyncOperations() }
-                runCatching { flushCloudPendingSyncOperations() }
             }
         }
     }
@@ -1312,9 +1311,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             } else if (cloudAuthorizationEnabled.value) {
                 _isSyncingNow.value = true
                 try {
-                    flushCloudPendingSyncOperations()
-                    pollCloudIncomingOperations()
-                    _userMessage.emit("تم تحديث البيانات عبر السحابة")
+                    val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
+                    if (cloudDeviceId.isNotBlank()) cloudCollaborationRepo.heartbeat(cloudDeviceId)
+                    _userMessage.emit("تم تحديث حالة اتصال الجهاز. بيانات المخزون محفوظة محلياً.")
                 } finally {
                     _isSyncingNow.value = false
                 }
@@ -1329,8 +1328,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         if (isMainDevice.value || !isSubConnected.value) return
         viewModelScope.launch {
             if (cloudAuthorizationEnabled.value) {
-                flushCloudPendingSyncOperations()
-                pollCloudIncomingOperations()
+                val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
+                if (cloudDeviceId.isNotBlank()) runCatching { cloudCollaborationRepo.heartbeat(cloudDeviceId) }
             } else {
                 pullFromMainOnce(silent = true)
             }
@@ -1495,50 +1494,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             targetItemIds = targetItemIds,
             targetVoucherIds = targetVoucherIds
         )
-        propagateCloudDataChange(
-            action = action,
-            operationTitle = notificationTitle,
-            operationDetails = notificationDetails,
-            warehouseIds = warehouseIds
-        )
-    }
-
-    private fun propagateCloudDataChange(
-        action: DeviceAction? = null,
-        operationTitle: String,
-        operationDetails: String,
-        warehouseIds: Set<Long>
-    ) {
-        viewModelScope.launch {
-            val workspaceId = preferences.cloudWorkspaceIdFlow.first()
-            if (workspaceId.isBlank()) return@launch
-            try {
-                val effectiveIds = effectiveCloudWarehouseIds(workspaceId, action, warehouseIds)
-                if ((action == DeviceAction.ADD_OR_MANAGE_CATALOG || action == DeviceAction.EDIT_CATALOG_ITEMS) &&
-                    !isMainDevice.value && effectiveIds.isEmpty()
-                ) {
-                    _userMessage.emit("لم تُمنح لهذا الحساب صلاحية تعديل دليل الأصناف في أي مخزن.")
-                    return@launch
-                }
-                val operation = CloudPendingSyncOperation(
-                    operationId = UUID.randomUUID().toString(),
-                    actionType = action?.name ?: "GENERAL",
-                    operationTitle = operationTitle,
-                    operationDetails = operationDetails,
-                    actorName = userName.value,
-                    warehouseIdsJson = JSONArray(effectiveIds.toList()).toString(),
-                    entitiesJson = LocalSyncJson.upsertsToJsonArray(repository.exportAllEntitiesForCloud()).toString()
-                )
-                repository.enqueueCloudPendingSyncOperation(operation)
-                if (!flushCloudPendingSyncOperations()) {
-                    _lastSyncError.value = "تم حفظ العملية في طابور السحابة؛ ستُرفع عند عودة الاتصال."
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                _lastSyncError.value = "تعذر حفظ العملية في طابور السحابة: ${error.localizedMessage ?: "خطأ غير معروف"}"
-            }
-        }
     }
 
     private fun startCloudOutboxCoordinator() {
@@ -1546,8 +1501,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         cloudOutboxJob = viewModelScope.launch {
             var lastOfflinePermissionSyncAt = 0L
             while (isActive) {
-                runCatching { flushCloudPendingSyncOperations() }
-                runCatching { pollCloudIncomingOperations() }
                 val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
                 val cloudWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
                 if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank()) {
@@ -1599,191 +1552,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private suspend fun pollCloudIncomingOperations() {
-        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
-        if (workspaceId.isBlank() || cloudCollaborationRepo.currentUserIdOrNull().isNullOrBlank()) return
-
-        // Keep the local Room database in sync even when the collaboration screen is not open.
-        runCatching {
-            val snapshot = cloudCollaborationRepo.fetchCloudEntitySnapshotVersioned(workspaceId)
-            val savedSignature = preferences.cloudSnapshotSignatureFlow.first()
-            // A LAN-paired sub-device receives the authoritative database from its main
-            // device. Applying a cloud snapshot here can roll back a newer LAN operation
-            // with an older cloud revision, which caused stock entries to appear then vanish.
-            if ((!isSubConnected.value || cloudAuthorizationEnabled.value) &&
-                snapshot.records.isNotEmpty() &&
-                snapshot.updatedAtSignature != savedSignature
-            ) {
-                if (repository.getPendingSyncOperations().isEmpty() &&
-                    repository.getCloudPendingSyncOperations().isEmpty()
-                ) {
-                    repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.records).getOrThrow()
-                    preferences.saveCloudSnapshotSignature(snapshot.updatedAtSignature)
-                    // The main device must publish cloud-originated changes to LAN sub-devices too.
-                    if (isMainDevice.value) preferences.incrementSyncRevision()
-                } else {
-                    _lastSyncError.value = "توجد عمليات محلية معلقة؛ تم تأجيل استبدال البيانات حتى لا تضيع."
-                }
-            }
-        }.onFailure { failure ->
-            _lastSyncError.value = "تعذر تحديث العمليات السحابية: " + (failure.localizedMessage ?: failure.javaClass.simpleName)
-        }
-
-        val notifications = cloudCollaborationRepo.listMyOperationNotifications(workspaceId)
-        if (notifications.isEmpty()) return
-
-        val auditEntries = runCatching {
-            cloudCollaborationRepo.listAllowedOperationAuditEntries(workspaceId)
-        }.getOrDefault(emptyList())
-        val auditByOperationId = auditEntries
-            .filter { !it.operationId.isNullOrBlank() }
-            .associateBy { it.operationId!! }
-        val membersByUserId = runCatching {
-            cloudCollaborationRepo.listWorkspaceMembers(workspaceId)
-                .associateBy { it.userId }
-        }.getOrDefault(emptyMap())
-        val ownerUserId = runCatching {
-            cloudCollaborationRepo.getWorkspace(workspaceId).ownerUserId
-        }.getOrNull()
-
-        notifications.forEach { notification ->
-            if (preferences.hasSeenCloudNotification(notification.id)) return@forEach
-
-            val audit = notification.relatedOperationId?.let(auditByOperationId::get)
-            // Keep the notification pending until its RLS-authorized audit row is available;
-            // this prevents a transient audit-query failure from losing the history entry.
-            if (!notification.relatedOperationId.isNullOrBlank() && audit == null) return@forEach
-            val member = audit?.let { membersByUserId[it.actorUserId] }
-            val actorName = member?.displayName?.takeIf { it.isNotBlank() }
-                ?: member?.email?.takeIf { it.isNotBlank() }
-                ?: if (audit?.actorUserId == ownerUserId) "المستخدم الرئيسي" else "عضو مساحة العمل"
-            val sourceDevice = audit?.deviceName?.takeIf { it.isNotBlank() } ?: "جهاز غير محدد"
-            val operationTitle = audit?.title?.takeIf { it.isNotBlank() }
-                ?: notification.title.ifBlank { "عملية مخزنية" }
-            val operationDetails = audit?.details?.takeIf { it.isNotBlank() }
-                ?: notification.body
-            val operationType = audit?.operationType?.takeIf { it.isNotBlank() }
-                ?: notification.notificationType
-
-            if (audit != null) {
-                repository.recordOperation(
-                    OperationAuditLog(
-                        timestamp = parseCloudAuditTimestamp(audit.createdAt),
-                        actorName = actorName,
-                        deviceName = "$sourceDevice • سحابي",
-                        operationType = operationType,
-                        title = operationTitle,
-                        details = operationDetails
-                    )
-                )
-            }
-
-            notificationManager.notifyOperation(
-                title = "عملية على مخزن مرتبط: $operationTitle",
-                details = "نفّذها: $actorName • الجهاز: $sourceDevice\n$operationDetails",
-                isRemoteSubDeviceAlert = true
-            )
-            preferences.markCloudNotificationSeen(notification.id)
-        }
-    }
-
-    private fun parseCloudAuditTimestamp(value: String): Long {
-        val patterns = listOf(
-            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-            "yyyy-MM-dd'T'HH:mm:ssXXX",
-            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-            "yyyy-MM-dd'T'HH:mm:ss'Z'"
-        )
-        for (pattern in patterns) {
-            val parsed = runCatching {
-                SimpleDateFormat(pattern, Locale.US).parse(value)?.time
-            }.getOrNull()
-            if (parsed != null) return parsed
-        }
-        return System.currentTimeMillis()
-    }
-
     suspend fun flushPendingOperationsBeforeCollaboration() {
         val localPendingOk = if (!isMainDevice.value && isSubConnected.value) {
             flushPendingSubDeviceSyncOperations()
         } else true
-        val cloudPendingOk = flushCloudPendingSyncOperations()
-        if (!localPendingOk || !cloudPendingOk) {
-            _lastSyncError.value = "توجد عمليات محفوظة محلياً لم تكتمل مزامنتها بعد؛ ستبقى محفوظة حتى نجاح الرفع."
+        if (!localPendingOk) {
+            _lastSyncError.value = "توجد عمليات محفوظة محلياً على هذا الجهاز لم تنتقل بعد إلى الجهاز الرئيسي. ستبقى محفوظة محلياً."
         }
-    }
-
-    private suspend fun flushCloudPendingSyncOperations(): Boolean = cloudPushMutex.withLock {
-        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
-        val deviceId = preferences.cloudDeviceIdFlow.first()
-        if (workspaceId.isBlank()) return@withLock true
-        if (deviceId.isBlank() || cloudCollaborationRepo.currentUserIdOrNull().isNullOrBlank()) {
-            return@withLock false
-        }
-
-        val pending = repository.getCloudPendingSyncOperations()
-        if (pending.isEmpty()) return@withLock true
-
-        val cloudWorkspace = cloudCollaborationRepo.getWorkspace(workspaceId)
-        val isOwner = cloudWorkspace.ownerUserId == cloudCollaborationRepo.currentUserIdOrNull()
-        val warehouseMap = resolveCloudWarehouseMap(workspaceId)
-
-        for (operation in pending) {
-            val localWarehouseIds = longIdsFromJson(operation.warehouseIdsJson)
-            val missing = localWarehouseIds.filterNot { warehouseMap.containsKey(it) }
-            if (missing.isNotEmpty()) {
-                repository.recordCloudPendingSyncFailure(
-                    operation.operationId,
-                    "المخازن التالية غير مربوطة سحابياً: ${missing.joinToString()}"
-                )
-                _lastSyncError.value = "تعذر رفع عملية سحابية لعدم ربط أحد المخازن."
-                return@withLock false
-            }
-
-            val entities = runCatching {
-                LocalSyncJson.upsertsFromJsonArray(JSONArray(operation.entitiesJson))
-            }.getOrElse { error ->
-                repository.recordCloudPendingSyncFailure(
-                    operation.operationId,
-                    "تعذر قراءة لقطة العملية: ${error.localizedMessage}"
-                )
-                return@withLock false
-            }
-            val cloudWarehouseIds = localWarehouseIds.map { warehouseMap.getValue(it) }.toSet()
-            val records = cloudCollaborationRepo.encodeCloudEntityRecords(
-                entities = entities,
-                cloudWarehouseIdByLocalId = warehouseMap,
-                targetWarehouseLocalIds = localWarehouseIds,
-                includeGlobalRecords = isOwner ||
-                    operation.actionType == DeviceAction.ADD_OR_MANAGE_CATALOG.name ||
-                    operation.actionType == DeviceAction.EDIT_CATALOG_ITEMS.name
-            )
-
-            val result = runCatching {
-                cloudCollaborationRepo.pushCloudSnapshot(
-                    workspaceId = workspaceId,
-                    deviceId = deviceId,
-                    clientOperationId = operation.operationId,
-                    operationType = operation.actionType,
-                    warehouseIds = cloudWarehouseIds,
-                    title = operation.operationTitle,
-                    details = operation.operationDetails,
-                    records = records
-                )
-            }
-            result.onSuccess {
-                repository.removeCloudPendingSyncOperation(operation.operationId)
-                _lastSyncError.value = null
-            }.onFailure { error ->
-                repository.recordCloudPendingSyncFailure(
-                    operation.operationId,
-                    error.localizedMessage ?: error.javaClass.simpleName
-                )
-                _lastSyncError.value = error.localizedMessage ?: "تعذر رفع عملية إلى السحابة"
-                return@withLock false
-            }
-        }
-        true
     }
 
     private fun propagateDataChange(
@@ -1803,8 +1578,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 // Persist the exact post-operation snapshot and metadata before attempting any
                 // network request. A process death or lost response will not lose the operation.
-                if (cloudAuthorizationEnabled.value) return@launch
-
                 val operation = PendingSyncOperation(
                     operationId = UUID.randomUUID().toString(),
                     actionType = action?.name ?: "GENERAL",
