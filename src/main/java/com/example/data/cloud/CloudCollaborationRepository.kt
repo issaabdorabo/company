@@ -8,6 +8,8 @@ import com.example.data.cloud.CloudEntityUpsert
 import org.json.JSONObject
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.realtime.broadcast
+import io.github.jan.supabase.realtime.broadcastFlow
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.realtime
@@ -20,6 +22,10 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -30,6 +36,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.util.UUID
 import kotlin.time.Duration.Companion.hours
 
@@ -271,6 +279,86 @@ class CloudCollaborationRepository {
 
     private companion object {
         const val CHAT_ATTACHMENTS_BUCKET = "chat-attachments"
+    }
+
+    private fun inventoryTopic(workspaceId: String) = "workspace:$workspaceId:inventory"
+
+    /**
+     * Ephemeral, private Realtime channel. Broadcasts are transport-only and never create
+     * inventory rows in Postgres; operation durability is provided by the sender's Room outbox.
+     */
+    fun observeWorkspaceEvents(workspaceId: String): Flow<JsonObject> = callbackFlow {
+        require(workspaceId.isNotBlank()) { "معرّف مساحة العمل غير صالح" }
+        val channel = client.realtime.channel(inventoryTopic(workspaceId)) {
+            isPrivate = true
+        }
+        val events = channel.broadcastFlow<JsonObject>("inventory_event")
+        val collector = launch {
+            events.collect { event -> trySend(event).isSuccess }
+        }
+        try {
+            channel.subscribe(blockUntilSubscribed = true)
+        } catch (failure: Exception) {
+            collector.cancel()
+            runCatching { client.realtime.removeChannel(channel) }
+            close(failure)
+            return@callbackFlow
+        }
+        awaitClose {
+            collector.cancel()
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching { client.realtime.removeChannel(channel) }
+            }
+        }
+    }
+
+    suspend fun broadcastWorkspaceEvent(workspaceId: String, payload: JsonObject) {
+        require(workspaceId.isNotBlank()) { "معرّف مساحة العمل غير صالح" }
+        val channel = client.realtime.channel(inventoryTopic(workspaceId)) {
+            isPrivate = true
+        }
+        try {
+            channel.subscribe(blockUntilSubscribed = true)
+            channel.broadcast(event = "inventory_event", payload = payload)
+        } finally {
+            runCatching { client.realtime.removeChannel(channel) }
+        }
+    }
+
+    /**
+     * Sends one operation and keeps it in the local outbox until the target device explicitly
+     * acknowledges that Room has committed it. The server's broadcast ACK alone is not enough.
+     */
+    suspend fun sendWorkspaceEventAndAwaitAck(
+        workspaceId: String,
+        payload: JsonObject,
+        timeoutMillis: Long = 25_000L
+    ): JsonObject = coroutineScope {
+        require(workspaceId.isNotBlank()) { "معرّف مساحة العمل غير صالح" }
+        val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
+            ?: error("معرّف العملية غير موجود")
+        val channel = client.realtime.channel(inventoryTopic(workspaceId)) {
+            isPrivate = true
+        }
+        val ack = CompletableDeferred<JsonObject>()
+        val acknowledgements = channel.broadcastFlow<JsonObject>("inventory_event")
+        val collector = launch {
+            acknowledgements.collect { response ->
+                val responseId = response["operationId"]?.jsonPrimitive?.contentOrNull
+                val type = response["type"]?.jsonPrimitive?.contentOrNull
+                if (type == "ACK" && responseId == operationId) {
+                    ack.complete(response)
+                }
+            }
+        }
+        try {
+            channel.subscribe(blockUntilSubscribed = true)
+            channel.broadcast(event = "inventory_event", payload = payload)
+            withTimeout(timeoutMillis) { ack.await() }
+        } finally {
+            collector.cancelAndJoin()
+            runCatching { client.realtime.removeChannel(channel) }
+        }
     }
 
     fun currentUserIdOrNull(): String? =
