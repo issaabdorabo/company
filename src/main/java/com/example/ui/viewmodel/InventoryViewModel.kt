@@ -3092,8 +3092,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun mayUseBackups(): Boolean = devicePermissions.value.isMainDevice || devicePermissions.value.canBackup
 
+    // Google Drive appDataFolder belongs to one Google account and cannot be shared.
+    // Keep one canonical cloud-backup owner: the main device only.
+    private fun mayUseCloudBackups(): Boolean = devicePermissions.value.isMainDevice
+
     private fun emitBackupPermissionDenied() {
         viewModelScope.launch { _userMessage.emit("صلاحية النسخ الاحتياطي والتصدير غير ممنوحة من المستخدم الرئيسي") }
+    }
+
+    private fun emitCloudBackupOwnerOnly() {
+        viewModelScope.launch {
+            _cloudAuthError.value = "إدارة النسخ السحابية المركزية متاحة من الجهاز الرئيسي فقط؛ حساب Google للجهاز الفرعي مستقل ولا يشارك مساحة appDataFolder."
+        }
     }
 
     private suspend fun attachDeviceBackupMetadata(record: BackupRecord): BackupRecord {
@@ -3335,7 +3345,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun refreshCloudBackupsFromDrive(context: Context, silent: Boolean = false) {
-        if (!mayUseBackups()) { if (!silent) emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { if (!silent) emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
             _cloudBackupsState.value = CloudBackupUiState.SignedOut
@@ -3385,7 +3395,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun createCloudBackup(context: Context, name: String) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
             _cloudAuthError.value = "يرجى إضافة وتأكيد حساب Google أولاً لرفع النسخة السحابية."
@@ -3442,7 +3452,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun renameCloudBackup(context: Context, item: CloudBackupItem, newName: String) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) return
         val cleanName = newName.trim()
@@ -3484,7 +3494,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun restoreCloudBackup(context: Context, item: CloudBackupItem) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
             _cloudAuthError.value = "يرجى إضافة وتأكيد حساب Google أولاً."
@@ -3533,7 +3543,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteCloudBackup(context: Context, item: CloudBackupItem) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) return
         viewModelScope.launch {
