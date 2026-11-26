@@ -254,7 +254,7 @@ fun MultiDeviceControlSection(
                         )
                         Text(
                             text = if (isCloudSyncEnabled)
-                                "أنشئ باركوداً لكل جهاز فرعي. امسحه من الجهاز الآخر حتى لو كان على بيانات الهاتف أو شبكة Wi-Fi مختلفة. لا تستخدم عنوان IP أو نقطة اتصال."
+                                "أنشئ دعوة مؤقتة لكل جهاز فرعي. يستطيع المستخدم مسح QR أو إدخال الرمز يدوياً من أي منطقة عبر الإنترنت، دون عنوان IP أو نقطة اتصال."
                             else
                                 "لا يتم إنشاء روابط محلية أو استخدام نقطة اتصال. افتح شاشة التعاون السحابي وسجّل حساب الجهاز الرئيسي أولاً، ثم ارجع لإنشاء باركود الإنترنت.",
                             style = MaterialTheme.typography.bodySmall,
@@ -322,12 +322,12 @@ fun MultiDeviceControlSection(
                 // SUB-DEVICE MODE
                 if (!isSubConnected) {
                     Text(
-                        text = "للربط عبر الإنترنت: أضف حساب هذا الجهاز إلى مساحة التعاون أولاً، ثم امسح رمز QR الذي أنشأه الجهاز الرئيسي. لا يلزم أن يكون الجهازان على شبكة Wi-Fi واحدة.",
+                        text = "سجّل الدخول بحساب Google على الجهاز الفرعي، ثم امسح QR أو أدخل رمز الدعوة الذي أنشأه الجهاز الرئيسي. لا تحتاج إلى إضافة الحساب مسبقاً إلى مساحة التعاون.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Medium
                     )
-                    // Quick Camera QR Scan Button
+                    // Camera QR scanning and manual one-time invite code entry.
                     Button(
                         onClick = { showQrScanner = true },
                         enabled = !isPairingInProgress && remainingLockSeconds == 0L,
@@ -339,7 +339,40 @@ fun MultiDeviceControlSection(
                     ) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("مسح باركود الربط بالكاميرا (ربط تلقائي فوري)", fontWeight = FontWeight.Bold)
+                        Text("مسح باركود دعوة الربط", fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedTextField(
+                        value = QrPairingHelper.formatCloudInviteCode(codeInput),
+                        onValueChange = { codeInput = QrPairingHelper.normalizeCloudInviteCode(it).take(20) },
+                        enabled = !isPairingInProgress && remainingLockSeconds == 0L,
+                        label = { Text("أو أدخل رمز الربط يدوياً") },
+                        supportingText = { Text("${codeInput.length}/20 خانة") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("manual_pairing_invite_code_input")
+                    )
+                    Button(
+                        onClick = {
+                            viewModel.pairWithCloudMainDevice(
+                                com.example.util.QrPairingPayload(inviteCode = codeInput)
+                            )
+                        },
+                        enabled = codeInput.length == 20 && !isPairingInProgress && remainingLockSeconds == 0L,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("submit_manual_pairing_invite_btn"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isPairingInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text("تحقق من الرمز واربط الجهاز")
                     }
 
                     if (!isCloudSyncEnabled) {
@@ -583,12 +616,9 @@ fun MultiDeviceControlSection(
             credentials = creds,
             onCopyAll = {
                 val text = if (
-                    creds.cloudWorkspaceId.isNotBlank() &&
-                    creds.mainCloudDeviceId.isNotBlank() &&
-                    creds.deviceSlotId.isNotBlank() &&
                     creds.sessionToken.isNotBlank()
                 ) {
-                    "ربط الجهاز الفرعي (${creds.deviceName}) يتم عبر QR والإنترنت باستخدام Supabase. لا يحتاج الجهازان إلى شبكة Wi-Fi واحدة أو عنوان IP أو نقطة اتصال."
+                    "رمز ربط الجهاز الفرعي (${creds.deviceName}): ${QrPairingHelper.formatCloudInviteCode(creds.sessionToken)}\nصلاحية الدعوة: 10 دقائق من وقت الإصدار. يمكن استخدام الرمز مرة واحدة فقط. الربط عبر الإنترنت ولا يحتاج الجهازان إلى شبكة واحدة أو نقطة اتصال."
                 } else {
                     "تعذر إنشاء بيانات ربط سحابية صالحة. سجّل دخول الجهاز الرئيسي في مساحة التعاون ثم أعد إنشاء الباركود."
                 }
@@ -634,8 +664,9 @@ fun MultiDeviceControlSection(
         QrScannerDialog(
             onQrScanned = { payload ->
                 showQrScanner = false
-                if (payload.isCloudPairing) {
-                    Toast.makeText(context, "تمت قراءة رمز الربط السحابي، جاري الاتصال عبر الإنترنت...", Toast.LENGTH_SHORT).show()
+                if (payload.isCloudInviteCode) {
+                    codeInput = payload.inviteCode
+                    Toast.makeText(context, "تمت قراءة دعوة الربط، جاري التحقق عبر الإنترنت...", Toast.LENGTH_SHORT).show()
                     viewModel.pairWithCloudMainDevice(payload)
                 } else {
                     Toast.makeText(
@@ -1023,23 +1054,22 @@ private fun CreatedCredentialsDialog(
     onDismiss: () -> Unit
 ) {
     val qrBitmap = remember(credentials) {
-        if (
-            credentials.cloudWorkspaceId.isBlank() ||
-            credentials.mainCloudDeviceId.isBlank() ||
-            credentials.deviceSlotId.isBlank() ||
-            credentials.sessionToken.isBlank()
-        ) {
+        if (credentials.sessionToken.isBlank()) {
             null
         } else {
-            val payload = QrPairingHelper.encodeCloudPairingPayload(
-                workspaceId = credentials.cloudWorkspaceId,
-                mainDeviceId = credentials.mainCloudDeviceId,
-                deviceSlotId = credentials.deviceSlotId,
-                sessionToken = credentials.sessionToken
-            )
+            val payload = QrPairingHelper.encodeCloudPairingPayload(credentials.sessionToken)
             QrPairingHelper.generateQrBitmap(payload, sizePx = 520)
         }
     }
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(credentials.inviteExpiresAt) {
+        while (credentials.inviteExpiresAt > nowMillis) {
+            nowMillis = System.currentTimeMillis()
+            delay(1000L)
+        }
+    }
+    val remainingInviteSeconds =
+        ((credentials.inviteExpiresAt - nowMillis) / 1000L).coerceAtLeast(0L)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1102,13 +1132,19 @@ private fun CreatedCredentialsDialog(
                         }
                     }
                 }
-                if (credentials.cloudWorkspaceId.isNotBlank()) {
-                    CredentialLine("طريقة الربط", "سحابي عبر الإنترنت — لا يحتاج إلى عنوان IP أو شبكة Wi-Fi مشتركة")
-                    CredentialLine("مساحة التعاون", credentials.cloudWorkspaceId.take(8))
+                if (credentials.sessionToken.isNotBlank()) {
+                    CredentialLine("طريقة الربط", "دعوة سحابية مؤقتة — تعمل عبر أي شبكة إنترنت")
+                    CredentialLine("رمز الربط اليدوي", QrPairingHelper.formatCloudInviteCode(credentials.sessionToken))
+                    CredentialLine(
+                        "الوقت المتبقي",
+                        if (remainingInviteSeconds > 0L)
+                            "${remainingInviteSeconds / 60} دقيقة و${remainingInviteSeconds % 60} ثانية"
+                        else "انتهت صلاحية الدعوة"
+                    )
                     Text(
-                        text = "تأكد من إضافة حساب Google للجهاز الفرعي إلى مساحة التعاون، ثم امسح هذا الرمز من الجهاز الفرعي. يحتوي الرمز على مفتاح ربط خاص بهذا الجهاز ولا تشاركه مع أي شخص آخر.",
+                        text = "امسح الباركود أو أدخل الرمز يدوياً على الجهاز الفرعي خلال 10 دقائق. لا يلزم أن يضيف الرئيسي حساب Google مسبقاً. الرمز صالح لاستخدام واحد فقط.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = WarningOrange,
+                        color = if (remainingInviteSeconds > 0L) MaterialTheme.colorScheme.onSurfaceVariant else WarningOrange,
                         textAlign = TextAlign.Center
                     )
                 } else {
@@ -1124,10 +1160,7 @@ private fun CreatedCredentialsDialog(
         confirmButton = {
             Button(
                 onClick = onCopyAll,
-                enabled = credentials.cloudWorkspaceId.isNotBlank() &&
-                    credentials.mainCloudDeviceId.isNotBlank() &&
-                    credentials.deviceSlotId.isNotBlank() &&
-                    credentials.sessionToken.isNotBlank(),
+                enabled = credentials.sessionToken.isNotBlank(),
                 modifier = Modifier.testTag("copy_created_credentials_btn")
             ) {
                 Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
