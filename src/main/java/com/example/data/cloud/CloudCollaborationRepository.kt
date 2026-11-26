@@ -322,7 +322,7 @@ class CloudCollaborationRepository {
                 val events = channel.broadcastFlow<JsonObject>("inventory_event")
                 collectors += launch {
                     events.collect { envelope ->
-                        val decoded = decryptInventoryEnvelope(workspaceId, secret, envelope)
+                        val decoded = decryptInventoryEnvelope(workspaceId, deviceId, secret, envelope)
                         if (decoded != null) trySend(decoded).isSuccess
                     }
                 }
@@ -356,12 +356,14 @@ class CloudCollaborationRepository {
 
     private fun encryptInventoryEnvelope(
         workspaceId: String,
+        deviceId: String,
         transportSecret: String,
         payload: JsonObject
     ): JsonObject {
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
+        cipher.updateAAD(inventoryTopic(workspaceId, deviceId, transportSecret).toByteArray(Charsets.UTF_8))
         val encrypted = cipher.doFinal(payload.toString().toByteArray(Charsets.UTF_8))
         return buildJsonObject {
             put("secureVersion", JsonPrimitive(1))
@@ -372,6 +374,7 @@ class CloudCollaborationRepository {
 
     private fun decryptInventoryEnvelope(
         workspaceId: String,
+        deviceId: String,
         transportSecret: String,
         envelope: JsonObject
     ): JsonObject? {
@@ -384,6 +387,7 @@ class CloudCollaborationRepository {
             if (nonce.size != 12) return@runCatching null
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
+            cipher.updateAAD(inventoryTopic(workspaceId, deviceId, transportSecret).toByteArray(Charsets.UTF_8))
             val plaintext = cipher.doFinal(encrypted)
             Json.parseToJsonElement(String(plaintext, Charsets.UTF_8)) as? JsonObject
         }.getOrNull()
@@ -400,7 +404,7 @@ class CloudCollaborationRepository {
             channel.subscribe(blockUntilSubscribed = true)
             channel.broadcast(
                 event = "inventory_event",
-                message = encryptInventoryEnvelope(workspaceId, transportSecret, payload)
+                message = encryptInventoryEnvelope(workspaceId, recipientDeviceId, transportSecret, payload)
             )
         } finally {
             runCatching { client.realtime.removeChannel(channel) }
@@ -433,7 +437,7 @@ class CloudCollaborationRepository {
         val acknowledgements = senderChannel.broadcastFlow<JsonObject>("inventory_event")
         val collector = launch {
             acknowledgements.collect { envelope ->
-                val response = decryptInventoryEnvelope(workspaceId, transportSecret, envelope) ?: return@collect
+                val response = decryptInventoryEnvelope(workspaceId, senderDeviceId, transportSecret, envelope) ?: return@collect
                 val responseId = response["operationId"]?.jsonPrimitive?.contentOrNull
                 val type = response["type"]?.jsonPrimitive?.contentOrNull
                 val responderId = response["senderDeviceId"]?.jsonPrimitive?.contentOrNull
@@ -448,7 +452,7 @@ class CloudCollaborationRepository {
             targetChannel.subscribe(blockUntilSubscribed = true)
             targetChannel.broadcast(
                 event = "inventory_event",
-                message = encryptInventoryEnvelope(workspaceId, transportSecret, payload)
+                message = encryptInventoryEnvelope(workspaceId, targetDeviceId, transportSecret, payload)
             )
             withTimeout(timeoutMillis) { ack.await() }
         } finally {
