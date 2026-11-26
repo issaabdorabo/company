@@ -928,12 +928,23 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _userMessage.emit("اسم الجهاز ($cleanName) مستخدم بالفعل. اختر اسماً مختلفاً.")
                 return@launch
             }
-            val code = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            val ips = LocalNetworkSyncServer.getLocalLanIpAddresses()
-            val hostDisplay = (ips.firstOrNull() ?: "192.168.43.1") + ":" + (if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT)
+            val cloudWorkspaceId = if (cloudAuthorizationEnabled.value) preferences.cloudWorkspaceIdFlow.first() else ""
+            val mainCloudDeviceId = if (cloudWorkspaceId.isNotBlank()) preferences.cloudDeviceIdFlow.first() else ""
+            val cloudPairingReady = cloudWorkspaceId.isNotBlank() && mainCloudDeviceId.isNotBlank()
+            if (cloudAuthorizationEnabled.value && !cloudPairingReady) {
+                _userMessage.emit("افتح شاشة التعاون السحابي وسجّل الجهاز الرئيسي في مساحة العمل قبل إنشاء رمز الربط عبر الإنترنت.")
+                return@launch
+            }
+            val code = if (cloudPairingReady) "CLOUD-" + cloudWorkspaceId.take(8) else preferences.ensureWorkspaceCode()
+            val hostDisplay = if (cloudPairingReady) {
+                ""
+            } else {
+                val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
+                val ips = LocalNetworkSyncServer.getLocalLanIpAddresses()
+                (ips.firstOrNull() ?: "192.168.43.1") + ":" + (if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT)
+            }
 
-            val plainPassword = SecurityUtils.generateUniqueDevicePassword(10)
+            val plainPassword = if (cloudPairingReady) "" else SecurityUtils.generateUniqueDevicePassword(10)
             val salt = SecurityUtils.generateSalt()
             val passwordHash = SecurityUtils.hashPassword(plainPassword, salt)
             val sessionToken = UUID.randomUUID().toString()
@@ -976,7 +987,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 deviceName = newSlot.deviceName,
                 workspaceCode = code,
                 hostAddress = hostDisplay,
-                plainPassword = plainPassword
+                plainPassword = plainPassword,
+                cloudWorkspaceId = if (cloudPairingReady) cloudWorkspaceId else "",
+                mainCloudDeviceId = if (cloudPairingReady) mainCloudDeviceId else "",
+                sessionToken = if (cloudPairingReady) sessionToken else ""
             )
             _sessionPairingCredentials.value = _sessionPairingCredentials.value + (newSlot.id to creds)
             _createdDeviceCredentials.value = creds
