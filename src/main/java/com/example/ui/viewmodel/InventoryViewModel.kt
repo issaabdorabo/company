@@ -1871,6 +1871,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             "SUB_OPERATION" -> if (isMainDevice.value) handleCloudSubOperation(workspaceId, event)
             "PAIR_CLAIM" -> if (isMainDevice.value) handleCloudPairClaim(workspaceId, event)
             "INITIAL_SYNC_REQUEST" -> if (isMainDevice.value) handleCloudInitialSyncRequest(workspaceId, event)
+            "PAIR_COMPLETE" -> if (isMainDevice.value) handleCloudPairComplete(workspaceId, event)
             "MAIN_OPERATION", "PREPARE_MAIN_OPERATION" ->
                 if (!isMainDevice.value) handleCloudMainCommand(workspaceId, event, type)
         }
@@ -2027,13 +2028,44 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             sendCloudAck(
                 workspaceId, operationId, true, senderDeviceId, transportSecret, extra = extra
             )
-            if (isLastChunk) pairingSnapshots.remove(slotId)
         } catch (failure: Exception) {
             if (transportSecret.isNotBlank()) {
                 runCatching {
                     sendCloudAck(
                         workspaceId, operationId, false, senderDeviceId, transportSecret,
                         failure.localizedMessage ?: "تعذر إرسال جزء من المزامنة الأولية"
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun handleCloudPairComplete(workspaceId: String, event: JsonObject) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val slotId = event["slotId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        var transportSecret = ""
+        try {
+            val remoteDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
+                it.id == senderDeviceId && it.userId == senderUserId && !it.isRevoked
+            } ?: error("الجهاز الفرعي غير مسجل أو تم إيقافه")
+            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+                it.id == slotId && it.isClaimed && !it.isKicked && !it.wasUnlinked &&
+                    it.boundInstallationId == remoteDevice.deviceFingerprint
+            } ?: error("الجهاز غير مرتبط بهذا الحساب")
+            transportSecret = slot.sessionToken
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة إكمال الربط لا تطابق سر الجهاز"
+            }
+            pairingSnapshots.remove(slotId)
+            sendCloudAck(workspaceId, operationId, true, senderDeviceId, transportSecret)
+        } catch (failure: Exception) {
+            if (transportSecret.isNotBlank()) {
+                runCatching {
+                    sendCloudAck(
+                        workspaceId, operationId, false, senderDeviceId, transportSecret,
+                        failure.localizedMessage ?: "تعذر تأكيد اكتمال الربط"
                     )
                 }
             }
