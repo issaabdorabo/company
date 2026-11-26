@@ -1676,7 +1676,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         success: Boolean,
         recipientDeviceId: String,
         transportSecret: String,
-        error: String = ""
+        error: String = "",
+        extra: JsonObject = buildJsonObject { }
     ) {
         require(transportSecret.isNotBlank()) { "مفتاح الربط المشترك غير متوفر لإرسال تأكيد العملية" }
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
@@ -1689,6 +1690,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("success", success)
                 put("error", error)
                 put("senderDeviceId", senderDeviceId)
+                extra.forEach { (key, value) -> put(key, value) }
             },
             transportSecret = transportSecret
         )
@@ -1698,6 +1700,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val type = event["type"]?.jsonPrimitive?.contentOrNull ?: return
         when (type) {
             "SUB_OPERATION" -> if (isMainDevice.value) handleCloudSubOperation(workspaceId, event)
+            "PAIR_CLAIM" -> if (isMainDevice.value) handleCloudPairClaim(workspaceId, event)
+            "INITIAL_SYNC_REQUEST" -> if (isMainDevice.value) handleCloudInitialSyncRequest(workspaceId, event)
             "MAIN_OPERATION", "PREPARE_MAIN_OPERATION" ->
                 if (!isMainDevice.value) handleCloudMainCommand(workspaceId, event, type)
         }
