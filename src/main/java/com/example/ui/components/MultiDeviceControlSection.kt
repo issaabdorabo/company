@@ -582,15 +582,15 @@ fun MultiDeviceControlSection(
         CreatedCredentialsDialog(
             credentials = creds,
             onCopyAll = {
-                val text = if (creds.cloudWorkspaceId.isNotBlank()) {
-                    "ربط الجهاز الفرعي (${creds.deviceName}) يتم عبر مسح رمز QR من الجهاز الفرعي بعد تسجيل حسابه في مساحة التعاون. لا يحتاج الجهازان إلى شبكة Wi-Fi واحدة."
+                val text = if (
+                    creds.cloudWorkspaceId.isNotBlank() &&
+                    creds.mainCloudDeviceId.isNotBlank() &&
+                    creds.deviceSlotId.isNotBlank() &&
+                    creds.sessionToken.isNotBlank()
+                ) {
+                    "ربط الجهاز الفرعي (${creds.deviceName}) يتم عبر QR والإنترنت باستخدام Supabase. لا يحتاج الجهازان إلى شبكة Wi-Fi واحدة أو عنوان IP أو نقطة اتصال."
                 } else {
-                    buildString {
-                        appendLine("بيانات ربط الجهاز الفرعي (${creds.deviceName}):")
-                        appendLine("عنوان الجهاز الرئيسي: ${creds.hostAddress}")
-                        appendLine("رمز القاعدة: ${creds.workspaceCode}")
-                        appendLine("كلمة المرور المنفردة: ${creds.plainPassword}")
-                    }
+                    "تعذر إنشاء بيانات ربط سحابية صالحة. سجّل دخول الجهاز الرئيسي في مساحة التعاون ثم أعد إنشاء الباركود."
                 }
                 copyToClipboard(context, text)
                 Toast.makeText(context, "تم نسخ كامل بيانات الربط", Toast.LENGTH_SHORT).show()
@@ -1023,21 +1023,22 @@ private fun CreatedCredentialsDialog(
     onDismiss: () -> Unit
 ) {
     val qrBitmap = remember(credentials) {
-        val payload = if (credentials.cloudWorkspaceId.isNotBlank()) {
-            QrPairingHelper.encodeCloudPairingPayload(
+        if (
+            credentials.cloudWorkspaceId.isBlank() ||
+            credentials.mainCloudDeviceId.isBlank() ||
+            credentials.deviceSlotId.isBlank() ||
+            credentials.sessionToken.isBlank()
+        ) {
+            null
+        } else {
+            val payload = QrPairingHelper.encodeCloudPairingPayload(
                 workspaceId = credentials.cloudWorkspaceId,
                 mainDeviceId = credentials.mainCloudDeviceId,
                 deviceSlotId = credentials.deviceSlotId,
                 sessionToken = credentials.sessionToken
             )
-        } else {
-            QrPairingHelper.encodePairingPayload(
-                hostAddress = credentials.hostAddress,
-                workspaceCode = credentials.workspaceCode,
-                plainPassword = credentials.plainPassword
-            )
+            QrPairingHelper.generateQrBitmap(payload, sizePx = 520)
         }
-        QrPairingHelper.generateQrBitmap(payload, sizePx = 520)
     }
 
     AlertDialog(
@@ -1075,21 +1076,30 @@ private fun CreatedCredentialsDialog(
                         modifier = Modifier.padding(10.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Image(
-                            bitmap = qrBitmap.asImageBitmap(),
-                            contentDescription = "باركود ربط الجهاز الفرعي",
-                            modifier = Modifier
-                                .size(190.dp)
-                                .testTag("pairing_qr_code_image")
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "امسح الباركود بكاميرا الجهاز الفرعي للربط التلقائي",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF0F172A),
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
-                        )
+                        if (qrBitmap != null) {
+                            Image(
+                                bitmap = qrBitmap.asImageBitmap(),
+                                contentDescription = "باركود ربط الجهاز الفرعي عبر الإنترنت",
+                                modifier = Modifier
+                                    .size(190.dp)
+                                    .testTag("pairing_qr_code_image")
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "امسح باركود الإنترنت بكاميرا الجهاز الفرعي",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF0F172A),
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                        } else {
+                            Text(
+                                text = "لا يمكن إنشاء باركود محلي أو عبر نقطة اتصال. سجّل دخول الجهاز الرئيسي في التعاون السحابي أولاً.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = WarningOrange,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
                 if (credentials.cloudWorkspaceId.isNotBlank()) {
@@ -1102,13 +1112,11 @@ private fun CreatedCredentialsDialog(
                         textAlign = TextAlign.Center
                     )
                 } else {
-                    CredentialLine("عنوان الجهاز الرئيسي", credentials.hostAddress)
-                    CredentialLine("رمز قاعدة البيانات", credentials.workspaceCode)
-                    CredentialLine("كلمة المرور المنفردة", credentials.plainPassword)
                     Text(
-                        text = "ملاحظة أمنية: يتم تشفير كلمة المرور بالبصمة الملحية (SHA-256) ولن تظهر مرة أخرى بعد إغلاق الجلسة.",
+                        text = "بيانات الربط السحابي غير مكتملة. لن يتم عرض عنوان IP أو إنشاء رمز يعتمد على شبكة محلية.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = WarningOrange
+                        color = WarningOrange,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
@@ -1116,6 +1124,10 @@ private fun CreatedCredentialsDialog(
         confirmButton = {
             Button(
                 onClick = onCopyAll,
+                enabled = credentials.cloudWorkspaceId.isNotBlank() &&
+                    credentials.mainCloudDeviceId.isNotBlank() &&
+                    credentials.deviceSlotId.isNotBlank() &&
+                    credentials.sessionToken.isNotBlank(),
                 modifier = Modifier.testTag("copy_created_credentials_btn")
             ) {
                 Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
