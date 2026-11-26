@@ -151,12 +151,11 @@ fun TransactionsScreen(
     val filteredVouchers = remember(vouchers, selectedTypeFilter, selectedWarehouseFilterId, selectedDeviceFilter, searchQuery, isMainDevice, currentDeviceName) {
         vouchers.filter { vWithItems ->
             val v = vWithItems.voucher
-            // A linked sub-device sees only vouchers created by this device; device/user
-            // filters are intentionally reserved for the main device.
-            val sourceDeviceName = v.deviceName.ifBlank { "الجهاز الرئيسي" }
-            val matchesOwnDevice = isMainDevice ||
-                sourceDeviceName == currentDeviceName.ifBlank { "الجهاز الفرعي" } ||
-                sourceDeviceName == "الجهاز الرئيسي"
+            // A linked sub-device must also see vouchers created by the main device.
+            // The local Room database is already the device's authorized working dataset;
+            // filtering by creator name hid main-device vouchers whose deviceName was not
+            // exactly "الجهاز الرئيسي".
+            val matchesOwnDevice = true
             val matchesType = selectedTypeFilter == null || v.voucherType == selectedTypeFilter
             val matchesWarehouse = selectedWarehouseFilterId == null ||
                 v.sourceWarehouseId == selectedWarehouseFilterId ||
