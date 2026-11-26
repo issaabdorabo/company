@@ -37,7 +37,8 @@ class CloudPresenceService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (heartbeatJob?.isActive != true) {
             heartbeatJob = serviceScope.launch {
-                val preferences = (application as InventoryApp).preferencesManager
+                val app = application as InventoryApp
+                val preferences = app.preferencesManager
                 val repository = CloudCollaborationRepository()
                 while (isActive) {
                     try {

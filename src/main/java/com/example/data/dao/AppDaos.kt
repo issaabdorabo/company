@@ -22,6 +22,7 @@ import com.example.data.model.Warehouse
 import com.example.data.model.WarehouseItemAssociation
 import com.example.data.model.WarehouseParty
 import com.example.data.model.ItemUnitSerialRecord
+import com.example.data.model.ItemSerialSubUnit
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
 import com.example.data.model.AppliedSyncOperation
