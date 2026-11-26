@@ -2063,8 +2063,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val slotId = event["slotId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         var transportSecret = ""
         try {
+            require(targetDeviceId == preferences.cloudDeviceIdFlow.first()) {
+                "تأكيد الربط موجّه إلى جهاز رئيسي آخر"
+            }
             val remoteDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
                 it.id == senderDeviceId && it.userId == senderUserId && !it.isRevoked
             } ?: error("الجهاز الفرعي غير مسجل أو تم إيقافه")
