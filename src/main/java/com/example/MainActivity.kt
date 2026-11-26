@@ -180,6 +180,7 @@ fun MainApp(
     val currentDeviceName by viewModel.deviceName.collectAsState()
     val isOperationRunning by viewModel.isOperationRunning.collectAsState()
     val isSyncingNow by viewModel.isSyncingNow.collectAsState()
+    val isPairingInProgress by viewModel.isPairingInProgress.collectAsState()
 
     var hasAskedNotificationPermission by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -406,7 +407,7 @@ fun MainApp(
                                 }
                             }
                         }
-                        if (isOperationRunning || isSyncingNow) {
+                        if (isOperationRunning || isSyncingNow || isPairingInProgress) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -425,7 +426,11 @@ fun MainApp(
                                     ) {
                                         CircularProgressIndicator(strokeWidth = 4.dp)
                                         Text(
-                                            text = if (isSyncingNow) "جارٍ مزامنة البيانات بين الأجهزة..." else "جارٍ تنفيذ العملية...",
+                                            text = when {
+                                                isPairingInProgress -> "جارٍ ربط الجهاز عبر الإنترنت ونقل البيانات..."
+                                                isSyncingNow -> "جارٍ مزامنة البيانات بين الأجهزة..."
+                                                else -> "جارٍ تنفيذ العملية..."
+                                            },
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
