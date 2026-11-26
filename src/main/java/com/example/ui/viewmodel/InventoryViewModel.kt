@@ -2279,8 +2279,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         if (!hasValidatedInternetConnection()) return@withLock false
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
-        val senderUserId = cloudCollaborationRepo.currentUserIdOrNull()
-            ?: return@withLock false
+        val senderUserId = cloudCollaborationRepo.currentUserIdOrNull() ?: return@withLock false
         if (workspaceId.isBlank() || senderDeviceId.isBlank()) return@withLock false
 
         val pending = repository.getCloudPendingSyncOperations()
@@ -2297,7 +2296,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 return@withLock false
             }
             val warehouseIds = longIdsFromJson(operation.warehouseIdsJson)
-            val targetSlots = slots.filter { slot ->
+            val targetItemIds = longIdsFromJson(data.optJSONArray("targetItemIds")?.toString().orEmpty())
+            val targetVoucherIds = longIdsFromJson(data.optJSONArray("targetVoucherIds")?.toString().orEmpty())
+            val assignedSlots = slots.filter { slot ->
                 if (warehouseIds.isEmpty()) {
                     if (operation.actionType == DeviceAction.EDIT_CATALOG_ITEMS.name) slot.canEditCatalogItems
                     else slot.canAddItems
@@ -2306,34 +2307,64 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         (slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty())
                 }
             }
+            val targetSlots = if (warehouseIds.isEmpty()) assignedSlots else assignedSlots.filter { slot ->
+                slot.warehousePermissions.any {
+                    it.warehouseId in warehouseIds && it.canView && it.canWorkOffline
+                }
+            }
+            if (assignedSlots.isNotEmpty() && targetSlots.isEmpty()) {
+                repository.recordCloudPendingSyncFailure(
+                    operation.operationId,
+                    "لم تُفعّل صلاحية العمل دون اتصال لأي جهاز فرعي مخصص للمخزن."
+                )
+                return@withLock false
+            }
             if (targetSlots.isEmpty()) {
                 repository.removeCloudPendingSyncOperation(operation.operationId)
                 continue
             }
 
-            val body = JSONObject()
-                .put("clientOperationId", operation.operationId)
-                .put("actionType", operation.actionType)
-                .put("operationTitle", operation.operationTitle)
-                .put("operationDetails", operation.operationDetails)
-                .put("actorName", operation.actorName)
-                .put("warehouseIds", JSONArray(warehouseIds.toList()))
-                .put("targetItemIds", data.optJSONArray("targetItemIds") ?: JSONArray())
-                .put("targetVoucherIds", data.optJSONArray("targetVoucherIds") ?: JSONArray())
-                .put("entities", data.optJSONArray("records") ?: JSONArray())
-
             for (slot in targetSlots) {
+                val slotWarehouseIds = if (warehouseIds.isEmpty()) emptySet() else warehouseIds.filter { warehouseId ->
+                    slot.warehousePermissions.any {
+                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                    }
+                }.toSet()
                 val remoteDevice = cloudDevices.firstOrNull {
                     it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
                 } ?: run {
-                    repository.recordCloudPendingSyncFailure(operation.operationId, "الجهاز الفرعي ${slot.deviceName} غير مسجل في التعاون السحابي")
+                    repository.recordCloudPendingSyncFailure(
+                        operation.operationId,
+                        "الجهاز الفرعي " + slot.deviceName + " غير مسجل في التعاون السحابي"
+                    )
                     return@withLock false
                 }
                 val lastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
                 if (System.currentTimeMillis() - lastSeen !in 0L..45_000L) {
-                    repository.recordCloudPendingSyncFailure(operation.operationId, "الجهاز الفرعي ${slot.deviceName} غير متصل حالياً")
+                    repository.recordCloudPendingSyncFailure(
+                        operation.operationId,
+                        "الجهاز الفرعي " + slot.deviceName + " غير متصل حالياً"
+                    )
                     return@withLock false
                 }
+                val scopedEntities = operationEntitiesForScope(
+                    all = repository.exportAllEntitiesForCloud(),
+                    actionType = operation.actionType,
+                    warehouseIds = slotWarehouseIds,
+                    targetItemIds = targetItemIds,
+                    targetVoucherIds = targetVoucherIds
+                )
+                val body = JSONObject()
+                    .put("clientOperationId", operation.operationId)
+                    .put("actionType", operation.actionType)
+                    .put("operationTitle", operation.operationTitle)
+                    .put("operationDetails", operation.operationDetails)
+                    .put("actorName", operation.actorName)
+                    .put("warehouseIds", JSONArray(slotWarehouseIds.toList()))
+                    .put("targetItemIds", JSONArray(targetItemIds.toList()))
+                    .put("targetVoucherIds", JSONArray(targetVoucherIds.toList()))
+                    .put("entities", LocalSyncJson.upsertsToJsonArray(scopedEntities))
+
                 val event = buildJsonObject {
                     put("type", "MAIN_OPERATION")
                     put("operationId", operation.operationId)
@@ -2344,7 +2375,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 val ack = runCatching {
                     cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                        workspaceId, remoteDevice.id, event, transportSecret = slot.sessionToken, expectedSenderDeviceId = remoteDevice.id
+                        workspaceId, remoteDevice.id, event,
+                        transportSecret = slot.sessionToken,
+                        expectedSenderDeviceId = remoteDevice.id
                     )
                 }.getOrElse { failure ->
                     repository.recordCloudPendingSyncFailure(
