@@ -45,7 +45,7 @@ object QrPairingHelper {
     }
 
     fun normalizeCloudInviteCode(raw: String): String =
-        raw.trim().uppercase().filter { it.isLetterOrDigit() }
+        raw.trim().uppercase().filter { it in INVITE_ALPHABET }
 
     fun formatCloudInviteCode(raw: String): String =
         normalizeCloudInviteCode(raw).chunked(4).joinToString("-")
