@@ -1565,7 +1565,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 if (cloudDeviceId.isNotBlank()) runCatching { cloudCollaborationRepo.heartbeat(cloudDeviceId) }
                 if (hasValidatedInternetConnection()) runCatching { flushPendingSubDeviceSyncOperations() }
             } else {
-                pullFromMainOnce(silent = true)
+                _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الجهاز في التعاون السحابي."
             }
         }
     }
