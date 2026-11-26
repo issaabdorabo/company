@@ -496,9 +496,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         subSyncJob?.cancel()
-        cloudOutboxJob?.cancel()
-        cloudRealtimeJob?.cancel()
-        cloudRealtimeWorkspaceId = ""
+        // The Realtime coordinator belongs to InventoryApp.applicationScope and deliberately
+        // survives Activity/ViewModel destruction while the foreground service keeps the process alive.
         runCatching { connectivityManager?.unregisterNetworkCallback(connectivityCallback) }
         syncServer.stop()
     }
@@ -1841,7 +1840,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun startCloudOutboxCoordinator() {
         cloudOutboxJob?.cancel()
-        cloudOutboxJob = viewModelScope.launch {
+        val coordinatorJob = app.applicationScope.launch {
             var lastOfflinePermissionSyncAt = 0L
             while (isActive) {
                 val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
@@ -1862,7 +1861,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         cloudRealtimeWorkspaceId = subscriptionKey
                     }
                     if (transportSecrets.isNotEmpty() && cloudRealtimeJob?.isActive != true) {
-                        cloudRealtimeJob = viewModelScope.launch {
+                        cloudRealtimeJob = launch {
                             runCatching {
                                 cloudCollaborationRepo.observeWorkspaceEvents(
                                     cloudWorkspaceId,
@@ -1916,6 +1915,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 delay(15_000L)
             }
         }
+        cloudOutboxJob = coordinatorJob
+        app.replaceCloudCoordinator(this, coordinatorJob)
     }
 
     private suspend fun flushCloudPendingSyncOperations(): Boolean = cloudPushMutex.withLock {
