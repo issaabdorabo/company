@@ -315,7 +315,7 @@ class CloudCollaborationRepository {
         val secrets = transportSecrets.filter { it.isNotBlank() }.distinct()
         require(secrets.isNotEmpty()) { "مفتاح قناة التعاون غير متوفر" }
         val channels = secrets.map { secret ->
-            secret to client.realtime.channel(inventoryTopic(workspaceId, deviceId, secret))
+            secret to client.realtime.channel(inventoryTopic(workspaceId, deviceId, secret)) { isPrivate = true }
         }
         val collectors = mutableListOf<Job>()
         try {
@@ -408,7 +408,7 @@ class CloudCollaborationRepository {
         payload: JsonObject,
         transportSecret: String
     ) {
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId, transportSecret))
+        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId, transportSecret)) { isPrivate = true }
         try {
             channel.subscribe(blockUntilSubscribed = true)
             channel.broadcast(
@@ -440,8 +440,8 @@ class CloudCollaborationRepository {
         val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف العملية غير موجود")
 
-        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId, transportSecret))
-        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId, transportSecret))
+        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId, transportSecret)) { isPrivate = true }
+        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId, transportSecret)) { isPrivate = true }
         val ack = CompletableDeferred<JsonObject>()
         val acknowledgements = senderChannel.broadcastFlow<JsonObject>("inventory_event")
         val collector = launch {
