@@ -15,6 +15,7 @@ import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.CloudCollaborationRepository
 import com.example.data.cloud.CloudOperationAuditEntry
 import com.example.data.cloud.CloudEntityRecord
+import com.example.data.cloud.CloudEntityUpsert
 import com.example.data.cloud.CloudUserNotification
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
@@ -53,6 +54,7 @@ import com.example.data.sync.SyncApiException
 import com.example.ui.theme.AppTheme
 import com.example.util.AppNotificationManager
 import com.example.util.SecurityUtils
+import com.example.util.QrPairingPayload
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -83,8 +85,18 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
 
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
+    private data class CloudPairingSnapshot(
+        val revision: Long,
+        val entityChunks: List<List<CloudEntityUpsert>>,
+        val auditLogs: List<OperationAuditLog>,
+        val deviceName: String,
+        val permissions: DevicePermissions
+    )
+
+    private val pairingSnapshots = ConcurrentHashMap<String, CloudPairingSnapshot>()
     private val app = application as InventoryApp
     private val repository = app.repository
     private val preferences = app.preferencesManager
@@ -432,6 +444,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudPushMutex = Mutex()
 
     private val cloudAuthorizationEnabled = MutableStateFlow(false)
+    val isCloudSyncEnabled: StateFlow<Boolean> = cloudAuthorizationEnabled.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -461,8 +474,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     subSyncJob?.cancel()
                     subSyncJob = null
 
-                    val code = preferences.ensureWorkspaceCode()
-                    val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
+                    // Device linking and sync are internet-only; never start a LAN listener.
+                    syncServer.stop()
                 } else {
                     syncServer.stop()
                     if (state.subToken.isBlank() || state.permissions.isKicked) {
@@ -475,14 +488,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                                     if (cloudAuthorizationEnabled.value) {
                                         delay(15_000L)
                                     } else {
-                                        try {
-                                            pullFromMainOnce(silent = true)
-                                        } catch (cancelled: CancellationException) {
-                                            throw cancelled
-                                        } catch (error: Exception) {
-                                            _lastSyncError.value = "تعذر تحديث بيانات الجهاز حالياً"
-                                        }
-                                        delay(3000L)
+                                        _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الجهاز في التعاون السحابي للمزامنة عبر الإنترنت."
+                                        delay(15_000L)
                                     }
                                 }
                             }
@@ -496,9 +503,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         subSyncJob?.cancel()
-        cloudOutboxJob?.cancel()
-        cloudRealtimeJob?.cancel()
-        cloudRealtimeWorkspaceId = ""
+        // The Realtime coordinator belongs to InventoryApp.applicationScope and deliberately
+        // survives Activity/ViewModel destruction while the foreground service keeps the process alive.
         runCatching { connectivityManager?.unregisterNetworkCallback(connectivityCallback) }
         syncServer.stop()
     }
@@ -513,9 +519,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private fun isAssignedSubDeviceOnline(warehouseId: Long): Boolean {
         val now = System.currentTimeMillis()
         return linkedSubDevicesForWarehouse(warehouseId).any { slot ->
+            val hasOfflineGrant = slot.warehousePermissions.any {
+                it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+            }
             val cloudLastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
-            val effectiveLastSeen = maxOf(slot.lastSeenAt, cloudLastSeen)
-            slot.isClaimed && now - effectiveLastSeen in 0L..45_000L
+            val effectiveLastSeen = if (cloudAuthorizationEnabled.value) cloudLastSeen else slot.lastSeenAt
+            slot.isClaimed && hasOfflineGrant &&
+                now - effectiveLastSeen in 0L..45_000L
         }
     }
 
@@ -538,14 +548,25 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val perms = devicePermissions.value
         if (perms.isMainDevice) {
             val assignedWarehouses = warehouseIds.filter { linkedSubDevicesForWarehouse(it).isNotEmpty() }
+            val assignedWarehouseWithoutOfflineGrant = assignedWarehouses.any { warehouseId ->
+                linkedSubDevicesForWarehouse(warehouseId).none { slot ->
+                    slot.warehousePermissions.any {
+                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                    }
+                }
+            }
             val assignedWarehouseUnavailable = assignedWarehouses.isNotEmpty() &&
                 (!hasValidatedInternetConnection() ||
+                    assignedWarehouseWithoutOfflineGrant ||
                     assignedWarehouses.any { !isAssignedSubDeviceOnline(it) })
             if (assignedWarehouseUnavailable) {
                 viewModelScope.launch {
-                    _userMessage.emit(
-                        "لا يمكن تنفيذ العملية على هذا المخزن إلا عند توفر إنترنت موثّق وظهور الجهاز الفرعي المرتبط به متصلاً."
-                    )
+                    val reason = if (assignedWarehouseWithoutOfflineGrant) {
+                        "يجب تفعيل صلاحية العمل دون اتصال للمستخدم الفرعي على هذا المخزن أولاً."
+                    } else {
+                        "يجب أن يكون الجهاز الفرعي متصلاً فعلياً بالإنترنت."
+                    }
+                    _userMessage.emit("لا يمكن تنفيذ العملية على المخزن الفرعي. $reason")
                 }
                 onDenied()
                 return
@@ -655,7 +676,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 _isOperationRunning.value = true
                 try {
-                    if (isMainDevice.value && cloudAuthorizationEnabled.value && warehouseIds.isNotEmpty()) {
+                    if (isMainDevice.value && warehouseIds.isNotEmpty()) {
                         awaitLinkedSubDevicesReady(action, warehouseIds)
                     }
                     validateCloudWarehousePermission(action, warehouseIds)
@@ -846,7 +867,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             preferences.clearSubPairingAndSwitchToMain()
             _userMessage.emit(
                 if (hasActivePairing) "تم فك الارتباط ومسح بيانات المستخدم من التطبيق والعودة إلى الوضع الرئيسي"
-                else "تم التبديل إلى وضع الجهاز الرئيسي وتشغيل خادم الربط المحلي"
+                else "تم التبديل إلى وضع الجهاز الرئيسي. الربط بين الأجهزة يتم عبر الإنترنت فقط."
             )
         }
     }
@@ -865,22 +886,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    @Deprecated("LAN pairing is disabled; cloud QR pairing is required.")
     fun refreshMainServerInfo() {
+        syncServer.stop()
         viewModelScope.launch {
-            if (!requireMainDeviceForDeviceManagement()) return@launch
-            val code = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            syncServer.refreshIpAddresses()
+            _userMessage.emit("الربط المحلي متوقف. استخدم باركود الربط عبر الإنترنت من شاشة الأجهزة.")
         }
     }
 
+    @Deprecated("LAN workspace codes are no longer used.")
     fun regenerateWorkspaceCode() {
+        syncServer.stop()
         viewModelScope.launch {
-            if (!requireMainDeviceForDeviceManagement()) return@launch
-            val newCode = preferences.regenerateWorkspaceCode()
-            syncServer.refreshIpAddresses()
-            val port = syncServer.actualPort
-            _userMessage.emit("تم إنشاء رمز قاعدة بيانات جديد: $newCode")
+            _userMessage.emit("رموز الربط المحلية متوقفة. استخدم باركود التعاون السحابي.")
         }
     }
 
@@ -914,12 +932,21 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _userMessage.emit("اسم الجهاز ($cleanName) مستخدم بالفعل. اختر اسماً مختلفاً.")
                 return@launch
             }
-            val code = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            val ips = LocalNetworkSyncServer.getLocalLanIpAddresses()
-            val hostDisplay = (ips.firstOrNull() ?: "192.168.43.1") + ":" + (if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT)
-
-            val plainPassword = SecurityUtils.generateUniqueDevicePassword(10)
+            // Cloud-only pairing: never issue LAN/IP or hotspot credentials.
+            if (!cloudAuthorizationEnabled.value) {
+                _userMessage.emit("لإنشاء باركود ربط عبر الإنترنت، سجّل دخول الجهاز الرئيسي في مساحة التعاون السحابي أولاً. الربط المحلي ونقطة الاتصال غير مستخدمين.")
+                return@launch
+            }
+            val cloudWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
+            val mainCloudDeviceId = preferences.cloudDeviceIdFlow.first()
+            if (cloudWorkspaceId.isBlank() || mainCloudDeviceId.isBlank()) {
+                _userMessage.emit("تعذر إنشاء باركود الإنترنت: مساحة التعاون أو تسجيل الجهاز الرئيسي غير مكتمل.")
+                return@launch
+            }
+            val cloudPairingReady = true
+            val code = "CLOUD-" + cloudWorkspaceId.take(8)
+            val hostDisplay = ""
+            val plainPassword = ""
             val salt = SecurityUtils.generateSalt()
             val passwordHash = SecurityUtils.hashPassword(plainPassword, salt)
             val sessionToken = UUID.randomUUID().toString()
@@ -956,13 +983,21 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             current.add(0, newSlot)
             preferences.saveLinkedSubDevices(current)
+            if (cloudPairingReady) {
+                // Re-open the main-device Realtime subscription immediately so the new QR
+                // can be scanned without waiting for the periodic heartbeat cycle.
+                startCloudOutboxCoordinator()
+            }
 
             val creds = CreatedDeviceCredentials(
                 deviceSlotId = newSlot.id,
                 deviceName = newSlot.deviceName,
                 workspaceCode = code,
                 hostAddress = hostDisplay,
-                plainPassword = plainPassword
+                plainPassword = plainPassword,
+                cloudWorkspaceId = if (cloudPairingReady) cloudWorkspaceId else "",
+                mainCloudDeviceId = if (cloudPairingReady) mainCloudDeviceId else "",
+                sessionToken = if (cloudPairingReady) sessionToken else ""
             )
             _sessionPairingCredentials.value = _sessionPairingCredentials.value + (newSlot.id to creds)
             _createdDeviceCredentials.value = creds
@@ -972,9 +1007,31 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun showSessionCredentialsQr(slotId: String) {
         if (!isMainDevice.value) return
-        val cached = _sessionPairingCredentials.value[slotId]
-        if (cached != null) {
-            _createdDeviceCredentials.value = cached
+        viewModelScope.launch {
+            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+                it.id == slotId && !it.isClaimed && !it.isKicked && !it.wasUnlinked
+            } ?: run {
+                _userMessage.emit("رمز ربط هذا الجهاز غير متاح أو تم استخدامه بالفعل.")
+                return@launch
+            }
+            val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+            val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+            if (!cloudAuthorizationEnabled.value || workspaceId.isBlank() || mainDeviceId.isBlank() || slot.sessionToken.isBlank()) {
+                _userMessage.emit("تعذر استعادة رمز الربط. افتح التعاون السحابي وتأكد من تسجيل الجهاز الرئيسي.")
+                return@launch
+            }
+            val credentials = CreatedDeviceCredentials(
+                deviceSlotId = slot.id,
+                deviceName = slot.deviceName,
+                workspaceCode = "CLOUD-" + workspaceId.take(8),
+                hostAddress = "",
+                plainPassword = "",
+                cloudWorkspaceId = workspaceId,
+                mainCloudDeviceId = mainDeviceId,
+                sessionToken = slot.sessionToken
+            )
+            _sessionPairingCredentials.value = _sessionPairingCredentials.value + (slotId to credentials)
+            _createdDeviceCredentials.value = credentials
         }
     }
 
@@ -1138,37 +1195,40 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun reactivateSubDevice(slotId: String) {
         viewModelScope.launch {
             if (!requireMainDeviceForDeviceManagement()) return@launch
+            if (!cloudAuthorizationEnabled.value) {
+                _userMessage.emit("سجّل الجهاز الرئيسي في مساحة التعاون السحابي لإعادة إصدار باركود الإنترنت.")
+                return@launch
+            }
+            val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+            val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+            if (workspaceId.isBlank() || mainDeviceId.isBlank()) {
+                _userMessage.emit("تعذر إعادة الربط: مساحة التعاون السحابي غير جاهزة.")
+                return@launch
+            }
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx < 0) return@launch
-
             val previous = current[idx]
-            val workspaceCode = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            val hostAddress = LocalNetworkSyncServer.getLocalLanIpAddresses().firstOrNull() ?: "192.168.43.1"
-            val hostDisplay = "$hostAddress:${if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT}"
-            val oneTimePassword = SecurityUtils.generateUniqueDevicePassword(10)
-            val passwordSalt = SecurityUtils.generateSalt()
-            val passwordHash = SecurityUtils.hashPassword(oneTimePassword, passwordSalt)
-
+            val newSecret = UUID.randomUUID().toString()
             current[idx] = previous.copy(
-                passwordSalt = passwordSalt,
-                passwordHash = passwordHash,
                 isKicked = false,
                 isClaimed = false,
+                wasUnlinked = false,
                 boundInstallationId = "",
-                sessionToken = UUID.randomUUID().toString(),
+                sessionToken = newSecret,
                 updatedAt = System.currentTimeMillis()
             )
             preferences.saveLinkedSubDevices(current)
-            preferences.incrementSyncRevision()
-
+            startCloudOutboxCoordinator()
             val credentials = CreatedDeviceCredentials(
                 deviceSlotId = previous.id,
                 deviceName = previous.deviceName,
-                workspaceCode = workspaceCode,
-                hostAddress = hostDisplay,
-                plainPassword = oneTimePassword
+                workspaceCode = "CLOUD-" + workspaceId.take(8),
+                hostAddress = "",
+                plainPassword = "",
+                cloudWorkspaceId = workspaceId,
+                mainCloudDeviceId = mainDeviceId,
+                sessionToken = newSecret
             )
             _sessionPairingCredentials.value = _sessionPairingCredentials.value + (previous.id to credentials)
             _createdDeviceCredentials.value = credentials
@@ -1178,10 +1238,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     deviceName = "الجهاز الرئيسي",
                     operationType = "REACTIVATE_DEVICE",
                     title = "إعادة تفعيل جهاز فرعي",
-                    details = "تمت إعادة تفعيل الجهاز (${previous.deviceName}) وإصدار كلمة مرور جديدة للربط مع الاحتفاظ بصلاحياته."
+                    details = "تمت إعادة تفعيل الجهاز (" + previous.deviceName + ") وإصدار باركود ربط عبر الإنترنت."
                 )
             )
-            _userMessage.emit("تمت إعادة تفعيل ${previous.deviceName}. تظهر الآن كلمة مرور جديدة في نافذة بيانات الربط؛ لن تعمل كلمة المرور القديمة.")
+            _userMessage.emit("تمت إعادة تفعيل " + previous.deviceName + ". امسح باركود الإنترنت الجديد من الجهاز الفرعي.")
         }
     }
 
@@ -1208,14 +1268,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun pairWithMainDevice(
-        hostAddress: String,
-        workspaceCodeInput: String,
-        passwordInput: String
-    ) {
+    fun pairWithCloudMainDevice(payload: QrPairingPayload) {
         viewModelScope.launch {
             if (preferences.deviceRoleFlow.first() != DeviceRole.SUB) {
-                _pairingError.value = "لا يمكن ربط هذا الجهاز كفرعي قبل تحويله إلى وضع الجهاز الفرعي."
+                _pairingError.value = "حوّل هذا الجهاز إلى وضع الجهاز الفرعي قبل مسح رمز الربط."
                 return@launch
             }
             if (preferences.subSessionTokenFlow.first().isNotBlank()) {
@@ -1223,81 +1279,181 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 return@launch
             }
             val lockedUntil = preferences.pairingLockedUntilFlow.first()
-            val now = System.currentTimeMillis()
-            if (lockedUntil > now) {
-                val secs = ((lockedUntil - now) / 1000L).coerceAtLeast(1L)
-                _pairingError.value = "تم قفل المحاولات مؤقتاً لمدة $secs ثانية بسبب تكرار المحاولات الخاطئة"
+            if (lockedUntil > System.currentTimeMillis()) {
+                _pairingError.value = "محاولات الربط مقفلة مؤقتاً؛ حاول بعد انتهاء مدة القفل."
                 return@launch
             }
-
-            val cleanHost = hostAddress.trim()
-            val cleanCode = workspaceCodeInput.trim().uppercase()
-            val cleanPwd = passwordInput.trim()
-
-            if (cleanHost.isBlank() || cleanCode.isBlank() || cleanPwd.isBlank()) {
-                _pairingError.value = "يرجى إدخال عنوان الجهاز الرئيسي ورمز القاعدة وكلمة المرور المنفردة"
-                return@launch
-            }
-
             _isPairingInProgress.value = true
             _pairingError.value = null
             try {
-                val installId = preferences.getOrCreateInstallationId()
-                val normalizedUrl = syncClient.normalizeBaseUrl(cleanHost)
-                val result = syncClient.pairWithMainDevice(
-                    rawHost = normalizedUrl,
-                    workspaceCode = cleanCode,
-                    password = cleanPwd,
-                    installationId = installId
-                )
+                require(payload.isCloudPairing) { "رمز الربط السحابي غير مكتمل" }
+                val userId = cloudCollaborationRepo.currentUserIdOrNull()
+                    ?: error("سجّل الدخول بحساب الجهاز الفرعي في شاشة التعاون السحابي أولاً")
+                val workspace = cloudCollaborationRepo.getWorkspace(payload.cloudWorkspaceId)
+                require(workspace.ownerUserId != userId) {
+                    "استخدم حساباً فرعياً مختلفاً عن حساب الجهاز الرئيسي"
+                }
+                require(cloudCollaborationRepo.listWorkspaceMembers(payload.cloudWorkspaceId)
+                    .any { it.userId == userId && it.isActive }) {
+                    "هذا الحساب غير مضاف إلى مساحة تعاون الجهاز الرئيسي"
+                }
 
-                result.onSuccess { paired ->
-                    preferences.resetPairingFailures()
-                    if (paired.entities.isNotEmpty()) {
-                        repository.replaceDatabaseFromCloudEntitiesSafely(paired.entities)
-                    } else {
-                        repository.clearAllSyncedData()
+                val savedWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
+                if (savedWorkspaceId != payload.cloudWorkspaceId) {
+                    preferences.saveCloudWorkspace(workspace.id, workspace.name)
+                }
+                val fingerprint = preferences.getOrCreateInstallationId()
+                val existingDeviceId = preferences.cloudDeviceIdFlow.first()
+                val registeredDevices = cloudCollaborationRepo.listWorkspaceDevices(payload.cloudWorkspaceId)
+                val validSavedDevice = registeredDevices.firstOrNull {
+                    it.id == existingDeviceId && it.userId == userId &&
+                        it.deviceFingerprint == fingerprint && !it.isRevoked
+                }
+                val existingDevice = registeredDevices.firstOrNull {
+                    it.userId == userId && it.deviceFingerprint == fingerprint && !it.isRevoked
+                }
+                val registeredDeviceId = (validSavedDevice?.id ?: existingDevice?.id ?: cloudCollaborationRepo.registerDevice(
+                    payload.cloudWorkspaceId,
+                    preferences.deviceNameFlow.first().ifBlank { "Android " + android.os.Build.MODEL.orEmpty().take(40) },
+                    fingerprint
+                )).also { preferences.saveCloudDeviceId(it) }
+
+                val claimOperationId = UUID.randomUUID().toString()
+                val claim = buildJsonObject {
+                    put("type", "PAIR_CLAIM")
+                    put("operationId", claimOperationId)
+                    put("slotId", payload.deviceSlotId)
+                    put("senderDeviceId", registeredDeviceId)
+                    put("senderUserId", userId)
+                    put("targetDeviceId", payload.mainCloudDeviceId)
+                }
+                val claimAck = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                    payload.cloudWorkspaceId,
+                    payload.mainCloudDeviceId,
+                    claim,
+                    transportSecret = payload.sessionToken,
+                    expectedSenderDeviceId = payload.mainCloudDeviceId,
+                    timeoutMillis = 45_000L
+                )
+                require(claimAck["success"]?.jsonPrimitive?.contentOrNull == "true") {
+                    claimAck["error"]?.jsonPrimitive?.contentOrNull ?: "لم يعتمد الجهاز الرئيسي طلب الربط"
+                }
+                val permissionsRaw = claimAck["permissions"]?.jsonPrimitive?.contentOrNull
+                    ?: error("لم تصل صلاحيات الجهاز الفرعي من الجهاز الرئيسي")
+                val permissions = LocalSyncJson.permissionsFromJson(JSONObject(permissionsRaw))
+                val deviceName = claimAck["deviceName"]?.jsonPrimitive?.contentOrNull
+                    .orEmpty().ifBlank { "جهاز فرعي" }
+                val totalChunks = claimAck["totalChunks"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                    ?: error("لم تصل معلومات أجزاء النسخة الأولية")
+                require(totalChunks > 0 && totalChunks <= 100_000) { "عدد أجزاء النسخة الأولية غير صالح" }
+                val snapshotRevision = claimAck["snapshotRevision"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+                    ?: error("لم يصل رقم إصدار النسخة الأولية")
+
+                val allEntities = JSONArray()
+                var auditLogs = JSONArray()
+                for (chunkIndex in 0 until totalChunks) {
+                    val requestId = UUID.randomUUID().toString()
+                    val request = buildJsonObject {
+                        put("type", "INITIAL_SYNC_REQUEST")
+                        put("operationId", requestId)
+                        put("slotId", payload.deviceSlotId)
+                        put("senderDeviceId", registeredDeviceId)
+                        put("senderUserId", userId)
+                        put("targetDeviceId", payload.mainCloudDeviceId)
+                        put("chunkIndex", chunkIndex)
+                        put("snapshotRevision", snapshotRevision)
                     }
-                    repository.importOperationLogsFromMain(paired.auditLogs)
-                    preferences.savePairedSubDevice(
-                        hostUrl = normalizedUrl,
-                        workspaceCode = paired.workspaceCode,
-                        deviceSlotId = paired.deviceSlotId,
-                        deviceName = paired.deviceName,
-                        sessionToken = paired.sessionToken,
-                        permissions = paired.permissions,
-                        appliedRevision = paired.syncVersion
+                    val chunkAck = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                        payload.cloudWorkspaceId,
+                        payload.mainCloudDeviceId,
+                        request,
+                        transportSecret = payload.sessionToken,
+                        expectedSenderDeviceId = payload.mainCloudDeviceId,
+                        timeoutMillis = 45_000L
                     )
-                    _lastSyncError.value = null
-                    _userMessage.emit("تم ربط الجهاز الفرعي (${paired.deviceName}) ومزامنة البيانات بنجاح")
-                }.onFailure { err ->
-                    val apiErr = err as? SyncApiException
-                    if (apiErr?.errorCode == "INVALID_PASSWORD" || apiErr?.errorCode == "INVALID_WORKSPACE") {
-                        val (attempts, lockTime) = preferences.recordPairingFailure()
-                        _pairingError.value = if (lockTime > 0L) {
-                            "تم تجاوز 5 محاولات خاطئة. تم إيقاف المحاولات لمدة 60 ثانية."
-                        } else {
-                            "${apiErr.message} (محاولة $attempts من 5)"
-                        }
-                    } else {
-                        _pairingError.value = apiErr?.message
-                            ?: "تعذر الاتصال بالجهاز الرئيسي. تأكد من صحة العنوان وأن الجهازين على شبكة Wi-Fi نفسها أو نقطة الاتصال نفسها. قد يكون السبب ضعف الشبكة أو انقطاعاً مؤقتاً؛ أعد المحاولة بعد استقرار الاتصال."
+                    require(chunkAck["success"]?.jsonPrimitive?.contentOrNull == "true") {
+                        chunkAck["error"]?.jsonPrimitive?.contentOrNull ?: "تعذر استلام جزء من بيانات المخزون"
+                    }
+                    val chunkJson = chunkAck["entitiesChunk"]?.jsonPrimitive?.contentOrNull
+                        ?: error("وصل جزء مزامنة فارغ أو غير صالح")
+                    val chunkArray = JSONArray(chunkJson)
+                    for (index in 0 until chunkArray.length()) allEntities.put(chunkArray.get(index))
+                    if (chunkIndex == totalChunks - 1) {
+                        auditLogs = JSONArray(chunkAck["auditLogs"]?.jsonPrimitive?.contentOrNull ?: "[]")
                     }
                 }
+
+                val upserts = LocalSyncJson.upsertsFromJsonArray(allEntities)
+                if (upserts.isEmpty()) {
+                    repository.clearAllSyncedData()
+                } else {
+                    val records = upserts.map { entity ->
+                        CloudEntityRecord(
+                            id = entity.docId,
+                            workspaceId = payload.cloudWorkspaceId,
+                            entityType = entity.entityType,
+                            localId = entity.localId,
+                            payload = entity.payload,
+                            isDeleted = entity.isDeleted
+                        )
+                    }
+                    repository.replaceDatabaseFromCloudEntitiesSafely(records).getOrThrow()
+                }
+                repository.importOperationLogsFromMain(LocalSyncJson.auditLogsFromJsonArray(auditLogs))
+                preferences.savePairedSubDevice(
+                    hostUrl = "",
+                    workspaceCode = "CLOUD-" + payload.cloudWorkspaceId.take(8),
+                    deviceSlotId = payload.deviceSlotId,
+                    deviceName = deviceName,
+                    sessionToken = payload.sessionToken,
+                    permissions = permissions,
+                    appliedRevision = snapshotRevision
+                )
+                preferences.resetPairingFailures()
+                // Reconnect the sub-device's private Realtime listener immediately after
+                // its shared pairing secret has been persisted.
+                startCloudOutboxCoordinator()
+                val completeOperationId = UUID.randomUUID().toString()
+                runCatching {
+                    cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                        payload.cloudWorkspaceId,
+                        payload.mainCloudDeviceId,
+                        buildJsonObject {
+                            put("type", "PAIR_COMPLETE")
+                            put("operationId", completeOperationId)
+                            put("slotId", payload.deviceSlotId)
+                            put("senderDeviceId", registeredDeviceId)
+                            put("senderUserId", userId)
+                            put("targetDeviceId", payload.mainCloudDeviceId)
+                        },
+                        transportSecret = payload.sessionToken,
+                        expectedSenderDeviceId = payload.mainCloudDeviceId,
+                        timeoutMillis = 20_000L
+                    )
+                }
+                _lastSyncError.value = null
+                _userMessage.emit("تم ربط الجهاز عبر الإنترنت واستلام بيانات المخزون وسجل العمليات.")
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (error: Exception) {
-                // Keep the app alive if importing the initial snapshot or saving the pairing state fails.
-                val detail = error.localizedMessage?.take(120).orEmpty()
-                _pairingError.value = if (detail.isBlank()) {
-                    "تم الاتصال لكن تعذر إكمال حفظ بيانات الربط. أعد المحاولة."
-                } else {
-                    "تم الاتصال لكن تعذر إكمال حفظ بيانات الربط: $detail"
-                }
+            } catch (failure: Exception) {
+                val detail = failure.localizedMessage ?: "تعذر إكمال الربط عبر الإنترنت"
+                val lock = preferences.recordPairingFailure()
+                _pairingError.value = if (lock.second > System.currentTimeMillis()) {
+                    "تم قفل محاولات الربط مؤقتاً بسبب تكرار المحاولات. $detail"
+                } else detail
             } finally {
                 _isPairingInProgress.value = false
             }
         }
+    }
+
+    @Deprecated("LAN/hotspot pairing is disabled. Scan the cloud QR code instead.")
+    fun pairWithMainDevice(
+        hostAddress: String,
+        workspaceCodeInput: String,
+        passwordInput: String
+    ) {
+        _pairingError.value = "الربط المحلي وعبر نقطة الاتصال متوقف. امسح باركود الربط السحابي من الجهاز الرئيسي بعد تسجيل حساب الجهاز الفرعي."
     }
 
     fun deleteOperationLogs(ids: List<Long>) {
@@ -1309,29 +1465,95 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun syncNow() {
         viewModelScope.launch {
-            if (isMainDevice.value) {
-                preferences.incrementSyncRevision()
-                refreshMainServerInfo()
-                if (cloudAuthorizationEnabled.value) {
-                    val delivered = flushCloudPendingSyncOperations()
-                    if (!delivered) _userMessage.emit("توجد عمليات بانتظار تأكيد وصولها إلى الأجهزة الفرعية.")
-                }
-                _userMessage.emit("تم تحديث حالة خادم الربط المحلي وجاهزية المزامنة")
-            } else if (cloudAuthorizationEnabled.value) {
-                _isSyncingNow.value = true
-                try {
+            _isSyncingNow.value = true
+            try {
+                if (isMainDevice.value) {
+                    if (cloudAuthorizationEnabled.value) {
+                        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                        val deviceId = preferences.cloudDeviceIdFlow.first()
+                        if (deviceId.isNotBlank()) cloudCollaborationRepo.heartbeat(deviceId)
+                        val devices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
+                        _cloudDeviceLastSeenAt.value = devices.mapNotNull { device ->
+                            val seenAt = device.lastSeenAt?.let { value ->
+                                runCatching { java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrNull()
+                            }
+                            if (seenAt != null && device.deviceFingerprint.isNotBlank()) device.deviceFingerprint to seenAt else null
+                        }.toMap()
+                        val received = requestSubDeviceSync()
+                        val delivered = flushCloudPendingSyncOperations()
+                        if (!received || !delivered) {
+                            _userMessage.emit("اكتملت محاولة المزامنة؛ بعض الأجهزة غير متصلة أو لديها عمليات تنتظر التأكيد.")
+                        } else {
+                            _userMessage.emit("تمت مزامنة العمليات في الاتجاهين بين الجهاز الرئيسي والأجهزة الفرعية.")
+                        }
+                    } else {
+                        _lastSyncError.value = "المزامنة عبر الشبكة المحلية متوقفة. سجّل الدخول في التعاون السحابي لاستخدام الإنترنت."
+                        _userMessage.emit(_lastSyncError.value.orEmpty())
+                    }
+                    _userMessage.emit("اكتملت محاولة المزامنة وتحديث حالة الأجهزة.")
+                } else if (cloudAuthorizationEnabled.value) {
                     val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
                     if (cloudDeviceId.isNotBlank()) cloudCollaborationRepo.heartbeat(cloudDeviceId)
                     val delivered = flushPendingSubDeviceSyncOperations()
                     if (!delivered) _userMessage.emit("توجد عمليات محلية تنتظر تأكيد وصولها إلى الجهاز الرئيسي.")
-                    else _userMessage.emit("تم تحديث حالة الاتصال وإرسال العمليات المعلقة عند توفر الشبكة.")
-                } finally {
-                    _isSyncingNow.value = false
+                    else _userMessage.emit("تم تحديث حالة الاتصال وإرسال العمليات المعلقة عبر الإنترنت.")
+                } else {
+                    _lastSyncError.value = "المزامنة عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الدخول في التعاون السحابي."
+                    _userMessage.emit(_lastSyncError.value.orEmpty())
                 }
-            } else {
-                pullFromMainOnce(silent = false)
+            } finally {
+                _isSyncingNow.value = false
             }
         }
+    }
+
+    private suspend fun requestSubDeviceSync(): Boolean {
+        if (!isMainDevice.value || !cloudAuthorizationEnabled.value) return true
+        if (!hasValidatedInternetConnection()) return false
+        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+        val senderDeviceId = preferences.cloudDeviceIdFlow.first()
+        val senderUserId = cloudCollaborationRepo.currentUserIdOrNull() ?: return false
+        if (workspaceId.isBlank() || senderDeviceId.isBlank()) return false
+        val slots = preferences.getLinkedSubDevicesSnapshot().filter {
+            it.isClaimed && !it.isKicked && !it.wasUnlinked && it.sessionToken.isNotBlank()
+        }
+        if (slots.isEmpty()) return true
+        val cloudDevices = runCatching { cloudCollaborationRepo.listWorkspaceDevices(workspaceId) }
+            .getOrElse { return false }
+        var allDelivered = true
+        for (slot in slots) {
+            val remoteDevice = cloudDevices.firstOrNull {
+                it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
+            }
+            val lastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
+            if (remoteDevice == null || System.currentTimeMillis() - lastSeen !in 0L..45_000L) {
+                allDelivered = false
+                continue
+            }
+            val operationId = UUID.randomUUID().toString()
+            val request = buildJsonObject {
+                put("type", "SYNC_REQUEST")
+                put("operationId", operationId)
+                put("senderDeviceId", senderDeviceId)
+                put("senderUserId", senderUserId)
+                put("targetDeviceId", remoteDevice.id)
+            }
+            val ack = runCatching {
+                cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                    workspaceId,
+                    remoteDevice.id,
+                    request,
+                    transportSecret = slot.sessionToken,
+                    expectedSenderDeviceId = remoteDevice.id,
+                    timeoutMillis = 45_000L
+                )
+            }.getOrNull()
+            if (ack?.get("success")?.jsonPrimitive?.contentOrNull != "true") {
+                allDelivered = false
+                ack?.get("error")?.jsonPrimitive?.contentOrNull?.let { _lastSyncError.value = it }
+            }
+        }
+        return allDelivered
     }
 
     /** Called by the navigation shell so revocation/permission changes are checked on every screen change. */
@@ -1343,91 +1565,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 if (cloudDeviceId.isNotBlank()) runCatching { cloudCollaborationRepo.heartbeat(cloudDeviceId) }
                 if (hasValidatedInternetConnection()) runCatching { flushPendingSubDeviceSyncOperations() }
             } else {
-                pullFromMainOnce(silent = true)
+                _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الجهاز في التعاون السحابي."
             }
         }
     }
 
-    private suspend fun pullFromMainOnce(silent: Boolean): Unit = subSyncMutex.withLock {
-        if (!silent) _isSyncingNow.value = true
-        try {
-            val host = preferences.mainHostUrlFlow.first()
-            val token = preferences.subSessionTokenFlow.first()
-            if (host.isBlank() || token.isBlank()) {
-                _lastSyncError.value = "بيانات اتصال الجهاز الرئيسي غير مكتملة"
-                return@withLock
-            }
-
-            // Send locally queued changes before pulling the main snapshot. Pulling first can
-            // overwrite an offline voucher that has not yet reached the main device.
-            if (!flushPendingSubDeviceSyncOperations()) {
-                if (!silent) _userMessage.emit("توجد عمليات محفوظة بانتظار المزامنة؛ لم يتم استبدال البيانات المحلية.")
-                return@withLock
-            }
-
-            val result = syncClient.fetchSyncSnapshot(host, token)
-            result.onSuccess { snapshot ->
-                _lastSyncError.value = null
-                if (snapshot.isKicked) {
-                    handleSubDeviceKicked("تم طرد هذا الجهاز وإلغاء ارتباطه من الجهاز الرئيسي.")
-                    return@onSuccess
-                }
-
-                preferences.updateSubDevicePermissions(snapshot.permissions)
-                // History is synchronized independently of the inventory revision and deduplicated
-                // by the repository, so late audit writes are not missed.
-                repository.importOperationLogsFromMain(snapshot.auditLogs)
-                val lastApplied = preferences.lastAppliedRevisionFlow.first()
-                if (snapshot.syncVersion < lastApplied) {
-                    _lastSyncError.value = "وصلت نسخة أقدم من بيانات الجهاز الرئيسي؛ تم تجاهلها للحفاظ على أحدث بيانات محلية."
-                    return@onSuccess
-                }
-                if (snapshot.syncVersion != lastApplied) {
-                    if (snapshot.entities.isEmpty()) {
-                        val localEntities = repository.exportAllEntitiesForCloud()
-                        if (localEntities.isNotEmpty()) {
-                            // An empty remote response can be transient or incomplete. Never erase
-                            // an existing warehouse database from an empty snapshot.
-                            _lastSyncError.value = "وصلت لقطة مزامنة فارغة رغم وجود بيانات محلية؛ تم الاحتفاظ بالبيانات وإعادة المحاولة لاحقاً."
-                            return@onSuccess
-                        }
-                    } else {
-                        // Advance the revision only after the database replacement succeeds.
-                        // The previous code ignored Result.failure and marked the snapshot applied,
-                        // leaving the device on stale/partial inventory indefinitely.
-                        repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.entities).getOrThrow()
-                    }
-                    preferences.updateLastSync(snapshot.syncVersion)
-                } else {
-                    preferences.updateLastSync(lastApplied)
-                }
-
-                if (!silent) {
-                    _userMessage.emit("تمت المزامنة مع الجهاز الرئيسي بنجاح")
-                }
-            }.onFailure { err ->
-                val apiErr = err as? SyncApiException
-                if (apiErr?.errorCode == "KICKED") {
-                    handleSubDeviceKicked(apiErr.message ?: "تم طرد هذا الجهاز وإلغاء ارتباطه من الجهاز الرئيسي.")
-                } else {
-                    _lastSyncError.value = "بانتظار توفر الجهاز الرئيسي على الشبكة المحلية"
-                    if (!silent) {
-                        _userMessage.emit("تعذر الوصول للجهاز الرئيسي حالياً. تأكد من الاتصال بنفس الشبكة.")
-                    }
-                }
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            // Covers DataStore, JSON, Room transaction and permission-update failures as well
-            // as HTTP failures so no background sync exception can crash the app.
-            _lastSyncError.value = "تعذر تحديث بيانات الجهاز: " + (error.localizedMessage?.take(100).orEmpty())
-            if (!silent) {
-                _userMessage.emit("تعذر إكمال المزامنة. سيحاول التطبيق مرة أخرى تلقائياً.")
-            }
-        } finally {
-            if (!silent) _isSyncingNow.value = false
-        }
+    @Deprecated("LAN synchronization is disabled; cloud Realtime is the only supported transport.")
+    private suspend fun pullFromMainOnce(silent: Boolean): Unit {
+        _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. استخدم التعاون السحابي عبر الإنترنت."
+        if (!silent) _userMessage.emit(_lastSyncError.value.orEmpty())
     }
 
     private suspend fun handleSubDeviceKicked(reason: String) {
@@ -1447,11 +1593,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val host = preferences.mainHostUrlFlow.first()
             val token = preferences.subSessionTokenFlow.first()
             val name = deviceName.value.ifBlank { "الجهاز الفرعي" }
-            if (host.isNotBlank() && token.isNotBlank()) {
-                val remote = syncClient.unlinkFromMain(host, token)
-                if (remote.isFailure) {
-                    _userMessage.emit("تعذر إبلاغ الجهاز الرئيسي بفك الارتباط الآن؛ سيتم حفظ سجل العملية محلياً")
-                }
+            // Do not fall back to a LAN request when unlinking legacy pairings.
+            // Cloud membership/device revocation is managed by the collaboration flow.
+            if (!cloudAuthorizationEnabled.value && host.isNotBlank() && token.isNotBlank()) {
+                _userMessage.emit("تم إيقاف طلبات فك الارتباط عبر الشبكة المحلية؛ أدر إلغاء الجهاز من مساحة التعاون السحابي.")
             }
             repository.recordOperation(OperationAuditLog(
                 actorName = userName.value.ifBlank { name },
@@ -1512,18 +1657,43 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         action: DeviceAction,
         warehouseIds: Set<Long>
     ) {
+        val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
+            !slot.isKicked && !slot.wasUnlinked &&
+                warehouseIds.any { warehouseId ->
+                    slot.canViewAllWarehouses ||
+                        slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+                }
+        }
+        if (slots.isEmpty()) return
+        require(cloudAuthorizationEnabled.value) {
+            "هذا المخزن مخصص لجهاز فرعي. سجّل الجهازين في التعاون السحابي؛ الربط المحلي أو نقطة الاتصال غير مدعومين."
+        }
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
-        if (workspaceId.isBlank()) return
+        require(workspaceId.isNotBlank()) { "مساحة التعاون السحابي غير جاهزة لهذا المخزن." }
+        require(hasValidatedInternetConnection()) { "يلزم اتصال إنترنت موثّق قبل تنفيذ عملية على مخزن فرعي" }
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
         val senderUserId = cloudCollaborationRepo.currentUserIdOrNull()
             ?: error("انتهت جلسة حساب Google")
         val cloudDevices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
-        val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
-            slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-                (slot.warehousePermissions.any { it.warehouseId in warehouseIds && it.canView } ||
-                    (slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty()))
-        }
         for (slot in slots) {
+            require(slot.isClaimed) {
+                "المخزن مخصص للجهاز (" + slot.deviceName + ") لكنه لم يُربط بعد."
+            }
+            val assignedWarehouseIds = warehouseIds.filter { warehouseId ->
+                slot.canViewAllWarehouses ||
+                    slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+            }.toSet()
+            require(assignedWarehouseIds.isNotEmpty()) {
+                "لم يتم تحديد مخزن صالح للجهاز الفرعي (" + slot.deviceName + ")"
+            }
+            require(assignedWarehouseIds.all { warehouseId ->
+                slot.warehousePermissions.any {
+                    it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                }
+            }) {
+                "لا يمكن للمستخدم الرئيسي العمل على مخزن (" + slot.deviceName + ") قبل تفعيل صلاحية العمل دون اتصال لهذا المخزن."
+            }
+            val slotWarehouseIds = assignedWarehouseIds
             val target = cloudDevices.firstOrNull {
                 it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
             } ?: error("تعذر العثور على اتصال الجهاز الفرعي (${slot.deviceName})")
@@ -1535,10 +1705,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("senderUserId", senderUserId)
                 put("targetDeviceId", target.id)
                 put("actionType", action.name)
-                put("warehouseIds", JSONArray(warehouseIds.toList()).toString())
+                put("warehouseIds", JSONArray(slotWarehouseIds.toList()).toString())
             }
             val ack = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                workspaceId, target.id, event, expectedSenderDeviceId = target.id
+                workspaceId, target.id, event, transportSecret = slot.sessionToken, expectedSenderDeviceId = target.id
             )
             val accepted = ack["success"]?.jsonPrimitive?.contentOrNull == "true"
             if (!accepted) {
@@ -1615,8 +1785,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         operationId: String,
         success: Boolean,
         recipientDeviceId: String,
-        error: String = ""
+        transportSecret: String,
+        error: String = "",
+        extra: JsonObject = buildJsonObject { }
     ) {
+        require(transportSecret.isNotBlank()) { "مفتاح الربط المشترك غير متوفر لإرسال تأكيد العملية" }
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
         cloudCollaborationRepo.broadcastWorkspaceEvent(
             workspaceId,
@@ -1627,7 +1800,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("success", success)
                 put("error", error)
                 put("senderDeviceId", senderDeviceId)
-            }
+                extra.forEach { (key, value) -> put(key, value) }
+            },
+            transportSecret = transportSecret
         )
     }
 
@@ -1635,8 +1810,210 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val type = event["type"]?.jsonPrimitive?.contentOrNull ?: return
         when (type) {
             "SUB_OPERATION" -> if (isMainDevice.value) handleCloudSubOperation(workspaceId, event)
-            "MAIN_OPERATION", "PREPARE_MAIN_OPERATION" ->
+            "PAIR_CLAIM" -> if (isMainDevice.value) handleCloudPairClaim(workspaceId, event)
+            "INITIAL_SYNC_REQUEST" -> if (isMainDevice.value) handleCloudInitialSyncRequest(workspaceId, event)
+            "PAIR_COMPLETE" -> if (isMainDevice.value) handleCloudPairComplete(workspaceId, event)
+            "MAIN_OPERATION", "PREPARE_MAIN_OPERATION", "SYNC_REQUEST" ->
                 if (!isMainDevice.value) handleCloudMainCommand(workspaceId, event, type)
+        }
+    }
+
+    private fun chunkInitialCloudEntities(entities: List<CloudEntityUpsert>): List<List<CloudEntityUpsert>> {
+        val maxPlaintextBytes = 110 * 1024
+        val chunks = mutableListOf<List<CloudEntityUpsert>>()
+        var current = mutableListOf<CloudEntityUpsert>()
+        var currentBytes = 2
+        entities.sortedBy { it.docId }.forEach { entity ->
+            val entityBytes = LocalSyncJson.upsertsToJsonArray(listOf(entity))
+                .toString().toByteArray(Charsets.UTF_8).size
+            require(entityBytes + 2 < maxPlaintextBytes) {
+                "يوجد سجل مخزني أكبر من الحد الآمن لنقله عبر قناة المزامنة"
+            }
+            if (current.isNotEmpty() && currentBytes + entityBytes + 1 > maxPlaintextBytes) {
+                chunks += current.toList()
+                current = mutableListOf()
+                currentBytes = 2
+            }
+            current += entity
+            currentBytes += entityBytes + 1
+        }
+        if (current.isNotEmpty() || chunks.isEmpty()) chunks += current.toList()
+        return chunks
+    }
+
+    private suspend fun handleCloudPairClaim(workspaceId: String, event: JsonObject) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val slotId = event["slotId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        var transportSecret = ""
+        try {
+            val mainDeviceId = preferences.cloudDeviceIdFlow.first()
+            require(targetDeviceId == mainDeviceId) { "طلب الربط موجّه إلى جهاز رئيسي آخر" }
+            val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
+            require(workspace.ownerUserId == cloudCollaborationRepo.currentUserIdOrNull()) {
+                "اعتماد الربط متاح للمستخدم الرئيسي فقط"
+            }
+            val devices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
+            val remoteDevice = devices.firstOrNull {
+                it.id == senderDeviceId && it.userId == senderUserId && !it.isRevoked
+            } ?: error("حساب الجهاز الفرعي غير مسجل في مساحة العمل")
+            require(senderUserId != workspace.ownerUserId) { "يجب أن يستخدم الجهاز الفرعي حساباً مختلفاً عن حساب الرئيسي" }
+            cloudCollaborationRepo.listWorkspaceMembers(workspaceId)
+                .firstOrNull { it.userId == senderUserId && it.isActive }
+                ?: error("يجب إضافة حساب الجهاز الفرعي إلى مساحة التعاون أولاً")
+
+            val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
+            val slotIndex = current.indexOfFirst { it.id == slotId }
+            require(slotIndex >= 0) { "رمز ربط الجهاز غير موجود أو تم حذفه" }
+            val slot = current[slotIndex]
+            transportSecret = slot.sessionToken
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "رمز QR لا يطابق خانة الجهاز المطلوبة"
+            }
+            require(transportSecret.isNotBlank() && !slot.isKicked && !slot.wasUnlinked) {
+                "رمز الربط ملغى أو غير صالح"
+            }
+            require(!slot.isClaimed || slot.boundInstallationId == remoteDevice.deviceFingerprint) {
+                "تم استخدام رمز الربط على جهاز آخر بالفعل"
+            }
+            val now = System.currentTimeMillis()
+            val claimedSlot = slot.copy(
+                isClaimed = true,
+                wasUnlinked = false,
+                boundInstallationId = remoteDevice.deviceFingerprint,
+                updatedAt = now,
+                lastSeenAt = now
+            )
+            current[slotIndex] = claimedSlot
+            preferences.saveLinkedSubDevices(current)
+            cloudCollaborationRepo.syncLinkedDevicePermissionsToCloud(workspaceId, claimedSlot)
+
+            val revision = preferences.syncRevisionFlow.first()
+            val chunks = chunkInitialCloudEntities(repository.exportAllEntitiesForCloud())
+            val logs = repository.getOperationLogsForSyncToDevice(claimedSlot.deviceName)
+            pairingSnapshots[slotId] = CloudPairingSnapshot(
+                revision = revision,
+                entityChunks = chunks,
+                auditLogs = logs,
+                deviceName = claimedSlot.deviceName,
+                permissions = claimedSlot.toPermissions()
+            )
+            sendCloudAck(
+                workspaceId = workspaceId,
+                operationId = operationId,
+                success = true,
+                recipientDeviceId = senderDeviceId,
+                transportSecret = transportSecret,
+                extra = buildJsonObject {
+                    put("deviceName", claimedSlot.deviceName)
+                    put("permissions", LocalSyncJson.permissionsToJson(claimedSlot.toPermissions()).toString())
+                    put("totalChunks", chunks.size)
+                    put("snapshotRevision", revision)
+                }
+            )
+            _userMessage.emit("تم ربط الجهاز الفرعي (" + claimedSlot.deviceName + ") عبر الإنترنت")
+        } catch (failure: Exception) {
+            if (transportSecret.isNotBlank()) {
+                runCatching {
+                    sendCloudAck(
+                        workspaceId, operationId, false, senderDeviceId, transportSecret,
+                        failure.localizedMessage ?: "تعذر اعتماد ربط الجهاز الفرعي"
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun handleCloudInitialSyncRequest(workspaceId: String, event: JsonObject) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val slotId = event["slotId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        var transportSecret = ""
+        try {
+            require(targetDeviceId == preferences.cloudDeviceIdFlow.first()) {
+                "طلب المزامنة الأولية موجّه إلى جهاز رئيسي آخر"
+            }
+            val remoteDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
+                it.id == senderDeviceId && it.userId == senderUserId && !it.isRevoked
+            } ?: error("الجهاز الفرعي غير مسجل أو تم إيقافه")
+            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+                it.id == slotId && it.isClaimed && !it.isKicked && !it.wasUnlinked &&
+                    it.boundInstallationId == remoteDevice.deviceFingerprint
+            } ?: error("الجهاز غير مرتبط بهذا الحساب")
+            transportSecret = slot.sessionToken
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة المزامنة لا تطابق سر ربط الجهاز الفرعي"
+            }
+            val snapshot = pairingSnapshots[slotId] ?: error("انتهت جلسة نقل النسخة الأولية؛ أعد مسح رمز الربط")
+            val requestedRevision = event["snapshotRevision"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+            require(requestedRevision == snapshot.revision &&
+                preferences.syncRevisionFlow.first() == snapshot.revision
+            ) { "تغيرت بيانات المخزون أثناء الربط؛ أعد محاولة المزامنة الأولية" }
+            val chunkIndex = event["chunkIndex"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                ?: error("رقم جزء المزامنة غير صالح")
+            require(chunkIndex in snapshot.entityChunks.indices) { "جزء المزامنة المطلوب غير موجود" }
+            val isLastChunk = chunkIndex == snapshot.entityChunks.lastIndex
+            val extra = buildJsonObject {
+                put("chunkIndex", chunkIndex)
+                put("totalChunks", snapshot.entityChunks.size)
+                put("entitiesChunk", LocalSyncJson.upsertsToJsonArray(snapshot.entityChunks[chunkIndex]).toString())
+                if (isLastChunk) {
+                    put("auditLogs", LocalSyncJson.auditLogsToJsonArray(snapshot.auditLogs).toString())
+                    put("deviceName", snapshot.deviceName)
+                }
+            }
+            sendCloudAck(
+                workspaceId, operationId, true, senderDeviceId, transportSecret, extra = extra
+            )
+        } catch (failure: Exception) {
+            if (transportSecret.isNotBlank()) {
+                runCatching {
+                    sendCloudAck(
+                        workspaceId, operationId, false, senderDeviceId, transportSecret,
+                        failure.localizedMessage ?: "تعذر إرسال جزء من المزامنة الأولية"
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun handleCloudPairComplete(workspaceId: String, event: JsonObject) {
+        val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
+        val slotId = event["slotId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        var transportSecret = ""
+        try {
+            require(targetDeviceId == preferences.cloudDeviceIdFlow.first()) {
+                "تأكيد الربط موجّه إلى جهاز رئيسي آخر"
+            }
+            val remoteDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
+                it.id == senderDeviceId && it.userId == senderUserId && !it.isRevoked
+            } ?: error("الجهاز الفرعي غير مسجل أو تم إيقافه")
+            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+                it.id == slotId && it.isClaimed && !it.isKicked && !it.wasUnlinked &&
+                    it.boundInstallationId == remoteDevice.deviceFingerprint
+            } ?: error("الجهاز غير مرتبط بهذا الحساب")
+            transportSecret = slot.sessionToken
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة إكمال الربط لا تطابق سر الجهاز"
+            }
+            pairingSnapshots.remove(slotId)
+            sendCloudAck(workspaceId, operationId, true, senderDeviceId, transportSecret)
+        } catch (failure: Exception) {
+            if (transportSecret.isNotBlank()) {
+                runCatching {
+                    sendCloudAck(
+                        workspaceId, operationId, false, senderDeviceId, transportSecret,
+                        failure.localizedMessage ?: "تعذر تأكيد اكتمال الربط"
+                    )
+                }
+            }
         }
     }
 
@@ -1645,6 +2022,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val operationBody = event["operation"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        var transportSecret = ""
         try {
             val remoteDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
                 .firstOrNull { it.id == senderDeviceId && !it.isRevoked && it.userId == senderUserId }
@@ -1653,18 +2031,30 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 it.isClaimed && !it.isKicked && !it.wasUnlinked &&
                     it.boundInstallationId == remoteDevice.deviceFingerprint
             } ?: error("لا يوجد جهاز فرعي مرتبط مطابق لهذا الحساب")
+            transportSecret = slot.sessionToken
+            require(transportSecret.isNotBlank()) { "مفتاح الربط المشترك لهذا الجهاز غير متوفر" }
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة الحدث لا تطابق سر ربط الجهاز الفرعي"
+            }
             val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
             require(targetDeviceId == preferences.cloudDeviceIdFlow.first()) { "العملية ليست موجهة إلى الجهاز الرئيسي الحالي" }
             syncServer.applyCloudOperation(slot.sessionToken, operationBody)
-            sendCloudAck(workspaceId, operationId, true, recipientDeviceId = senderDeviceId)
-        } catch (failure: Exception) {
             sendCloudAck(
-                workspaceId,
-                operationId,
-                false,
+                workspaceId, operationId, true,
                 recipientDeviceId = senderDeviceId,
-                error = failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الرئيسي"
+                transportSecret = transportSecret
             )
+        } catch (failure: Exception) {
+            if (transportSecret.isNotBlank()) {
+                sendCloudAck(
+                    workspaceId,
+                    operationId,
+                    false,
+                    recipientDeviceId = senderDeviceId,
+                    transportSecret = transportSecret,
+                    error = failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الرئيسي"
+                )
+            }
         }
     }
 
@@ -1678,17 +2068,31 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val myDeviceId = preferences.cloudDeviceIdFlow.first()
+        val transportSecret = preferences.subSessionTokenFlow.first()
+        if (transportSecret.isBlank()) return
         try {
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة الحدث لا تطابق سر ربط هذا الجهاز"
+            }
             if (targetDeviceId != myDeviceId) return
             val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
             require(senderUserId == workspace.ownerUserId) { "العملية الواردة ليست من المستخدم الرئيسي" }
-            val verifiedMainDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
+            cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
                 it.id == senderDeviceId && it.userId == workspace.ownerUserId && !it.isRevoked
             } ?: error("جهاز المستخدم الرئيسي غير مسجل أو تم إيقافه")
+            if (type == "SYNC_REQUEST") {
+                require(flushPendingSubDeviceOperationsOverCloud()) {
+                    "توجد عمليات محلية لم يتمكن الجهاز الرئيسي من استلامها بعد"
+                }
+                sendCloudAck(
+                    workspaceId, operationId, true,
+                    recipientDeviceId = senderDeviceId,
+                    transportSecret = transportSecret
+                )
+                return
+            }
             if (type == "PREPARE_MAIN_OPERATION") {
                 val warehouseIds = longIdsFromJson(event["warehouseIds"]?.jsonPrimitive?.contentOrNull.orEmpty())
-                // Deliver this device's offline queue before confirming readiness for a
-                // main-device transaction, preserving a single ordered writer per warehouse.
                 require(flushPendingSubDeviceOperationsOverCloud()) {
                     "توجد عمليات غير متزامنة محفوظة محلياً؛ تعذر تأكيد جاهزية الجهاز"
                 }
@@ -1697,19 +2101,28 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     permissions.canViewAllWarehouses ||
                         permissions.warehousePermissions.any { it.warehouseId == id && it.canView }
                 }) { "الجهاز غير مخول للوصول إلى أحد المخازن المستهدفة" }
-                sendCloudAck(workspaceId, operationId, true, recipientDeviceId = senderDeviceId)
+                sendCloudAck(
+                    workspaceId, operationId, true,
+                    recipientDeviceId = senderDeviceId,
+                    transportSecret = transportSecret
+                )
                 return
             }
 
             val operationBody = event["operation"]?.jsonPrimitive?.contentOrNull.orEmpty()
             applyMainOperationLocally(operationId, operationBody, workspaceId)
-            sendCloudAck(workspaceId, operationId, true, recipientDeviceId = senderDeviceId)
+            sendCloudAck(
+                workspaceId, operationId, true,
+                recipientDeviceId = senderDeviceId,
+                transportSecret = transportSecret
+            )
         } catch (failure: Exception) {
             sendCloudAck(
                 workspaceId,
                 operationId,
                 false,
                 recipientDeviceId = senderDeviceId,
+                transportSecret = transportSecret,
                 error = failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الفرعي"
             )
         }
@@ -1739,7 +2152,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val targetVouchers = longIdsFromJson(body.optJSONArray("targetVoucherIds")?.toString().orEmpty())
         if (actionType == DeviceAction.DELETE_ITEM.name) {
             merged.entries.removeAll { (_, entity) ->
-                (entity.entityType == "serial" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems) ||
+                (entity.entityType == "item" && entity.localId in targetItems) ||
+                    (entity.entityType == "serial" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems) ||
                     (entity.entityType == "association" && (entity.payload["itemId"] as? Number)?.toLong() in targetItems)
             }
         }
@@ -1747,8 +2161,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             actionType == DeviceAction.DELETE_SUPPLY_VOUCHER.name
         ) {
             merged.entries.removeAll { (_, entity) ->
-                entity.entityType == "voucher_item" &&
-                    (entity.payload["voucherId"] as? Number)?.toLong() in targetVouchers
+                (entity.entityType == "voucher" && entity.localId in targetVouchers) ||
+                    (entity.entityType == "voucher_item" &&
+                        (entity.payload["voucherId"] as? Number)?.toLong() in targetVouchers)
             }
         }
 
@@ -1762,43 +2177,69 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         repository.replaceDatabaseFromCloudEntitiesSafely(records).getOrThrow()
+        val operationTitle = body.optString("operationTitle", "عملية من الجهاز الرئيسي")
+        val operationDetails = body.optString("operationDetails", "")
+        val actorName = body.optString("actorName", "المستخدم الرئيسي")
         repository.recordOperation(
             OperationAuditLog(
-                actorName = body.optString("actorName", "المستخدم الرئيسي"),
-                deviceName = "الجهاز الرئيسي",
+                actorName = actorName,
+                deviceName = "الجهاز الرئيسي • سحابي",
                 operationType = actionType,
-                title = body.optString("operationTitle", "عملية من الجهاز الرئيسي"),
-                details = body.optString("operationDetails", "")
+                title = operationTitle,
+                details = operationDetails
             )
+        )
+        notificationManager.notifyOperation(
+            title = "عملية من المستخدم الرئيسي: $operationTitle",
+            details = "بواسطة: $actorName • $operationDetails",
+            isRemoteSubDeviceAlert = true
         )
         repository.markSyncOperationApplied(operationId)
     }
 
     private fun startCloudOutboxCoordinator() {
         cloudOutboxJob?.cancel()
-        cloudOutboxJob = viewModelScope.launch {
+        val coordinatorJob = app.applicationScope.launch {
             var lastOfflinePermissionSyncAt = 0L
             while (isActive) {
                 val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
                 val cloudWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
                 if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank() && cloudWorkspaceId.isNotBlank()) {
-                    if (cloudRealtimeWorkspaceId != cloudWorkspaceId) {
-                        cloudRealtimeJob?.cancel()
-                        cloudRealtimeWorkspaceId = cloudWorkspaceId
+                    if (isMainDevice.value) syncServer.stop()
+                    val transportSecrets = if (isMainDevice.value) {
+                        preferences.getLinkedSubDevicesSnapshot()
+                            .filter { !it.isKicked && !it.wasUnlinked && it.sessionToken.isNotBlank() }
+                            .map { it.sessionToken }
+                            .distinct()
+                    } else {
+                        listOf(preferences.subSessionTokenFlow.first()).filter { it.isNotBlank() }
                     }
-                    if (cloudRealtimeJob?.isActive != true) {
-                        cloudRealtimeJob = viewModelScope.launch {
+                    val subscriptionKey = "$cloudWorkspaceId|${transportSecrets.sorted().joinToString("|")}"
+                    if (cloudRealtimeWorkspaceId != subscriptionKey) {
+                        cloudRealtimeJob?.cancel()
+                        cloudRealtimeJob = null
+                        cloudRealtimeWorkspaceId = subscriptionKey
+                    }
+                    if (transportSecrets.isNotEmpty() && cloudRealtimeJob?.isActive != true) {
+                        cloudRealtimeJob = launch {
                             runCatching {
-                                cloudCollaborationRepo.observeWorkspaceEvents(cloudWorkspaceId, cloudDeviceId).collect { event ->
+                                cloudCollaborationRepo.observeWorkspaceEvents(
+                                    cloudWorkspaceId,
+                                    cloudDeviceId,
+                                    transportSecrets
+                                ).collect { event ->
                                     runCatching { handleCloudWorkspaceEvent(cloudWorkspaceId, event) }
                                         .onFailure { error ->
                                             _lastSyncError.value = error.localizedMessage ?: "تعذر معالجة عملية تعاون واردة"
                                         }
                                 }
                             }.onFailure { error ->
-                                _lastSyncError.value = "تعذر فتح قناة التعاون المباشر: ${error.localizedMessage ?: "تحقق من إعداد أمان Realtime"}"
+                                _lastSyncError.value = "تعذر فتح قناة التعاون المشفر: ${error.localizedMessage ?: "تحقق من الاتصال"}"
                             }
                         }
+                    } else if (transportSecrets.isEmpty()) {
+                        cloudRealtimeJob?.cancel()
+                        cloudRealtimeJob = null
                     }
                     runCatching { cloudCollaborationRepo.heartbeat(cloudDeviceId) }
                         .onFailure { error ->
@@ -1834,6 +2275,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 delay(15_000L)
             }
         }
+        cloudOutboxJob = coordinatorJob
+        app.replaceCloudCoordinator(this, coordinatorJob)
     }
 
     private suspend fun flushCloudPendingSyncOperations(): Boolean = cloudPushMutex.withLock {
@@ -1841,8 +2284,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         if (!hasValidatedInternetConnection()) return@withLock false
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
-        val senderUserId = cloudCollaborationRepo.currentUserIdOrNull()
-            ?: return@withLock false
+        val senderUserId = cloudCollaborationRepo.currentUserIdOrNull() ?: return@withLock false
         if (workspaceId.isBlank() || senderDeviceId.isBlank()) return@withLock false
 
         val pending = repository.getCloudPendingSyncOperations()
@@ -1859,7 +2301,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 return@withLock false
             }
             val warehouseIds = longIdsFromJson(operation.warehouseIdsJson)
-            val targetSlots = slots.filter { slot ->
+            val targetItemIds = longIdsFromJson(data.optJSONArray("targetItemIds")?.toString().orEmpty())
+            val targetVoucherIds = longIdsFromJson(data.optJSONArray("targetVoucherIds")?.toString().orEmpty())
+            val assignedSlots = slots.filter { slot ->
                 if (warehouseIds.isEmpty()) {
                     if (operation.actionType == DeviceAction.EDIT_CATALOG_ITEMS.name) slot.canEditCatalogItems
                     else slot.canAddItems
@@ -1868,34 +2312,58 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         (slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty())
                 }
             }
+            val targetSlots = if (warehouseIds.isEmpty()) assignedSlots else assignedSlots.filter { slot ->
+                slot.warehousePermissions.any {
+                    it.warehouseId in warehouseIds && it.canView && it.canWorkOffline
+                }
+            }
+            if (assignedSlots.isNotEmpty() && targetSlots.isEmpty()) {
+                repository.recordCloudPendingSyncFailure(
+                    operation.operationId,
+                    "لم تُفعّل صلاحية العمل دون اتصال لأي جهاز فرعي مخصص للمخزن."
+                )
+                return@withLock false
+            }
             if (targetSlots.isEmpty()) {
                 repository.removeCloudPendingSyncOperation(operation.operationId)
                 continue
             }
 
-            val body = JSONObject()
-                .put("clientOperationId", operation.operationId)
-                .put("actionType", operation.actionType)
-                .put("operationTitle", operation.operationTitle)
-                .put("operationDetails", operation.operationDetails)
-                .put("actorName", operation.actorName)
-                .put("warehouseIds", JSONArray(warehouseIds.toList()))
-                .put("targetItemIds", data.optJSONArray("targetItemIds") ?: JSONArray())
-                .put("targetVoucherIds", data.optJSONArray("targetVoucherIds") ?: JSONArray())
-                .put("entities", data.optJSONArray("records") ?: JSONArray())
-
             for (slot in targetSlots) {
+                val slotWarehouseIds = if (warehouseIds.isEmpty()) emptySet() else warehouseIds.filter { warehouseId ->
+                    slot.warehousePermissions.any {
+                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                    }
+                }.toSet()
                 val remoteDevice = cloudDevices.firstOrNull {
                     it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
                 } ?: run {
-                    repository.recordCloudPendingSyncFailure(operation.operationId, "الجهاز الفرعي ${slot.deviceName} غير مسجل في التعاون السحابي")
+                    repository.recordCloudPendingSyncFailure(
+                        operation.operationId,
+                        "الجهاز الفرعي " + slot.deviceName + " غير مسجل في التعاون السحابي"
+                    )
                     return@withLock false
                 }
-                val lastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
-                if (System.currentTimeMillis() - lastSeen !in 0L..45_000L) {
-                    repository.recordCloudPendingSyncFailure(operation.operationId, "الجهاز الفرعي ${slot.deviceName} غير متصل حالياً")
-                    return@withLock false
-                }
+                // The awaited private-channel ACK below is the authoritative live-online
+                // proof. Do not reject a reachable device using a stale heartbeat snapshot.
+                val scopedEntities = operationEntitiesForScope(
+                    all = repository.exportAllEntitiesForCloud(),
+                    actionType = operation.actionType,
+                    warehouseIds = slotWarehouseIds,
+                    targetItemIds = targetItemIds,
+                    targetVoucherIds = targetVoucherIds
+                )
+                val body = JSONObject()
+                    .put("clientOperationId", operation.operationId)
+                    .put("actionType", operation.actionType)
+                    .put("operationTitle", operation.operationTitle)
+                    .put("operationDetails", operation.operationDetails)
+                    .put("actorName", operation.actorName)
+                    .put("warehouseIds", JSONArray(slotWarehouseIds.toList()))
+                    .put("targetItemIds", JSONArray(targetItemIds.toList()))
+                    .put("targetVoucherIds", JSONArray(targetVoucherIds.toList()))
+                    .put("entities", LocalSyncJson.upsertsToJsonArray(scopedEntities))
+
                 val event = buildJsonObject {
                     put("type", "MAIN_OPERATION")
                     put("operationId", operation.operationId)
@@ -1906,7 +2374,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 val ack = runCatching {
                     cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                        workspaceId, remoteDevice.id, event, expectedSenderDeviceId = remoteDevice.id
+                        workspaceId, remoteDevice.id, event,
+                        transportSecret = slot.sessionToken,
+                        expectedSenderDeviceId = remoteDevice.id
                     )
                 }.getOrElse { failure ->
                     repository.recordCloudPendingSyncFailure(
@@ -2039,59 +2509,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }.getOrDefault(emptySet())
 
     private suspend fun flushPendingSubDeviceSyncOperations(): Boolean = pendingPushMutex.withLock {
-        if (cloudAuthorizationEnabled.value) {
-            return@withLock flushPendingSubDeviceOperationsOverCloud()
+        if (!cloudAuthorizationEnabled.value) {
+            _lastSyncError.value = "المزامنة المحلية عبر Wi-Fi ونقطة الاتصال متوقفة. سجّل الجهاز في التعاون السحابي."
+            return@withLock false
         }
-        val host = preferences.mainHostUrlFlow.first()
-        val token = preferences.subSessionTokenFlow.first()
-        if (host.isBlank() || token.isBlank()) return@withLock false
-
-        val pending = repository.getPendingSyncOperations()
-        for (operation in pending) {
-            val entities = runCatching {
-                LocalSyncJson.upsertsFromJsonArray(JSONArray(operation.entitiesJson))
-            }.getOrElse { error ->
-                repository.recordPendingSyncFailure(operation.operationId, "تعذر قراءة بيانات العملية: ${error.localizedMessage}")
-                _lastSyncError.value = "توجد عملية محفوظة لا يمكن قراءة بياناتها؛ لم يتم تجاوزها."
-                return@withLock false
-            }
-
-            val result = syncClient.pushEntitiesToMain(
-                rawHost = host,
-                sessionToken = token,
-                actionType = operation.actionType,
-                entities = entities,
-                operationTitle = operation.operationTitle,
-                operationDetails = operation.operationDetails,
-                actorName = operation.actorName,
-                warehouseIds = longIdsFromJson(operation.warehouseIdsJson),
-                targetItemIds = longIdsFromJson(operation.targetItemIdsJson),
-                targetVoucherIds = longIdsFromJson(operation.targetVoucherIdsJson),
-                clientOperationId = operation.operationId
-            )
-
-            if (result.isSuccess) {
-                val newRevision = result.getOrThrow()
-                repository.removePendingSyncOperation(operation.operationId)
-                preferences.updateLastSync(newRevision)
-                _lastSyncError.value = null
-            } else {
-                val error = result.exceptionOrNull() ?: IllegalStateException("فشل غير معروف في المزامنة")
-                repository.recordPendingSyncFailure(operation.operationId, error.localizedMessage ?: error.javaClass.simpleName)
-                val apiError = error as? SyncApiException
-                when (apiError?.errorCode) {
-                    "KICKED" -> handleSubDeviceKicked(
-                        apiError.message ?: "تم إيقاف هذا الجهاز من الجهاز الرئيسي."
-                    )
-                    "PERMISSION_DENIED" -> _userMessage.emit(
-                        apiError.message ?: "رفض الجهاز الرئيسي العملية بسبب الصلاحيات؛ بقيت محفوظة في قائمة المزامنة."
-                    )
-                }
-                _lastSyncError.value = error.localizedMessage ?: "تعذر إرسال العمليات المحفوظة"
-                return@withLock false
-            }
-        }
-        true
+        flushPendingSubDeviceOperationsOverCloud()
     }
 
     private suspend fun flushPendingSubDeviceOperationsOverCloud(): Boolean {
@@ -2136,7 +2558,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             val ack = runCatching {
                 cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                    workspaceId, ownerDevice.id, event, expectedSenderDeviceId = ownerDevice.id
+                    workspaceId, ownerDevice.id, event, transportSecret = preferences.subSessionTokenFlow.first(), expectedSenderDeviceId = ownerDevice.id
                 )
             }.getOrElse { failure ->
                 repository.recordPendingSyncFailure(
@@ -3053,8 +3475,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun mayUseBackups(): Boolean = devicePermissions.value.isMainDevice || devicePermissions.value.canBackup
 
+    // Google Drive appDataFolder belongs to one Google account and cannot be shared.
+    // Keep one canonical cloud-backup owner: the main device only.
+    private fun mayUseCloudBackups(): Boolean = devicePermissions.value.isMainDevice
+
     private fun emitBackupPermissionDenied() {
         viewModelScope.launch { _userMessage.emit("صلاحية النسخ الاحتياطي والتصدير غير ممنوحة من المستخدم الرئيسي") }
+    }
+
+    private fun emitCloudBackupOwnerOnly() {
+        viewModelScope.launch {
+            _cloudAuthError.value = "إدارة النسخ السحابية المركزية متاحة من الجهاز الرئيسي فقط؛ حساب Google للجهاز الفرعي مستقل ولا يشارك مساحة appDataFolder."
+        }
     }
 
     private suspend fun attachDeviceBackupMetadata(record: BackupRecord): BackupRecord {
@@ -3296,7 +3728,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun refreshCloudBackupsFromDrive(context: Context, silent: Boolean = false) {
-        if (!mayUseBackups()) { if (!silent) emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { if (!silent) emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
             _cloudBackupsState.value = CloudBackupUiState.SignedOut
@@ -3346,7 +3778,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun createCloudBackup(context: Context, name: String) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
             _cloudAuthError.value = "يرجى إضافة وتأكيد حساب Google أولاً لرفع النسخة السحابية."
@@ -3403,7 +3835,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun renameCloudBackup(context: Context, item: CloudBackupItem, newName: String) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) return
         val cleanName = newName.trim()
@@ -3445,7 +3877,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun restoreCloudBackup(context: Context, item: CloudBackupItem) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) {
             _cloudAuthError.value = "يرجى إضافة وتأكيد حساب Google أولاً."
@@ -3494,7 +3926,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteCloudBackup(context: Context, item: CloudBackupItem) {
-        if (!mayUseBackups()) { emitBackupPermissionDenied(); return }
+        if (!mayUseCloudBackups()) { emitCloudBackupOwnerOnly(); return }
         val email = verifiedGoogleEmail.value.trim()
         if (email.isBlank()) return
         viewModelScope.launch {
@@ -3563,34 +3995,35 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 if (isMainDevice.value) {
-                    val srv = serverStatus.value
-                    val activeDevices = linkedSubDevices.value.count { !it.isKicked }
+                    val cloudReady = cloudAuthorizationEnabled.value && hasValidatedInternetConnection()
+                    val activeDevices = linkedSubDevices.value.count { slot ->
+                        slot.isClaimed && !slot.isKicked && !slot.wasUnlinked
+                    }
                     checks.add(
                         DiagnosticCheckItem(
-                            title = "خادم الربط المباشر بين الأجهزة",
-                            passed = srv.isRunning,
-                            detail = if (srv.isRunning) {
-                                "نشط على العنوان (${srv.primaryAddress}) • رمز القاعدة: ${srv.workspaceCode} • أجهزة مسجلة: $activeDevices"
+                            title = "اتصال التعاون السحابي",
+                            passed = cloudReady,
+                            detail = if (cloudReady) {
+                                "الاتصال بالإنترنت وقنوات Realtime متاحة • أجهزة فرعية مسجلة: $activeDevices"
                             } else {
-                                "متوقف مؤقتاً — اضغط تحديث خادم الربط أو فعّل شبكة Wi-Fi / نقطة الاتصال"
+                                "سجّل دخول الجهاز الرئيسي في مساحة التعاون وتحقق من اتصال الإنترنت. لا يستخدم التطبيق خادم LAN أو نقطة اتصال."
                             },
-                            status = if (srv.isRunning) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
+                            status = if (cloudReady) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
                         )
                     )
                 } else {
-                    val connected = isSubConnected.value
-                    val host = mainHostUrl.value
-                    val pingOk = if (host.isNotBlank()) syncClient.pingMainDevice(host).isSuccess else false
+                    val connected = isSubConnected.value && cloudAuthorizationEnabled.value
+                    val internetReady = hasValidatedInternetConnection()
                     checks.add(
                         DiagnosticCheckItem(
-                            title = "اتصال الجهاز الفرعي بالجهاز الرئيسي",
-                            passed = connected && pingOk,
+                            title = "اتصال الجهاز الفرعي عبر الإنترنت",
+                            passed = connected && internetReady,
                             detail = when {
-                                connected && pingOk -> "متصل مباشرة بالجهاز الرئيسي ($host) والمزامنة فعالة"
-                                connected -> "مرتبط بالجهاز ($host) لكنه غير متاح حالياً على الشبكة المحلية"
-                                else -> "غير مرتبط بعد — أدخل بيانات الربط من قسم ربط الأجهزة أعلاه"
+                                connected && internetReady -> "الجهاز مرتبط سحابياً والإنترنت متاح؛ المزامنة عبر Realtime."
+                                connected -> "الجهاز مرتبط سحابياً لكن اتصال الإنترنت غير متاح حالياً."
+                                else -> "سجّل حساب الجهاز الفرعي في مساحة التعاون وامسح باركود الإنترنت من الجهاز الرئيسي."
                             },
-                            status = if (connected && pingOk) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
+                            status = if (connected && internetReady) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
                         )
                     )
                 }

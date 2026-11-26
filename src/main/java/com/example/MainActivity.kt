@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warehouse
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -171,12 +172,15 @@ fun MainApp(
     val isMainDevice by viewModel.isMainDevice.collectAsState()
     val devicePermissions by viewModel.devicePermissions.collectAsState()
     val isSubConnected by viewModel.isSubConnected.collectAsState()
+    val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
     val serverStatus by viewModel.serverStatus.collectAsState()
     val kickedAlertMessage by viewModel.kickedAlertMessage.collectAsState()
     val operationAuditLogs by viewModel.operationAuditLogs.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val currentDeviceName by viewModel.deviceName.collectAsState()
     val isOperationRunning by viewModel.isOperationRunning.collectAsState()
+    val isSyncingNow by viewModel.isSyncingNow.collectAsState()
+    val isPairingInProgress by viewModel.isPairingInProgress.collectAsState()
 
     var hasAskedNotificationPermission by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -266,7 +270,7 @@ fun MainApp(
                                 }
                             },
                             navigationIcon = {
-                                val syncReady = if (isMainDevice) serverStatus.isRunning else isSubConnected
+                                val syncReady = isCloudSyncEnabled || (if (isMainDevice) serverStatus.isRunning else isSubConnected)
                                 IconButton(
                                     onClick = { navigateTo(AppNavDestination.DEVICES) },
                                     modifier = Modifier.testTag("top_bar_sync_status_btn")
@@ -343,10 +347,14 @@ fun MainApp(
                                 permissions = devicePermissions
                             )
                             val linkLabel = when {
+                                isCloudSyncEnabled && isMainDevice ->
+                                    "☁️ اتصال سحابي نشط — الربط يعمل عبر شبكات مختلفة"
+                                isCloudSyncEnabled && isSubConnected ->
+                                    "☁️ متصل بالجهاز الرئيسي عبر الإنترنت"
                                 isMainDevice && serverStatus.isRunning && serverStatus.hostAddresses.isNotEmpty() ->
-                                    "🌐 خادم الربط نشط (${serverStatus.primaryAddress})"
+                                    "🌐 خادم الربط المحلي نشط (${serverStatus.primaryAddress})"
                                 isMainDevice ->
-                                    "🌐 جاهز للربط المباشر عبر الشبكة"
+                                    "🌐 جاهز للربط المحلي أو تفعيل التعاون السحابي"
                                 isSubConnected ->
                                     "🔗 متصل بالجهاز الرئيسي"
                                 else ->
@@ -356,7 +364,7 @@ fun MainApp(
                                 text = linkLabel,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = if (isMainDevice || isSubConnected) SuccessGreen else WarningOrange
+                                color = if (isCloudSyncEnabled || isMainDevice || isSubConnected) SuccessGreen else WarningOrange
                             )
                         }
                     }
@@ -396,6 +404,37 @@ fun MainApp(
                                         },
                                         modifier = Modifier.width(82.dp).testTag("nav_item_${destination.name.lowercase()}")
                                     )
+                                }
+                            }
+                        }
+                        if (isOperationRunning || isSyncingNow || isPairingInProgress) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Surface(
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    shadowElevation = 10.dp
+                                ) {
+                                    androidx.compose.foundation.layout.Column(
+                                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        CircularProgressIndicator(strokeWidth = 4.dp)
+                                        Text(
+                                            text = when {
+                                                isPairingInProgress -> "جارٍ ربط الجهاز عبر الإنترنت ونقل البيانات..."
+                                                isSyncingNow -> "جارٍ مزامنة البيانات بين الأجهزة..."
+                                                else -> "جارٍ تنفيذ العملية..."
+                                            },
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -1,5 +1,7 @@
 package com.example.data.cloud
 
+import android.util.Base64
+
 import io.github.jan.supabase.auth.auth
 import com.example.data.sync.LocalSyncJson
 import com.example.data.model.Warehouse
@@ -18,6 +20,7 @@ import io.ktor.http.ContentType
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -39,6 +42,11 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import java.util.UUID
+import javax.crypto.spec.SecretKeySpec
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.Cipher
+import java.security.SecureRandom
+import java.security.MessageDigest
 import kotlin.time.Duration.Companion.hours
 
 @Serializable
@@ -281,50 +289,133 @@ class CloudCollaborationRepository {
         const val CHAT_ATTACHMENTS_BUCKET = "chat-attachments"
     }
 
-    private fun inventoryTopic(workspaceId: String, deviceId: String): String {
-        require(workspaceId.isNotBlank() && deviceId.isNotBlank()) { "بيانات قناة التعاون غير مكتملة" }
-        return "workspace:$workspaceId:device:$deviceId"
+    private fun inventoryTopic(workspaceId: String, deviceId: String, transportSecret: String): String {
+        require(workspaceId.isNotBlank() && deviceId.isNotBlank() && transportSecret.isNotBlank()) {
+            "بيانات قناة التعاون غير مكتملة"
+        }
+        // The topic itself is a capability: the random pairing secret is never placed
+        // in the topic, only its SHA-256 digest, making other workspace device topics
+        // impractical to enumerate or subscribe to.
+        val proof = MessageDigest.getInstance("SHA-256").digest(
+            "smart-inventory-topic-v1|$workspaceId|$deviceId|$transportSecret".toByteArray(Charsets.UTF_8)
+        ).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return "workspace:$workspaceId:device:$deviceId:pair:$proof"
     }
 
     /**
-     * Each device listens on its own private topic. Broadcasts are transient transport messages;
-     * Room outboxes provide durability and the ACK is sent only after the receiving transaction commits.
+     * Private Broadcast topics are scoped by a hash of each pairing secret and all
+     * event bodies are separately encrypted end-to-end with AES-GCM. Realtime RLS
+     * limits access to active members of the workspace; each device still listens
+     * only on its independently derived topic.
      */
-    fun observeWorkspaceEvents(workspaceId: String, deviceId: String): Flow<JsonObject> = callbackFlow {
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, deviceId)) {
-            isPrivate = true
+    fun observeWorkspaceEvents(
+        workspaceId: String,
+        deviceId: String,
+        transportSecrets: List<String>
+    ): Flow<JsonObject> = callbackFlow {
+        val secrets = transportSecrets.filter { it.isNotBlank() }.distinct()
+        require(secrets.isNotEmpty()) { "مفتاح قناة التعاون غير متوفر" }
+        val channels = secrets.map { secret ->
+            secret to client.realtime.channel(inventoryTopic(workspaceId, deviceId, secret)) { isPrivate = true }
         }
-        val events = channel.broadcastFlow<JsonObject>("inventory_event")
-        val collector = launch {
-            events.collect { event -> trySend(event).isSuccess }
-        }
+        val collectors = mutableListOf<Job>()
         try {
-            channel.subscribe(blockUntilSubscribed = true)
+            channels.forEach { (secret, channel) ->
+                val events = channel.broadcastFlow<JsonObject>("inventory_event")
+                collectors += launch {
+                    events.collect { envelope ->
+                        val decoded = decryptInventoryEnvelope(workspaceId, deviceId, secret, envelope)
+                        if (decoded != null) {
+                            val authenticatedEvent = buildJsonObject {
+                                decoded.forEach { (key, value) -> put(key, value) }
+                                // Local-only metadata: this is the exact pairing secret used to
+                                // decrypt the frame, never a field transmitted over Realtime.
+                                put("_transportSecret", secret)
+                            }
+                            trySend(authenticatedEvent).isSuccess
+                        }
+                    }
+                }
+            }
+            channels.forEach { (_, channel) -> channel.subscribe(blockUntilSubscribed = true) }
         } catch (failure: Exception) {
-            collector.cancel()
-            runCatching { client.realtime.removeChannel(channel) }
+            collectors.forEach { it.cancel() }
+            channels.forEach { (_, channel) -> runCatching { client.realtime.removeChannel(channel) } }
             close(failure)
             return@callbackFlow
         }
         awaitClose {
-            collector.cancel()
+            collectors.forEach { it.cancel() }
             CoroutineScope(Dispatchers.IO).launch {
-                runCatching { client.realtime.removeChannel(channel) }
+                channels.forEach { (_, channel) ->
+                    runCatching { client.realtime.removeChannel(channel) }
+                }
             }
         }
+    }
+
+    private fun inventoryKey(workspaceId: String, transportSecret: String): SecretKeySpec {
+        require(workspaceId.isNotBlank() && transportSecret.isNotBlank()) {
+            "مفتاح تشفير قناة التعاون غير مكتمل"
+        }
+        val keyBytes = MessageDigest.getInstance("SHA-256").digest(
+            "smart-inventory-realtime-v1|$workspaceId|$transportSecret".toByteArray(Charsets.UTF_8)
+        )
+        return SecretKeySpec(keyBytes, "AES")
+    }
+
+    private fun encryptInventoryEnvelope(
+        workspaceId: String,
+        deviceId: String,
+        transportSecret: String,
+        payload: JsonObject
+    ): JsonObject {
+        val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
+        cipher.updateAAD(inventoryTopic(workspaceId, deviceId, transportSecret).toByteArray(Charsets.UTF_8))
+        val encrypted = cipher.doFinal(payload.toString().toByteArray(Charsets.UTF_8))
+        return buildJsonObject {
+            put("secureVersion", JsonPrimitive(1))
+            put("nonce", JsonPrimitive(Base64.encodeToString(nonce, Base64.NO_WRAP)))
+            put("ciphertext", JsonPrimitive(Base64.encodeToString(encrypted, Base64.NO_WRAP)))
+        }
+    }
+
+    private fun decryptInventoryEnvelope(
+        workspaceId: String,
+        deviceId: String,
+        transportSecret: String,
+        envelope: JsonObject
+    ): JsonObject? {
+        return runCatching {
+            if (envelope["secureVersion"]?.jsonPrimitive?.contentOrNull != "1") return@runCatching null
+            val nonceText = envelope["nonce"]?.jsonPrimitive?.contentOrNull ?: return@runCatching null
+            val encryptedText = envelope["ciphertext"]?.jsonPrimitive?.contentOrNull ?: return@runCatching null
+            val nonce = Base64.decode(nonceText, Base64.NO_WRAP)
+            val encrypted = Base64.decode(encryptedText, Base64.NO_WRAP)
+            if (nonce.size != 12) return@runCatching null
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
+            cipher.updateAAD(inventoryTopic(workspaceId, deviceId, transportSecret).toByteArray(Charsets.UTF_8))
+            val plaintext = cipher.doFinal(encrypted)
+            Json.parseToJsonElement(String(plaintext, Charsets.UTF_8)) as? JsonObject
+        }.getOrNull()
     }
 
     suspend fun broadcastWorkspaceEvent(
         workspaceId: String,
         recipientDeviceId: String,
-        payload: JsonObject
+        payload: JsonObject,
+        transportSecret: String
     ) {
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId)) {
-            isPrivate = true
-        }
+        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId, transportSecret)) { isPrivate = true }
         try {
             channel.subscribe(blockUntilSubscribed = true)
-            channel.broadcast(event = "inventory_event", message = payload)
+            channel.broadcast(
+                event = "inventory_event",
+                message = encryptInventoryEnvelope(workspaceId, recipientDeviceId, transportSecret, payload)
+            )
         } finally {
             runCatching { client.realtime.removeChannel(channel) }
         }
@@ -338,27 +429,25 @@ class CloudCollaborationRepository {
         workspaceId: String,
         targetDeviceId: String,
         payload: JsonObject,
+        transportSecret: String,
         timeoutMillis: Long = 25_000L,
         expectedSenderDeviceId: String? = null
     ): JsonObject = coroutineScope {
         val senderDeviceId = payload["senderDeviceId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف الجهاز المرسل غير موجود")
-        require(senderDeviceId.isNotBlank() && targetDeviceId.isNotBlank()) {
-            "معرّفات أجهزة التعاون غير مكتملة"
+        require(senderDeviceId.isNotBlank() && targetDeviceId.isNotBlank() && transportSecret.isNotBlank()) {
+            "معرّفات أجهزة التعاون أو مفتاح الربط غير مكتملة"
         }
         val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف العملية غير موجود")
 
-        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId)) {
-            isPrivate = true
-        }
-        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId)) {
-            isPrivate = true
-        }
+        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId, transportSecret)) { isPrivate = true }
+        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId, transportSecret)) { isPrivate = true }
         val ack = CompletableDeferred<JsonObject>()
         val acknowledgements = senderChannel.broadcastFlow<JsonObject>("inventory_event")
         val collector = launch {
-            acknowledgements.collect { response ->
+            acknowledgements.collect { envelope ->
+                val response = decryptInventoryEnvelope(workspaceId, senderDeviceId, transportSecret, envelope) ?: return@collect
                 val responseId = response["operationId"]?.jsonPrimitive?.contentOrNull
                 val type = response["type"]?.jsonPrimitive?.contentOrNull
                 val responderId = response["senderDeviceId"]?.jsonPrimitive?.contentOrNull
@@ -371,7 +460,10 @@ class CloudCollaborationRepository {
         try {
             senderChannel.subscribe(blockUntilSubscribed = true)
             targetChannel.subscribe(blockUntilSubscribed = true)
-            targetChannel.broadcast(event = "inventory_event", message = payload)
+            targetChannel.broadcast(
+                event = "inventory_event",
+                message = encryptInventoryEnvelope(workspaceId, targetDeviceId, transportSecret, payload)
+            )
             withTimeout(timeoutMillis) { ack.await() }
         } finally {
             collector.cancelAndJoin()
@@ -463,36 +555,25 @@ class CloudCollaborationRepository {
         )
     }
 
+    /**
+     * Supabase stores only the warehouse identity needed to scope memberships and chat.
+     * Operational details, stock and vouchers remain in the local Room database.
+     */
     suspend fun ensureCloudWarehouse(
         workspaceId: String,
         localId: Long,
-        name: String,
-        data: JsonObject = JsonObject(emptyMap())
+        name: String
     ): String = client.postgrest.rpc(
         "ensure_cloud_warehouse",
         buildJsonObject {
             put("p_workspace", JsonPrimitive(workspaceId))
             put("p_local_id", JsonPrimitive(localId))
-            put("p_name", JsonPrimitive(name))
-            put("p_data", data)
+            put("p_name", JsonPrimitive(name.trim()))
         }
     ).decodeAs<String>()
 
     suspend fun ensureCloudWarehouse(workspaceId: String, warehouse: Warehouse): String =
-        ensureCloudWarehouse(
-            workspaceId = workspaceId,
-            localId = warehouse.id,
-            name = warehouse.name,
-            data = buildJsonObject {
-                put("id", JsonPrimitive(warehouse.id))
-                put("name", JsonPrimitive(warehouse.name))
-                put("location", JsonPrimitive(warehouse.location))
-                put("managerName", JsonPrimitive(warehouse.managerName))
-                put("phone", JsonPrimitive(warehouse.phone))
-                put("notes", JsonPrimitive(warehouse.notes))
-                put("createdAt", JsonPrimitive(warehouse.createdAt))
-            }
-        )
+        ensureCloudWarehouse(workspaceId, warehouse.id, warehouse.name)
 
     suspend fun seedWorkspaceSnapshot(
         workspaceId: String,

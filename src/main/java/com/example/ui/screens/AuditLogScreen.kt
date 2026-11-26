@@ -65,7 +65,9 @@ import java.util.Locale
 fun AuditLogScreen(viewModel: InventoryViewModel, isMainDevice: Boolean = true, currentDeviceName: String = "") {
     val allLogs by viewModel.operationAuditLogs.collectAsState()
     val logs = if (isMainDevice) allLogs else allLogs.filter {
-        it.deviceName == currentDeviceName || it.deviceName.endsWith(" • سحابي")
+        it.deviceName == currentDeviceName ||
+            it.deviceName.contains("الجهاز الرئيسي") ||
+            it.deviceName.endsWith(" • سحابي")
     }
     var search by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("ALL") }

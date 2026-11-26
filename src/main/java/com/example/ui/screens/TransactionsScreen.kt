@@ -134,6 +134,7 @@ fun TransactionsScreen(
     val linkedDevices by viewModel.linkedSubDevices.collectAsState()
     val isMainDevice by viewModel.isMainDevice.collectAsState()
     val currentDeviceName by viewModel.deviceName.collectAsState()
+    val devicePermissions by viewModel.devicePermissions.collectAsState()
     val transactionDeviceNames = remember(vouchers, linkedDevices) {
         (listOf("الجهاز الرئيسي") + linkedDevices.map { it.deviceName } + vouchers.map { it.voucher.deviceName.ifBlank { "الجهاز الرئيسي" } })
             .filter { it.isNotBlank() }.distinct().sorted()
@@ -148,15 +149,19 @@ fun TransactionsScreen(
         map
     }
 
-    val filteredVouchers = remember(vouchers, selectedTypeFilter, selectedWarehouseFilterId, selectedDeviceFilter, searchQuery, isMainDevice, currentDeviceName) {
+    val filteredVouchers = remember(vouchers, selectedTypeFilter, selectedWarehouseFilterId, selectedDeviceFilter, searchQuery, isMainDevice, currentDeviceName, devicePermissions) {
         vouchers.filter { vWithItems ->
             val v = vWithItems.voucher
-            // A linked sub-device sees only vouchers created by this device; device/user
-            // filters are intentionally reserved for the main device.
-            val sourceDeviceName = v.deviceName.ifBlank { "الجهاز الرئيسي" }
+            // Filter sub-device history by assigned warehouse, not by the creator device.
+            // This keeps the main user's vouchers visible for the sub-device's warehouse.
             val matchesOwnDevice = isMainDevice ||
-                sourceDeviceName == currentDeviceName.ifBlank { "الجهاز الفرعي" } ||
-                sourceDeviceName == "الجهاز الرئيسي"
+                devicePermissions.canViewAllWarehouses ||
+                devicePermissions.warehousePermissions.any { grant ->
+                    grant.canView && (
+                        v.sourceWarehouseId == grant.warehouseId ||
+                        v.destinationWarehouseId == grant.warehouseId
+                    )
+                }
             val matchesType = selectedTypeFilter == null || v.voucherType == selectedTypeFilter
             val matchesWarehouse = selectedWarehouseFilterId == null ||
                 v.sourceWarehouseId == selectedWarehouseFilterId ||

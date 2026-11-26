@@ -99,6 +99,7 @@ fun MultiDeviceControlSection(
     val mainHostUrl by viewModel.mainHostUrl.collectAsState()
     val deviceName by viewModel.deviceName.collectAsState()
     val isSubConnected by viewModel.isSubConnected.collectAsState()
+    val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val availableWarehouses by viewModel.warehouses.collectAsState()
     val serverStatus by viewModel.serverStatus.collectAsState()
@@ -166,7 +167,7 @@ fun MultiDeviceControlSection(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "ربط مباشر عبر Wi-Fi أو نقطة الاتصال بدون تسجيل دخول Google أو قيود مفاتيح",
+                        text = "ربط سحابي عبر الإنترنت والباركود؛ لا يحتاج الجهازان إلى شبكة واحدة أو نقطة اتصال",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -238,136 +239,27 @@ fun MultiDeviceControlSection(
             }
 
             if (isMainDevice) {
-                // MAIN DEVICE CONTROLS
-                val displayCode = workspaceCode.ifBlank { serverStatus.workspaceCode }
-                val primaryAddr = serverStatus.primaryAddress
-                val hasLanIp = serverStatus.hostAddresses.isNotEmpty()
-
+                // MAIN DEVICE CONTROLS — cloud pairing only; no LAN/IP/hotspot instructions.
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = if (serverStatus.isRunning && hasLanIp) {
-                        SuccessGreen.copy(alpha = 0.08f)
-                    } else {
-                        WarningOrange.copy(alpha = 0.1f)
-                    },
+                    color = if (isCloudSyncEnabled) SuccessGreen.copy(alpha = 0.08f)
+                    else WarningOrange.copy(alpha = 0.1f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Router,
-                                    contentDescription = null,
-                                    tint = if (serverStatus.isRunning && hasLanIp) SuccessGreen else WarningOrange,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (serverStatus.isRunning && hasLanIp) {
-                                        "خادم الربط المباشر نشط وجاهز"
-                                    } else {
-                                        "فعّل Wi-Fi أو نقطة الاتصال ليظهر عنوان الربط"
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (serverStatus.isRunning && hasLanIp) SuccessGreen else WarningOrange
-                                )
-                            }
-                            IconButton(
-                                onClick = { viewModel.refreshMainServerInfo() },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .testTag("refresh_lan_server_btn")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "تحديث عنوان الشبكة",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Text(
-                                        text = "عنوان الجهاز (IP:Port)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = primaryAddr,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Text(
-                                        text = "رمز قاعدة البيانات",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = displayCode.ifBlank { "---" },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
-                                }
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    copyToClipboard(
-                                        context,
-                                        "عنوان الجهاز الرئيسي: $primaryAddr\nرمز القاعدة: $displayCode"
-                                    )
-                                    Toast.makeText(context, "تم نسخ عنوان الجهاز ورمز القاعدة", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("copy_main_info_btn"),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("نسخ بيانات الربط", fontSize = 11.sp)
-                            }
-                            OutlinedButton(
-                                onClick = { viewModel.regenerateWorkspaceCode() },
-                                modifier = Modifier.testTag("regen_workspace_code_btn"),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text("تحديث الرمز", fontSize = 11.sp)
-                            }
-                        }
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = if (isCloudSyncEnabled) "الربط السحابي جاهز" else "يلزم تسجيل الجهاز الرئيسي في التعاون السحابي",
+                            fontWeight = FontWeight.Bold,
+                            color = if (isCloudSyncEnabled) SuccessGreen else WarningOrange
+                        )
+                        Text(
+                            text = if (isCloudSyncEnabled)
+                                "أنشئ باركوداً لكل جهاز فرعي. امسحه من الجهاز الآخر حتى لو كان على بيانات الهاتف أو شبكة Wi-Fi مختلفة. لا تستخدم عنوان IP أو نقطة اتصال."
+                            else
+                                "لا يتم إنشاء روابط محلية أو استخدام نقطة اتصال. افتح شاشة التعاون السحابي وسجّل حساب الجهاز الرئيسي أولاً، ثم ارجع لإنشاء باركود الإنترنت.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
@@ -376,11 +268,12 @@ fun MultiDeviceControlSection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("add_sub_device_btn"),
+                    enabled = isCloudSyncEnabled,
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("إضافة جهاز فرعي وإنشاء كلمة مرور منفردة")
+                    Text("إضافة جهاز فرعي وإنشاء باركود عبر الإنترنت")
                 }
 
                 // Linked Sub-Devices List
@@ -393,7 +286,7 @@ fun MultiDeviceControlSection(
 
                 if (linkedSubDevices.isEmpty()) {
                     Text(
-                        text = "لم يتم إنشاء أي أجهزة فرعية بعد. اضغط على الزر أعلاه لتوليد كلمة مرور منفردة لجهاز جديد.",
+                        text = "لم يتم إنشاء أجهزة فرعية بعد. اضغط على الزر أعلاه لإنشاء باركود ربط عبر الإنترنت.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -401,7 +294,8 @@ fun MultiDeviceControlSection(
                     linkedSubDevices.forEach { slot ->
                         SubDeviceManagementCard(
                             slot = slot,
-                            hasQrAvailable = !slot.isClaimed && !slot.isKicked && sessionPairingCredentials.containsKey(slot.id),
+                            hasQrAvailable = !slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
+                                (sessionPairingCredentials.containsKey(slot.id) || isCloudSyncEnabled),
                             onShowQr = { viewModel.showSessionCredentialsQr(slot.id) },
                             warehouses = availableWarehouses,
                             onUpdatePermissions = { add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog ->
@@ -427,6 +321,12 @@ fun MultiDeviceControlSection(
             } else {
                 // SUB-DEVICE MODE
                 if (!isSubConnected) {
+                    Text(
+                        text = "للربط عبر الإنترنت: أضف حساب هذا الجهاز إلى مساحة التعاون أولاً، ثم امسح رمز QR الذي أنشأه الجهاز الرئيسي. لا يلزم أن يكون الجهازان على شبكة Wi-Fi واحدة.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
                     // Quick Camera QR Scan Button
                     Button(
                         onClick = { showQrScanner = true },
@@ -442,36 +342,13 @@ fun MultiDeviceControlSection(
                         Text("مسح باركود الربط بالكاميرا (ربط تلقائي فوري)", fontWeight = FontWeight.Bold)
                     }
 
-                    OutlinedTextField(
-                        value = hostInput,
-                        onValueChange = { hostInput = it },
-                        label = { Text("عنوان الجهاز الرئيسي (مثال: 192.168.43.1:8765)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("sub_host_input"),
-                        singleLine = true
-                    )
-
-                    OutlinedTextField(
-                        value = codeInput,
-                        onValueChange = { codeInput = it.uppercase() },
-                        label = { Text("رمز قاعدة البيانات (مثال: INV-XXXXXX)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("sub_code_input"),
-                        singleLine = true
-                    )
-
-                    OutlinedTextField(
-                        value = passwordInput,
-                        onValueChange = { passwordInput = it },
-                        label = { Text("كلمة المرور المنفردة الممنوحة من الجهاز الرئيسي") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("sub_password_input"),
-                        singleLine = true
-                    )
-
+                    if (!isCloudSyncEnabled) {
+                        Text(
+                            text = "سجّل دخول حساب الجهاز الفرعي في شاشة التعاون السحابي أولاً. لا يمكن الربط بعنوان IP أو عبر نقطة اتصال.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = WarningOrange
+                        )
+                    }
                     if (remainingLockSeconds > 0L) {
                         Surface(
                             color = DangerRed.copy(alpha = 0.1f),
@@ -506,35 +383,6 @@ fun MultiDeviceControlSection(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Button(
-                            onClick = {
-                                viewModel.pairWithMainDevice(
-                                    hostAddress = hostInput,
-                                    workspaceCodeInput = codeInput,
-                                    passwordInput = passwordInput
-                                )
-                            },
-                            enabled = !isPairingInProgress && remainingLockSeconds == 0L,
-                            modifier = Modifier
-                                .weight(1.4f)
-                                .testTag("pair_device_btn"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            if (isPairingInProgress) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.White
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("جاري الربط...")
-                            } else {
-                                Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("ربط ومزامنة الآن")
-                            }
-                        }
-
                         OutlinedButton(
                             onClick = { viewModel.switchToMainDeviceMode() },
                             modifier = Modifier
@@ -734,11 +582,15 @@ fun MultiDeviceControlSection(
         CreatedCredentialsDialog(
             credentials = creds,
             onCopyAll = {
-                val text = buildString {
-                    appendLine("بيانات ربط الجهاز الفرعي (${creds.deviceName}):")
-                    appendLine("عنوان الجهاز الرئيسي: ${creds.hostAddress}")
-                    appendLine("رمز القاعدة: ${creds.workspaceCode}")
-                    appendLine("كلمة المرور المنفردة: ${creds.plainPassword}")
+                val text = if (creds.cloudWorkspaceId.isNotBlank()) {
+                    "ربط الجهاز الفرعي (${creds.deviceName}) يتم عبر مسح رمز QR من الجهاز الفرعي بعد تسجيل حسابه في مساحة التعاون. لا يحتاج الجهازان إلى شبكة Wi-Fi واحدة."
+                } else {
+                    buildString {
+                        appendLine("بيانات ربط الجهاز الفرعي (${creds.deviceName}):")
+                        appendLine("عنوان الجهاز الرئيسي: ${creds.hostAddress}")
+                        appendLine("رمز القاعدة: ${creds.workspaceCode}")
+                        appendLine("كلمة المرور المنفردة: ${creds.plainPassword}")
+                    }
                 }
                 copyToClipboard(context, text)
                 Toast.makeText(context, "تم نسخ كامل بيانات الربط", Toast.LENGTH_SHORT).show()
@@ -782,15 +634,16 @@ fun MultiDeviceControlSection(
         QrScannerDialog(
             onQrScanned = { payload ->
                 showQrScanner = false
-                hostInput = payload.host
-                codeInput = payload.code
-                passwordInput = payload.pwd
-                Toast.makeText(context, "تمت قراءة باركود الربط، جاري الاتصال...", Toast.LENGTH_SHORT).show()
-                viewModel.pairWithMainDevice(
-                    hostAddress = payload.host,
-                    workspaceCodeInput = payload.code,
-                    passwordInput = payload.pwd
-                )
+                if (payload.isCloudPairing) {
+                    Toast.makeText(context, "تمت قراءة رمز الربط السحابي، جاري الاتصال عبر الإنترنت...", Toast.LENGTH_SHORT).show()
+                    viewModel.pairWithCloudMainDevice(payload)
+                } else {
+                    Toast.makeText(
+                        context,
+                        "هذا باركود ربط محلي قديم. الربط الآن عبر الإنترنت فقط؛ أنشئ باركوداً سحابياً جديداً من الجهاز الرئيسي.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             },
             onInvalidQrDetected = {
                 Toast.makeText(context, "هذا الباركود لا يخص ربط مخزني الذكي", Toast.LENGTH_SHORT).show()
@@ -1170,11 +1023,20 @@ private fun CreatedCredentialsDialog(
     onDismiss: () -> Unit
 ) {
     val qrBitmap = remember(credentials) {
-        val payload = QrPairingHelper.encodePairingPayload(
-            hostAddress = credentials.hostAddress,
-            workspaceCode = credentials.workspaceCode,
-            plainPassword = credentials.plainPassword
-        )
+        val payload = if (credentials.cloudWorkspaceId.isNotBlank()) {
+            QrPairingHelper.encodeCloudPairingPayload(
+                workspaceId = credentials.cloudWorkspaceId,
+                mainDeviceId = credentials.mainCloudDeviceId,
+                deviceSlotId = credentials.deviceSlotId,
+                sessionToken = credentials.sessionToken
+            )
+        } else {
+            QrPairingHelper.encodePairingPayload(
+                hostAddress = credentials.hostAddress,
+                workspaceCode = credentials.workspaceCode,
+                plainPassword = credentials.plainPassword
+            )
+        }
         QrPairingHelper.generateQrBitmap(payload, sizePx = 520)
     }
 
@@ -1230,14 +1092,25 @@ private fun CreatedCredentialsDialog(
                         )
                     }
                 }
-                CredentialLine("عنوان الجهاز الرئيسي", credentials.hostAddress)
-                CredentialLine("رمز قاعدة البيانات", credentials.workspaceCode)
-                CredentialLine("كلمة المرور المنفردة", credentials.plainPassword)
-                Text(
-                    text = "ملاحظة أمنية: يتم تشفير كلمة المرور بالبصمة الملحية (SHA-256) ولن تظهر مرة أخرى بعد إغلاق الجلسة.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WarningOrange
-                )
+                if (credentials.cloudWorkspaceId.isNotBlank()) {
+                    CredentialLine("طريقة الربط", "سحابي عبر الإنترنت — لا يحتاج إلى عنوان IP أو شبكة Wi-Fi مشتركة")
+                    CredentialLine("مساحة التعاون", credentials.cloudWorkspaceId.take(8))
+                    Text(
+                        text = "تأكد من إضافة حساب Google للجهاز الفرعي إلى مساحة التعاون، ثم امسح هذا الرمز من الجهاز الفرعي. يحتوي الرمز على مفتاح ربط خاص بهذا الجهاز ولا تشاركه مع أي شخص آخر.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarningOrange,
+                        textAlign = TextAlign.Center
+                    )
+                } else {
+                    CredentialLine("عنوان الجهاز الرئيسي", credentials.hostAddress)
+                    CredentialLine("رمز قاعدة البيانات", credentials.workspaceCode)
+                    CredentialLine("كلمة المرور المنفردة", credentials.plainPassword)
+                    Text(
+                        text = "ملاحظة أمنية: يتم تشفير كلمة المرور بالبصمة الملحية (SHA-256) ولن تظهر مرة أخرى بعد إغلاق الجلسة.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarningOrange
+                    )
+                }
             }
         },
         confirmButton = {
