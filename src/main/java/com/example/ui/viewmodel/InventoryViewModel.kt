@@ -1396,6 +1396,24 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     appliedRevision = snapshotRevision
                 )
                 preferences.resetPairingFailures()
+                val completeOperationId = UUID.randomUUID().toString()
+                runCatching {
+                    cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                        payload.cloudWorkspaceId,
+                        payload.mainCloudDeviceId,
+                        buildJsonObject {
+                            put("type", "PAIR_COMPLETE")
+                            put("operationId", completeOperationId)
+                            put("slotId", payload.deviceSlotId)
+                            put("senderDeviceId", registeredDeviceId)
+                            put("senderUserId", userId)
+                            put("targetDeviceId", payload.mainCloudDeviceId)
+                        },
+                        transportSecret = payload.sessionToken,
+                        expectedSenderDeviceId = payload.mainCloudDeviceId,
+                        timeoutMillis = 20_000L
+                    )
+                }
                 _lastSyncError.value = null
                 _userMessage.emit("تم ربط الجهاز عبر الإنترنت واستلام بيانات المخزون وسجل العمليات.")
             } catch (cancelled: CancellationException) {
