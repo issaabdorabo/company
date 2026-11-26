@@ -1678,6 +1678,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             require(senderUserId == workspace.ownerUserId) { "العملية الواردة ليست من المستخدم الرئيسي" }
             if (type == "PREPARE_MAIN_OPERATION") {
                 val warehouseIds = longIdsFromJson(event["warehouseIds"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                // Deliver this device's offline queue before confirming readiness for a
+                // main-device transaction, preserving a single ordered writer per warehouse.
+                require(flushPendingSubDeviceOperationsOverCloud()) {
+                    "توجد عمليات غير متزامنة محفوظة محلياً؛ تعذر تأكيد جاهزية الجهاز"
+                }
                 val permissions = devicePermissions.value
                 require(warehouseIds.all { id ->
                     permissions.canViewAllWarehouses ||
@@ -2122,15 +2127,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 return false
             }
             repository.removePendingSyncOperation(operation.operationId)
-            repository.recordOperation(
-                OperationAuditLog(
-                    actorName = operation.actorName,
-                    deviceName = deviceName.value.ifBlank { "الجهاز الفرعي" },
-                    operationType = operation.actionType,
-                    title = operation.operationTitle,
-                    details = operation.operationDetails
-                )
-            )
+            // The local audit row was recorded when the offline operation was committed.
+            // The main device records its own copy after receiving the same operation.
             _lastSyncError.value = null
         }
         return true

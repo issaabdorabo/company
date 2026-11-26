@@ -775,7 +775,7 @@ fun ItemUnitSerialTrackingScreen(
             itemUnit = itemStock.itemUnit,
             appUserName = appUserName,
             orgName = orgName,
-            serials = serialsList.toList(),
+            serials = displaySerials.toList(),
             onDismiss = { showExportDialog = false }
         )
     }

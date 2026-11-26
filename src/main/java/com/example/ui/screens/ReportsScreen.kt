@@ -259,8 +259,8 @@ fun ReportsScreen(
                             totalQuantity = displayedQuantity,
                             minStockLevel = stock.minStockLevel,
                             unitPrice = stock.purchasePrice,
-                            totalValue = stock.currentStock * stock.purchasePrice,
-                            warehouseQuantities = mapOf(stock.warehouseName to stock.currentStock)
+                            totalValue = displayedQuantity * stock.purchasePrice,
+                            warehouseQuantities = mapOf(stock.warehouseName to displayedQuantity)
                         )
                     )
                 }
@@ -438,8 +438,13 @@ fun ReportsScreen(
             }
         } else rows
 
-        // Alphabetical Sorting (أ-ي)
-        finalRows.sortedBy { it.itemName.lowercase(Locale.getDefault()) }
+        // Movement reports are chronological; summary rows without a movement date follow them.
+        finalRows.sortedWith(
+            compareBy<ReportGenerator.ReportRowData> { row ->
+                runCatching { dateFormat.parse(row.voucherDate)?.time ?: Long.MAX_VALUE }
+                    .getOrDefault(Long.MAX_VALUE)
+            }.thenBy { it.itemName.lowercase(Locale.getDefault()) }
+        )
     }
 
     // Dynamic title based on report category
