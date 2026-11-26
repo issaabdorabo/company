@@ -109,6 +109,7 @@ fun MultiDeviceControlSection(
     val isSyncingNow by viewModel.isSyncingNow.collectAsState()
     val lastSyncAt by viewModel.lastSyncAt.collectAsState()
     val lastSyncError by viewModel.lastSyncError.collectAsState()
+    val cloudDeviceLastSeenAt by viewModel.cloudDeviceLastSeenAt.collectAsState()
     val pairingLockedUntil by viewModel.pairingLockedUntil.collectAsState()
 
     var showCreateSubDialog by remember { mutableStateOf(false) }
@@ -840,8 +841,12 @@ private fun SubDeviceManagementCard(
     var editGeneral by remember(slot.id) { mutableStateOf(slot.canEditDelete) }
     var expanded by remember(slot.id) { mutableStateOf(false) }
 
+    val effectiveLastSeenAt = maxOf(
+        slot.lastSeenAt,
+        cloudDeviceLastSeenAt[slot.boundInstallationId] ?: 0L
+    )
     val isOnline = slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-        System.currentTimeMillis() - slot.lastSeenAt < 15_000L
+        nowMillis - effectiveLastSeenAt in 0L..45_000L
     val statusText = when {
         slot.wasUnlinked -> "تم فك الارتباط – جاهز لإعادة الاتصال"
         slot.isKicked -> "موقوف"
@@ -856,8 +861,8 @@ private fun SubDeviceManagementCard(
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val statusBackground = statusColor.copy(alpha = 0.12f)
-    val lastSeenText = if (slot.lastSeenAt > 0L) {
-        "آخر اتصال: " + SimpleDateFormat("dd/MM/yyyy  hh:mm a", Locale.getDefault()).format(Date(slot.lastSeenAt))
+    val lastSeenText = if (effectiveLastSeenAt > 0L) {
+        "آخر اتصال: " + SimpleDateFormat("dd/MM/yyyy  hh:mm a", Locale.getDefault()).format(Date(effectiveLastSeenAt))
     } else {
         "لم يتصل بعد"
     }

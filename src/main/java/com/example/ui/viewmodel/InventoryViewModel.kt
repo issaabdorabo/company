@@ -414,6 +414,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudPushMutex = Mutex()
 
     private val cloudAuthorizationEnabled = MutableStateFlow(false)
+    private val _cloudDeviceLastSeenAt = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val cloudDeviceLastSeenAt: StateFlow<Map<String, Long>> = _cloudDeviceLastSeenAt.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -493,7 +495,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private fun isAssignedSubDeviceOnline(warehouseId: Long): Boolean {
         val now = System.currentTimeMillis()
         return linkedSubDevicesForWarehouse(warehouseId).any { slot ->
-            slot.isClaimed && now - slot.lastSeenAt in 0L..15_000L
+            val cloudLastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
+            val effectiveLastSeen = maxOf(slot.lastSeenAt, cloudLastSeen)
+            slot.isClaimed && now - effectiveLastSeen in 0L..45_000L
         }
     }
 
@@ -519,9 +523,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val offlineDesignatedDeviceActive = assignedWarehouses.any { warehouseId ->
                 val now = System.currentTimeMillis()
                 linkedSubDevicesForWarehouse(warehouseId).any { slot ->
+                    val cloudLastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
+                    val effectiveLastSeen = maxOf(slot.lastSeenAt, cloudLastSeen)
                     slot.warehousePermissions.any {
                         it.warehouseId == warehouseId && it.canView && it.canWorkOffline
-                    } && slot.isClaimed && now - slot.lastSeenAt in 0L..15_000L
+                    } && slot.isClaimed && now - effectiveLastSeen in 0L..45_000L
                 }
             }
             val assignedWarehouseUnavailable = assignedWarehouses.isNotEmpty() &&
@@ -1541,10 +1547,24 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 runCatching { flushCloudPendingSyncOperations() }
                 runCatching { pollCloudIncomingOperations() }
                 val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
-                if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank()) {
+                val cloudWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
+                if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank() && cloudWorkspaceId.isNotBlank()) {
                     runCatching { cloudCollaborationRepo.heartbeat(cloudDeviceId) }
                         .onFailure { error ->
                             _lastSyncError.value = "تعذر تحديث اتصال الجهاز السحابي: ${error.localizedMessage ?: "تحقق من الإنترنت"}"
+                        }
+                    runCatching { cloudCollaborationRepo.listWorkspaceDevices(cloudWorkspaceId) }
+                        .onSuccess { devices ->
+                            _cloudDeviceLastSeenAt.value = devices.mapNotNull { device ->
+                                val seenAt = device.lastSeenAt?.let { value ->
+                                    runCatching {
+                                        java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+                                    }.getOrNull()
+                                }
+                                if (seenAt != null && device.deviceFingerprint.isNotBlank()) {
+                                    device.deviceFingerprint to seenAt
+                                } else null
+                            }.toMap()
                         }
                 }
                 val now = System.currentTimeMillis()
