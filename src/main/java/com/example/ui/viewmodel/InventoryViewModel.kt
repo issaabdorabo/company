@@ -873,7 +873,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             preferences.clearSubPairingAndSwitchToMain()
             _userMessage.emit(
                 if (hasActivePairing) "تم فك الارتباط ومسح بيانات المستخدم من التطبيق والعودة إلى الوضع الرئيسي"
-                else "تم التبديل إلى وضع الجهاز الرئيسي وتشغيل خادم الربط المحلي"
+                else "تم التبديل إلى وضع الجهاز الرئيسي. الربط بين الأجهزة يتم عبر الإنترنت فقط."
             )
         }
     }
@@ -892,22 +892,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    @Deprecated("LAN pairing is disabled; cloud QR pairing is required.")
     fun refreshMainServerInfo() {
+        syncServer.stop()
         viewModelScope.launch {
-            if (!requireMainDeviceForDeviceManagement()) return@launch
-            val code = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            syncServer.refreshIpAddresses()
+            _userMessage.emit("الربط المحلي متوقف. استخدم باركود الربط عبر الإنترنت من شاشة الأجهزة.")
         }
     }
 
+    @Deprecated("LAN workspace codes are no longer used.")
     fun regenerateWorkspaceCode() {
+        syncServer.stop()
         viewModelScope.launch {
-            if (!requireMainDeviceForDeviceManagement()) return@launch
-            val newCode = preferences.regenerateWorkspaceCode()
-            syncServer.refreshIpAddresses()
-            val port = syncServer.actualPort
-            _userMessage.emit("تم إنشاء رمز قاعدة بيانات جديد: $newCode")
+            _userMessage.emit("رموز الربط المحلية متوقفة. استخدم باركود التعاون السحابي.")
         }
     }
 
