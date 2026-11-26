@@ -61,4 +61,54 @@ class QrPairingHelperTest {
         assertEquals("INV-778899", parsed.code)
         assertEquals("XyZ#4567", parsed.pwd)
     }
+    @Test
+    fun cloudInviteCode_isHumanReadableAndRoundTripsThroughQrPayload() {
+        val code = QrPairingHelper.generateCloudInviteCode()
+        assertEquals(20, code.length)
+        assertEquals(code, QrPairingHelper.normalizeCloudInviteCode(code))
+        assertEquals(5, QrPairingHelper.formatCloudInviteCode(code).count { it == '-' } + 1)
+
+        val payload = QrPairingHelper.encodeCloudPairingPayload(code)
+        val parsed = QrPairingHelper.parsePairingQr(payload)
+        assertNotNull(parsed)
+        assertEquals(code, parsed!!.inviteCode)
+        assertEquals(true, parsed.isCloudInviteCode)
+    }
+
+    @Test
+    fun cloudInviteCode_rejectsAmbiguousOrMalformedPayloads() {
+        assertNull(QrPairingHelper.parsePairingQr(
+            """{"t":"SMART_INV_CLOUD_INVITE","code":"OOOOIIII1111"}"""
+        ))
+        assertNull(QrPairingHelper.parsePairingQr(
+            """{"t":"SMART_INV_CLOUD_INVITE","code":"ABC123"}"""
+        ))
+        assertEquals("ABCDEFGH2345", QrPairingHelper.normalizeCloudInviteCode("ab-cd efgh-2345"))
+    }
+
+
+    @Test
+    fun generatedCloudInviteQr_decodesToTheSameManualCode() {
+        val code = QrPairingHelper.generateCloudInviteCode()
+        val payload = QrPairingHelper.encodeCloudPairingPayload(code)
+        val bitmap = QrPairingHelper.generateQrBitmap(payload, sizePx = 320)
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        val luminance = ByteArray(width * height) { index ->
+            val color = pixels[index]
+            val red = (color shr 16) and 0xFF
+            val green = (color shr 8) and 0xFF
+            val blue = color and 0xFF
+            ((red + green + blue) / 3).toByte()
+        }
+
+        val decoded = QrPairingHelper.decodeQrFromLuminance(luminance, width, height)
+        val parsed = QrPairingHelper.parsePairingQr(decoded.orEmpty())
+        assertNotNull(parsed)
+        assertEquals(code, parsed!!.inviteCode)
+    }
+
 }

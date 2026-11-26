@@ -116,7 +116,8 @@ data class CreatedDeviceCredentials(
     val plainPassword: String,
     val cloudWorkspaceId: String = "",
     val mainCloudDeviceId: String = "",
-    val sessionToken: String = ""
+    val sessionToken: String = "",
+    val inviteExpiresAt: Long = 0L
 )
 
 data class DiscoveredMainDevice(
