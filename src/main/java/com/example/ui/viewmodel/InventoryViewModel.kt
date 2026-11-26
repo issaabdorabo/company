@@ -1925,6 +1925,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             require(slotIndex >= 0) { "رمز ربط الجهاز غير موجود أو تم حذفه" }
             val slot = current[slotIndex]
             transportSecret = slot.sessionToken
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "رمز QR لا يطابق خانة الجهاز المطلوبة"
+            }
             require(transportSecret.isNotBlank() && !slot.isKicked && !slot.wasUnlinked) {
                 "رمز الربط ملغى أو غير صالح"
             }
@@ -1998,6 +2001,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     it.boundInstallationId == remoteDevice.deviceFingerprint
             } ?: error("الجهاز غير مرتبط بهذا الحساب")
             transportSecret = slot.sessionToken
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة المزامنة لا تطابق سر ربط الجهاز الفرعي"
+            }
             val snapshot = pairingSnapshots[slotId] ?: error("انتهت جلسة نقل النسخة الأولية؛ أعد مسح رمز الربط")
             val requestedRevision = event["snapshotRevision"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
             require(requestedRevision == snapshot.revision &&
@@ -2048,6 +2054,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             } ?: error("لا يوجد جهاز فرعي مرتبط مطابق لهذا الحساب")
             transportSecret = slot.sessionToken
             require(transportSecret.isNotBlank()) { "مفتاح الربط المشترك لهذا الجهاز غير متوفر" }
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة الحدث لا تطابق سر ربط الجهاز الفرعي"
+            }
             val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
             require(targetDeviceId == preferences.cloudDeviceIdFlow.first()) { "العملية ليست موجهة إلى الجهاز الرئيسي الحالي" }
             syncServer.applyCloudOperation(slot.sessionToken, operationBody)
@@ -2083,6 +2092,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val transportSecret = preferences.subSessionTokenFlow.first()
         if (transportSecret.isBlank()) return
         try {
+            require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
+                "قناة الحدث لا تطابق سر ربط هذا الجهاز"
+            }
             if (targetDeviceId != myDeviceId) return
             val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
             require(senderUserId == workspace.ownerUserId) { "العملية الواردة ليست من المستخدم الرئيسي" }
