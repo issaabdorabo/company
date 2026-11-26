@@ -454,15 +454,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         if (subSyncJob?.isActive != true) {
                             subSyncJob = launch {
                                 while (isActive) {
-                                    try {
-                                        pullFromMainOnce(silent = true)
-                                    } catch (cancelled: CancellationException) {
-                                        throw cancelled
-                                    } catch (error: Exception) {
-                                        // A failed background sync must never terminate the app process.
-                                        _lastSyncError.value = "تعذر تحديث بيانات الجهاز حالياً"
+                                    if (cloudAuthorizationEnabled.value) {
+                                        delay(15_000L)
+                                    } else {
+                                        try {
+                                            pullFromMainOnce(silent = true)
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (error: Exception) {
+                                            _lastSyncError.value = "تعذر تحديث بيانات الجهاز حالياً"
+                                        }
+                                        delay(3000L)
                                     }
-                                    delay(3000L)
                                 }
                             }
                         }
@@ -1298,6 +1301,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 preferences.incrementSyncRevision()
                 refreshMainServerInfo()
                 _userMessage.emit("تم تحديث حالة خادم الربط المحلي وجاهزية المزامنة")
+            } else if (cloudAuthorizationEnabled.value) {
+                _isSyncingNow.value = true
+                try {
+                    flushCloudPendingSyncOperations()
+                    pollCloudIncomingOperations()
+                    _userMessage.emit("تم تحديث البيانات عبر السحابة")
+                } finally {
+                    _isSyncingNow.value = false
+                }
             } else {
                 pullFromMainOnce(silent = false)
             }
@@ -1307,7 +1319,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     /** Called by the navigation shell so revocation/permission changes are checked on every screen change. */
     fun syncOnNavigation() {
         if (isMainDevice.value || !isSubConnected.value) return
-        viewModelScope.launch { pullFromMainOnce(silent = true) }
+        viewModelScope.launch {
+            if (cloudAuthorizationEnabled.value) {
+                flushCloudPendingSyncOperations()
+                pollCloudIncomingOperations()
+            } else {
+                pullFromMainOnce(silent = true)
+            }
+        }
     }
 
     private suspend fun pullFromMainOnce(silent: Boolean): Unit = subSyncMutex.withLock {
@@ -1521,6 +1540,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             while (isActive) {
                 runCatching { flushCloudPendingSyncOperations() }
                 runCatching { pollCloudIncomingOperations() }
+                val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
+                if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank()) {
+                    runCatching { cloudCollaborationRepo.heartbeat(cloudDeviceId) }
+                        .onFailure { error ->
+                            _lastSyncError.value = "تعذر تحديث اتصال الجهاز السحابي: ${error.localizedMessage ?: "تحقق من الإنترنت"}"
+                        }
+                }
                 val now = System.currentTimeMillis()
                 if (now - lastOfflinePermissionSyncAt >= 60_000L) {
                     runCatching { syncOfflineDesignationsQuietly() }
@@ -1560,9 +1586,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             // A LAN-paired sub-device receives the authoritative database from its main
             // device. Applying a cloud snapshot here can roll back a newer LAN operation
             // with an older cloud revision, which caused stock entries to appear then vanish.
-            if (!isSubConnected.value &&
+            if ((!isSubConnected.value || cloudAuthorizationEnabled.value) &&
                 snapshot.records.isNotEmpty() &&
-                savedSignature.isNotBlank() &&
                 snapshot.updatedAtSignature != savedSignature
             ) {
                 if (repository.getPendingSyncOperations().isEmpty() &&
@@ -1754,6 +1779,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 // Persist the exact post-operation snapshot and metadata before attempting any
                 // network request. A process death or lost response will not lose the operation.
+                if (cloudAuthorizationEnabled.value) return@launch
+
                 val operation = PendingSyncOperation(
                     operationId = UUID.randomUUID().toString(),
                     actionType = action?.name ?: "GENERAL",

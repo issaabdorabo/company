@@ -187,7 +187,7 @@ fun SplashScreen(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 24.dp, start = 16.dp, end = 16.dp)
+                .padding(bottom = 56.dp, start = 16.dp, end = 16.dp)
                 .alpha(alpha.value),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -195,7 +195,7 @@ fun SplashScreen(
                 text = "طور بواسطة عيسى عبدربه",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color.Black,
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(2.dp))

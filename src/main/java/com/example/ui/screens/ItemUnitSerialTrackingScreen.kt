@@ -425,14 +425,21 @@ fun ItemUnitSerialTrackingScreen(
                             statusOptions = statusOptions,
                             subUnitOptions = subUnitOptions,
                             canManageCatalog = isMainDevice,
+                            canChangeStatus = true,
                             isSelected = isSelected,
                             onToggleSelect = {
                                 if (isSelected) selectedUnitIndices.remove(unitKey)
                                 else selectedUnitIndices.add(unitKey)
                             },
                             onUpdate = { updated ->
-                                val originalIndex = serialsList.indexOfFirst { it.unitIndex == unitKey }
-                                if (originalIndex >= 0) serialsList[originalIndex] = updated
+                                viewModel.checkPermission(
+                                    action = DeviceAction.EDIT_SERIALS,
+                                    warehouseIds = setOf(warehouse.id),
+                                    onDenied = { restrictedActionName = "تعديل حالة أو بيانات الوحدة" }
+                                ) {
+                                    val originalIndex = serialsList.indexOfFirst { it.unitIndex == unitKey }
+                                    if (originalIndex >= 0) serialsList[originalIndex] = updated
+                                }
                             },
                             onAddNewStatus = {
                                 viewModel.checkPermission(
@@ -722,6 +729,7 @@ private fun UnitSerialCard(
     statusOptions: List<String>,
     subUnitOptions: List<String>,
     canManageCatalog: Boolean,
+    canChangeStatus: Boolean,
     isSelected: Boolean,
     onToggleSelect: () -> Unit,
     onUpdate: (ItemUnitSerialRecord) -> Unit,
@@ -824,14 +832,14 @@ OutlinedTextField(
     Box(modifier = Modifier.weight(1f)) {
                         ExposedDropdownMenuBox(
                             expanded = statusDropdownExpanded,
-                            onExpandedChange = { if (canManageCatalog) statusDropdownExpanded = !statusDropdownExpanded },
+                            onExpandedChange = { if (canChangeStatus) statusDropdownExpanded = !statusDropdownExpanded },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             OutlinedTextField(
                                 value = serialRecord.status.ifBlank { "موجود" },
                                 onValueChange = {},
                                 readOnly = true,
-                                enabled = canManageCatalog,
+                                enabled = canChangeStatus,
                                 label = { Text("الحالة") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = statusDropdownExpanded) },
                                 modifier = Modifier
