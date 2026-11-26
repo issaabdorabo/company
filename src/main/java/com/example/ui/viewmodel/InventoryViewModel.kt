@@ -474,12 +474,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     subSyncJob?.cancel()
                     subSyncJob = null
 
-                    if (cloudAuthorizationEnabled.value) {
-                        syncServer.stop()
-                    } else {
-                        preferences.ensureWorkspaceCode()
-                        syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-                    }
+                    // Device linking and sync are internet-only; never start a LAN listener.
+                    syncServer.stop()
                 } else {
                     syncServer.stop()
                     if (state.subToken.isBlank() || state.permissions.isKicked) {
@@ -956,6 +952,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _userMessage.emit("تعذر إنشاء باركود الإنترنت: مساحة التعاون أو تسجيل الجهاز الرئيسي غير مكتمل.")
                 return@launch
             }
+            val cloudPairingReady = true
             val code = "CLOUD-" + cloudWorkspaceId.take(8)
             val hostDisplay = ""
             val plainPassword = ""
@@ -1458,96 +1455,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    @Deprecated("LAN/hotspot pairing is disabled. Scan the cloud QR code instead.")
     fun pairWithMainDevice(
         hostAddress: String,
         workspaceCodeInput: String,
         passwordInput: String
     ) {
-        viewModelScope.launch {
-            if (preferences.deviceRoleFlow.first() != DeviceRole.SUB) {
-                _pairingError.value = "لا يمكن ربط هذا الجهاز كفرعي قبل تحويله إلى وضع الجهاز الفرعي."
-                return@launch
-            }
-            if (preferences.subSessionTokenFlow.first().isNotBlank()) {
-                _pairingError.value = "هذا الجهاز مرتبط بالفعل بجهاز رئيسي."
-                return@launch
-            }
-            val lockedUntil = preferences.pairingLockedUntilFlow.first()
-            val now = System.currentTimeMillis()
-            if (lockedUntil > now) {
-                val secs = ((lockedUntil - now) / 1000L).coerceAtLeast(1L)
-                _pairingError.value = "تم قفل المحاولات مؤقتاً لمدة $secs ثانية بسبب تكرار المحاولات الخاطئة"
-                return@launch
-            }
-
-            val cleanHost = hostAddress.trim()
-            val cleanCode = workspaceCodeInput.trim().uppercase()
-            val cleanPwd = passwordInput.trim()
-
-            if (cleanHost.isBlank() || cleanCode.isBlank() || cleanPwd.isBlank()) {
-                _pairingError.value = "يرجى إدخال عنوان الجهاز الرئيسي ورمز القاعدة وكلمة المرور المنفردة"
-                return@launch
-            }
-
-            _isPairingInProgress.value = true
-            _pairingError.value = null
-            try {
-                val installId = preferences.getOrCreateInstallationId()
-                val normalizedUrl = syncClient.normalizeBaseUrl(cleanHost)
-                val result = syncClient.pairWithMainDevice(
-                    rawHost = normalizedUrl,
-                    workspaceCode = cleanCode,
-                    password = cleanPwd,
-                    installationId = installId
-                )
-
-                result.onSuccess { paired ->
-                    preferences.resetPairingFailures()
-                    if (paired.entities.isNotEmpty()) {
-                        repository.replaceDatabaseFromCloudEntitiesSafely(paired.entities)
-                    } else {
-                        repository.clearAllSyncedData()
-                    }
-                    repository.importOperationLogsFromMain(paired.auditLogs)
-                    preferences.savePairedSubDevice(
-                        hostUrl = normalizedUrl,
-                        workspaceCode = paired.workspaceCode,
-                        deviceSlotId = paired.deviceSlotId,
-                        deviceName = paired.deviceName,
-                        sessionToken = paired.sessionToken,
-                        permissions = paired.permissions,
-                        appliedRevision = paired.syncVersion
-                    )
-                    _lastSyncError.value = null
-                    _userMessage.emit("تم ربط الجهاز الفرعي (${paired.deviceName}) ومزامنة البيانات بنجاح")
-                }.onFailure { err ->
-                    val apiErr = err as? SyncApiException
-                    if (apiErr?.errorCode == "INVALID_PASSWORD" || apiErr?.errorCode == "INVALID_WORKSPACE") {
-                        val (attempts, lockTime) = preferences.recordPairingFailure()
-                        _pairingError.value = if (lockTime > 0L) {
-                            "تم تجاوز 5 محاولات خاطئة. تم إيقاف المحاولات لمدة 60 ثانية."
-                        } else {
-                            "${apiErr.message} (محاولة $attempts من 5)"
-                        }
-                    } else {
-                        _pairingError.value = apiErr?.message
-                            ?: "تعذر الاتصال بالجهاز الرئيسي. تأكد من صحة العنوان وأن الجهازين على شبكة Wi-Fi نفسها أو نقطة الاتصال نفسها. قد يكون السبب ضعف الشبكة أو انقطاعاً مؤقتاً؛ أعد المحاولة بعد استقرار الاتصال."
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                // Keep the app alive if importing the initial snapshot or saving the pairing state fails.
-                val detail = error.localizedMessage?.take(120).orEmpty()
-                _pairingError.value = if (detail.isBlank()) {
-                    "تم الاتصال لكن تعذر إكمال حفظ بيانات الربط. أعد المحاولة."
-                } else {
-                    "تم الاتصال لكن تعذر إكمال حفظ بيانات الربط: $detail"
-                }
-            } finally {
-                _isPairingInProgress.value = false
-            }
-        }
+        _pairingError.value = "الربط المحلي وعبر نقطة الاتصال متوقف. امسح باركود الربط السحابي من الجهاز الرئيسي بعد تسجيل حساب الجهاز الفرعي."
     }
 
     fun deleteOperationLogs(ids: List<Long>) {
