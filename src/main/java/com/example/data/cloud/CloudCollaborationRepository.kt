@@ -42,6 +42,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import java.util.UUID
+import java.time.OffsetDateTime
 import javax.crypto.spec.SecretKeySpec
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.Cipher
@@ -55,6 +56,23 @@ data class CloudWorkspace(
     val name: String,
     @SerialName("owner_user_id") val ownerUserId: String,
     @SerialName("created_at") val createdAt: String
+)
+
+
+@Serializable
+data class CloudPairingInviteCreated(
+    @SerialName("expires_at") val expiresAt: String
+)
+
+@Serializable
+data class CloudPairingInviteRedemption(
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("workspace_name") val workspaceName: String,
+    @SerialName("main_device_id") val mainDeviceId: String,
+    @SerialName("device_slot_id") val deviceSlotId: String,
+    @SerialName("session_token") val sessionToken: String,
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("expires_at") val expiresAt: String
 )
 
 @Serializable
@@ -526,6 +544,53 @@ class CloudCollaborationRepository {
             put("p_device_fingerprint", JsonPrimitive(stableFingerprint))
         }
     ).decodeAs<String>()
+
+
+    suspend fun createDevicePairingInvite(
+        workspaceId: String,
+        mainDeviceId: String,
+        slotId: String,
+        inviteCode: String,
+        ttlSeconds: Int = 600
+    ): Long {
+        val response = client.postgrest.rpc(
+            "create_device_pairing_invite",
+            buildJsonObject {
+                put("p_workspace", JsonPrimitive(workspaceId))
+                put("p_main_device", JsonPrimitive(mainDeviceId))
+                put("p_slot", JsonPrimitive(slotId))
+                put("p_code", JsonPrimitive(inviteCode))
+                put("p_ttl_seconds", JsonPrimitive(ttlSeconds))
+            }
+        ).decodeAs<CloudPairingInviteCreated>()
+        return OffsetDateTime.parse(response.expiresAt).toInstant().toEpochMilli()
+    }
+
+    suspend fun redeemDevicePairingInvite(
+        inviteCode: String,
+        deviceName: String,
+        deviceFingerprint: String
+    ): CloudPairingInviteRedemption = client.postgrest.rpc(
+        "redeem_device_pairing_invite",
+        buildJsonObject {
+            put("p_code", JsonPrimitive(inviteCode))
+            put("p_device_name", JsonPrimitive(deviceName))
+            put("p_device_fingerprint", JsonPrimitive(deviceFingerprint))
+        }
+    ).decodeAs<CloudPairingInviteRedemption>()
+
+    suspend fun revokeDevicePairingInvite(
+        workspaceId: String,
+        mainDeviceId: String,
+        slotId: String
+    ): Int = client.postgrest.rpc(
+        "revoke_device_pairing_invite",
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_main_device", JsonPrimitive(mainDeviceId))
+            put("p_slot", JsonPrimitive(slotId))
+        }
+    ).decodeAs<Int>()
 
     suspend fun listWorkspaceDevices(workspaceId: String): List<CloudDevice> =
         client.postgrest["devices"].select {
