@@ -324,7 +324,15 @@ class CloudCollaborationRepository {
                 collectors += launch {
                     events.collect { envelope ->
                         val decoded = decryptInventoryEnvelope(workspaceId, deviceId, secret, envelope)
-                        if (decoded != null) trySend(decoded).isSuccess
+                        if (decoded != null) {
+                            val authenticatedEvent = buildJsonObject {
+                                decoded.forEach { (key, value) -> put(key, value) }
+                                // Local-only metadata: this is the exact pairing secret used to
+                                // decrypt the frame, never a field transmitted over Realtime.
+                                put("_transportSecret", secret)
+                            }
+                            trySend(authenticatedEvent).isSuccess
+                        }
                     }
                 }
             }
