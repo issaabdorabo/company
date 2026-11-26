@@ -61,4 +61,29 @@ class QrPairingHelperTest {
         assertEquals("INV-778899", parsed.code)
         assertEquals("XyZ#4567", parsed.pwd)
     }
+    @Test
+    fun cloudInviteCode_isHumanReadableAndRoundTripsThroughQrPayload() {
+        val code = QrPairingHelper.generateCloudInviteCode()
+        assertEquals(20, code.length)
+        assertEquals(code, QrPairingHelper.normalizeCloudInviteCode(code))
+        assertEquals(5, QrPairingHelper.formatCloudInviteCode(code).count { it == '-' } + 1)
+
+        val payload = QrPairingHelper.encodeCloudPairingPayload(code)
+        val parsed = QrPairingHelper.parsePairingQr(payload)
+        assertNotNull(parsed)
+        assertEquals(code, parsed!!.inviteCode)
+        assertEquals(true, parsed.isCloudInviteCode)
+    }
+
+    @Test
+    fun cloudInviteCode_rejectsAmbiguousOrMalformedPayloads() {
+        assertNull(QrPairingHelper.parsePairingQr(
+            """{"t":"SMART_INV_CLOUD_INVITE","code":"OOOOIIII1111"}"""
+        ))
+        assertNull(QrPairingHelper.parsePairingQr(
+            """{"t":"SMART_INV_CLOUD_INVITE","code":"ABC123"}"""
+        ))
+        assertEquals("ABCDEFGH2345", QrPairingHelper.normalizeCloudInviteCode("ab-cd efgh-2345"))
+    }
+
 }
