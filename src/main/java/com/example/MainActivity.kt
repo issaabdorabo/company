@@ -269,7 +269,7 @@ fun MainApp(
                                 }
                             },
                             navigationIcon = {
-                                val syncReady = isCloudSyncEnabled || if (isMainDevice) serverStatus.isRunning else isSubConnected
+                                val syncReady = isCloudSyncEnabled || (if (isMainDevice) serverStatus.isRunning else isSubConnected)
                                 IconButton(
                                     onClick = { navigateTo(AppNavDestination.DEVICES) },
                                     modifier = Modifier.testTag("top_bar_sync_status_btn")
