@@ -1545,8 +1545,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                             if (seenAt != null && device.deviceFingerprint.isNotBlank()) device.deviceFingerprint to seenAt else null
                         }.toMap()
+                        val received = requestSubDeviceSync()
                         val delivered = flushCloudPendingSyncOperations()
-                        if (!delivered) _userMessage.emit("توجد عمليات بانتظار تأكيد وصولها إلى الأجهزة الفرعية.")
+                        if (!received || !delivered) {
+                            _userMessage.emit("اكتملت محاولة المزامنة؛ بعض الأجهزة غير متصلة أو لديها عمليات تنتظر التأكيد.")
+                        } else {
+                            _userMessage.emit("تمت مزامنة العمليات في الاتجاهين بين الجهاز الرئيسي والأجهزة الفرعية.")
+                        }
                     } else {
                         preferences.incrementSyncRevision()
                         refreshMainServerInfo()
@@ -1570,6 +1575,55 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _isSyncingNow.value = false
             }
         }
+    }
+
+    private suspend fun requestSubDeviceSync(): Boolean {
+        if (!isMainDevice.value || !cloudAuthorizationEnabled.value) return true
+        if (!hasValidatedInternetConnection()) return false
+        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+        val senderDeviceId = preferences.cloudDeviceIdFlow.first()
+        val senderUserId = cloudCollaborationRepo.currentUserIdOrNull() ?: return false
+        if (workspaceId.isBlank() || senderDeviceId.isBlank()) return false
+        val slots = preferences.getLinkedSubDevicesSnapshot().filter {
+            it.isClaimed && !it.isKicked && !it.wasUnlinked && it.sessionToken.isNotBlank()
+        }
+        if (slots.isEmpty()) return true
+        val cloudDevices = runCatching { cloudCollaborationRepo.listWorkspaceDevices(workspaceId) }
+            .getOrElse { return false }
+        var allDelivered = true
+        for (slot in slots) {
+            val remoteDevice = cloudDevices.firstOrNull {
+                it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
+            }
+            val lastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
+            if (remoteDevice == null || System.currentTimeMillis() - lastSeen !in 0L..45_000L) {
+                allDelivered = false
+                continue
+            }
+            val operationId = UUID.randomUUID().toString()
+            val request = buildJsonObject {
+                put("type", "SYNC_REQUEST")
+                put("operationId", operationId)
+                put("senderDeviceId", senderDeviceId)
+                put("senderUserId", senderUserId)
+                put("targetDeviceId", remoteDevice.id)
+            }
+            val ack = runCatching {
+                cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                    workspaceId,
+                    remoteDevice.id,
+                    request,
+                    transportSecret = slot.sessionToken,
+                    expectedSenderDeviceId = remoteDevice.id,
+                    timeoutMillis = 45_000L
+                )
+            }.getOrNull()
+            if (ack?.get("success")?.jsonPrimitive?.contentOrNull != "true") {
+                allDelivered = false
+                ack?.get("error")?.jsonPrimitive?.contentOrNull?.let { _lastSyncError.value = it }
+            }
+        }
+        return allDelivered
     }
 
     /** Called by the navigation shell so revocation/permission changes are checked on every screen change. */
