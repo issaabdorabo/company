@@ -39,6 +39,12 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import java.util.UUID
+import javax.crypto.spec.SecretKeySpec
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.Cipher
+import java.util.Base64
+import java.security.SecureRandom
+import java.security.MessageDigest
 import kotlin.time.Duration.Companion.hours
 
 @Serializable
@@ -287,16 +293,28 @@ class CloudCollaborationRepository {
     }
 
     /**
-     * Each device listens on its own private topic. Broadcasts are transient transport messages;
-     * Room outboxes provide durability and the ACK is sent only after the receiving transaction commits.
+     * Public Realtime topics are used because the managed Realtime table owner does not
+     * expose policy DDL to this project's SQL role. Every payload is encrypted end-to-end
+     * with the per-device pairing secret before it leaves the device. The main device
+     * supplies its linked-device secrets; a sub-device supplies only its own pairing secret.
      */
-    fun observeWorkspaceEvents(workspaceId: String, deviceId: String): Flow<JsonObject> = callbackFlow {
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, deviceId)) {
-            isPrivate = true
-        }
+    fun observeWorkspaceEvents(
+        workspaceId: String,
+        deviceId: String,
+        transportSecrets: List<String>
+    ): Flow<JsonObject> = callbackFlow {
+        require(transportSecrets.any { it.isNotBlank() }) { "مفتاح قناة التعاون غير متوفر" }
+        val channel = client.realtime.channel(inventoryTopic(workspaceId, deviceId))
         val events = channel.broadcastFlow<JsonObject>("inventory_event")
         val collector = launch {
-            events.collect { event -> trySend(event).isSuccess }
+            events.collect { envelope ->
+                val decoded = transportSecrets.asSequence()
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .mapNotNull { secret -> decryptInventoryEnvelope(workspaceId, secret, envelope) }
+                    .firstOrNull()
+                if (decoded != null) trySend(decoded).isSuccess
+            }
         }
         try {
             channel.subscribe(blockUntilSubscribed = true)
@@ -314,17 +332,64 @@ class CloudCollaborationRepository {
         }
     }
 
+    private fun inventoryKey(workspaceId: String, transportSecret: String): SecretKeySpec {
+        require(workspaceId.isNotBlank() && transportSecret.isNotBlank()) {
+            "مفتاح تشفير قناة التعاون غير مكتمل"
+        }
+        val keyBytes = MessageDigest.getInstance("SHA-256").digest(
+            "smart-inventory-realtime-v1|$workspaceId|$transportSecret".toByteArray(Charsets.UTF_8)
+        )
+        return SecretKeySpec(keyBytes, "AES")
+    }
+
+    private fun encryptInventoryEnvelope(
+        workspaceId: String,
+        transportSecret: String,
+        payload: JsonObject
+    ): JsonObject {
+        val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
+        val encrypted = cipher.doFinal(payload.toString().toByteArray(Charsets.UTF_8))
+        return buildJsonObject {
+            put("secureVersion", JsonPrimitive(1))
+            put("nonce", JsonPrimitive(Base64.getEncoder().encodeToString(nonce)))
+            put("ciphertext", JsonPrimitive(Base64.getEncoder().encodeToString(encrypted)))
+        }
+    }
+
+    private fun decryptInventoryEnvelope(
+        workspaceId: String,
+        transportSecret: String,
+        envelope: JsonObject
+    ): JsonObject? = runCatching {
+        if (envelope["secureVersion"]?.jsonPrimitive?.contentOrNull != "1") return null
+        val nonce = Base64.getDecoder().decode(
+            envelope["nonce"]?.jsonPrimitive?.contentOrNull ?: return null
+        )
+        val encrypted = Base64.getDecoder().decode(
+            envelope["ciphertext"]?.jsonPrimitive?.contentOrNull ?: return null
+        )
+        if (nonce.size != 12) return null
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, inventoryKey(workspaceId, transportSecret), GCMParameterSpec(128, nonce))
+        val plaintext = cipher.doFinal(encrypted)
+        Json.parseToJsonElement(String(plaintext, Charsets.UTF_8)) as? JsonObject
+    }.getOrNull()
+
     suspend fun broadcastWorkspaceEvent(
         workspaceId: String,
         recipientDeviceId: String,
-        payload: JsonObject
+        payload: JsonObject,
+        transportSecret: String
     ) {
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId)) {
-            isPrivate = true
-        }
+        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId))
         try {
             channel.subscribe(blockUntilSubscribed = true)
-            channel.broadcast(event = "inventory_event", message = payload)
+            channel.broadcast(
+                event = "inventory_event",
+                message = encryptInventoryEnvelope(workspaceId, transportSecret, payload)
+            )
         } finally {
             runCatching { client.realtime.removeChannel(channel) }
         }
@@ -338,27 +403,25 @@ class CloudCollaborationRepository {
         workspaceId: String,
         targetDeviceId: String,
         payload: JsonObject,
+        transportSecret: String,
         timeoutMillis: Long = 25_000L,
         expectedSenderDeviceId: String? = null
     ): JsonObject = coroutineScope {
         val senderDeviceId = payload["senderDeviceId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف الجهاز المرسل غير موجود")
-        require(senderDeviceId.isNotBlank() && targetDeviceId.isNotBlank()) {
-            "معرّفات أجهزة التعاون غير مكتملة"
+        require(senderDeviceId.isNotBlank() && targetDeviceId.isNotBlank() && transportSecret.isNotBlank()) {
+            "معرّفات أجهزة التعاون أو مفتاح الربط غير مكتملة"
         }
         val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف العملية غير موجود")
 
-        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId)) {
-            isPrivate = true
-        }
-        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId)) {
-            isPrivate = true
-        }
+        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId))
+        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId))
         val ack = CompletableDeferred<JsonObject>()
         val acknowledgements = senderChannel.broadcastFlow<JsonObject>("inventory_event")
         val collector = launch {
-            acknowledgements.collect { response ->
+            acknowledgements.collect { envelope ->
+                val response = decryptInventoryEnvelope(workspaceId, transportSecret, envelope) ?: return@collect
                 val responseId = response["operationId"]?.jsonPrimitive?.contentOrNull
                 val type = response["type"]?.jsonPrimitive?.contentOrNull
                 val responderId = response["senderDeviceId"]?.jsonPrimitive?.contentOrNull
@@ -371,7 +434,10 @@ class CloudCollaborationRepository {
         try {
             senderChannel.subscribe(blockUntilSubscribed = true)
             targetChannel.subscribe(blockUntilSubscribed = true)
-            targetChannel.broadcast(event = "inventory_event", message = payload)
+            targetChannel.broadcast(
+                event = "inventory_event",
+                message = encryptInventoryEnvelope(workspaceId, transportSecret, payload)
+            )
             withTimeout(timeoutMillis) { ack.await() }
         } finally {
             collector.cancelAndJoin()
