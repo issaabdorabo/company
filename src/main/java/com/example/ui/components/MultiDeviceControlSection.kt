@@ -638,15 +638,11 @@ fun MultiDeviceControlSection(
                     Toast.makeText(context, "تمت قراءة رمز الربط السحابي، جاري الاتصال عبر الإنترنت...", Toast.LENGTH_SHORT).show()
                     viewModel.pairWithCloudMainDevice(payload)
                 } else {
-                    hostInput = payload.host
-                    codeInput = payload.code
-                    passwordInput = payload.pwd
-                    Toast.makeText(context, "تمت قراءة باركود الربط المحلي، جاري الاتصال...", Toast.LENGTH_SHORT).show()
-                    viewModel.pairWithMainDevice(
-                        hostAddress = payload.host,
-                        workspaceCodeInput = payload.code,
-                        passwordInput = payload.pwd
-                    )
+                    Toast.makeText(
+                        context,
+                        "هذا باركود ربط محلي قديم. الربط الآن عبر الإنترنت فقط؛ أنشئ باركوداً سحابياً جديداً من الجهاز الرئيسي.",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             },
             onInvalidQrDetected = {
