@@ -993,6 +993,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             current.add(0, newSlot)
             preferences.saveLinkedSubDevices(current)
+            if (cloudPairingReady) {
+                // Re-open the main-device Realtime subscription immediately so the new QR
+                // can be scanned without waiting for the periodic heartbeat cycle.
+                startCloudOutboxCoordinator()
+            }
 
             val creds = CreatedDeviceCredentials(
                 deviceSlotId = newSlot.id,
@@ -2190,6 +2195,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
                 val cloudWorkspaceId = preferences.cloudWorkspaceIdFlow.first()
                 if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank() && cloudWorkspaceId.isNotBlank()) {
+                    if (isMainDevice.value) syncServer.stop()
                     val transportSecrets = if (isMainDevice.value) {
                         preferences.getLinkedSubDevicesSnapshot()
                             .filter { !it.isKicked && !it.wasUnlinked && it.sessionToken.isNotBlank() }
