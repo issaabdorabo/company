@@ -444,6 +444,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudPushMutex = Mutex()
 
     private val cloudAuthorizationEnabled = MutableStateFlow(false)
+    val isCloudSyncEnabled: StateFlow<Boolean> = cloudAuthorizationEnabled.asStateFlow()
 
     init {
         viewModelScope.launch {
