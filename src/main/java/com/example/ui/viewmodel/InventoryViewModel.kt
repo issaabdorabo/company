@@ -513,9 +513,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private fun isAssignedSubDeviceOnline(warehouseId: Long): Boolean {
         val now = System.currentTimeMillis()
         return linkedSubDevicesForWarehouse(warehouseId).any { slot ->
+            val hasOfflineGrant = slot.warehousePermissions.any {
+                it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+            }
             val cloudLastSeen = _cloudDeviceLastSeenAt.value[slot.boundInstallationId] ?: 0L
             val effectiveLastSeen = maxOf(slot.lastSeenAt, cloudLastSeen)
-            slot.isClaimed && now - effectiveLastSeen in 0L..45_000L
+            slot.isClaimed && hasOfflineGrant &&
+                now - effectiveLastSeen in 0L..45_000L
         }
     }
 
@@ -538,14 +542,25 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val perms = devicePermissions.value
         if (perms.isMainDevice) {
             val assignedWarehouses = warehouseIds.filter { linkedSubDevicesForWarehouse(it).isNotEmpty() }
+            val assignedWarehouseWithoutOfflineGrant = assignedWarehouses.any { warehouseId ->
+                linkedSubDevicesForWarehouse(warehouseId).none { slot ->
+                    slot.warehousePermissions.any {
+                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                    }
+                }
+            }
             val assignedWarehouseUnavailable = assignedWarehouses.isNotEmpty() &&
                 (!hasValidatedInternetConnection() ||
+                    assignedWarehouseWithoutOfflineGrant ||
                     assignedWarehouses.any { !isAssignedSubDeviceOnline(it) })
             if (assignedWarehouseUnavailable) {
                 viewModelScope.launch {
-                    _userMessage.emit(
-                        "لا يمكن تنفيذ العملية على هذا المخزن إلا عند توفر إنترنت موثّق وظهور الجهاز الفرعي المرتبط به متصلاً."
-                    )
+                    val reason = if (assignedWarehouseWithoutOfflineGrant) {
+                        "يجب تفعيل صلاحية العمل دون اتصال للمستخدم الفرعي على هذا المخزن أولاً."
+                    } else {
+                        "يجب أن يكون الجهاز الفرعي متصلاً فعلياً بالإنترنت."
+                    }
+                    _userMessage.emit("لا يمكن تنفيذ العملية على المخزن الفرعي. $reason")
                 }
                 onDenied()
                 return
@@ -1309,15 +1324,28 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun syncNow() {
         viewModelScope.launch {
-            if (isMainDevice.value) {
-                preferences.incrementSyncRevision()
-                refreshMainServerInfo()
-                if (cloudAuthorizationEnabled.value) {
-                    val delivered = flushCloudPendingSyncOperations()
-                    if (!delivered) _userMessage.emit("توجد عمليات بانتظار تأكيد وصولها إلى الأجهزة الفرعية.")
-                }
-                _userMessage.emit("تم تحديث حالة خادم الربط المحلي وجاهزية المزامنة")
-            } else if (cloudAuthorizationEnabled.value) {
+            _isSyncingNow.value = true
+            try {
+                if (isMainDevice.value) {
+                    if (cloudAuthorizationEnabled.value) {
+                        val workspaceId = preferences.cloudWorkspaceIdFlow.first()
+                        val deviceId = preferences.cloudDeviceIdFlow.first()
+                        if (deviceId.isNotBlank()) cloudCollaborationRepo.heartbeat(deviceId)
+                        val devices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
+                        _cloudDeviceLastSeenAt.value = devices.mapNotNull { device ->
+                            val seenAt = device.lastSeenAt?.let { value ->
+                                runCatching { java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrNull()
+                            }
+                            if (seenAt != null && device.deviceFingerprint.isNotBlank()) device.deviceFingerprint to seenAt else null
+                        }.toMap()
+                        val delivered = flushCloudPendingSyncOperations()
+                        if (!delivered) _userMessage.emit("توجد عمليات بانتظار تأكيد وصولها إلى الأجهزة الفرعية.")
+                    } else {
+                        preferences.incrementSyncRevision()
+                        refreshMainServerInfo()
+                    }
+                    _userMessage.emit("اكتملت محاولة المزامنة وتحديث حالة الأجهزة.")
+                } else if (cloudAuthorizationEnabled.value) {
                 _isSyncingNow.value = true
                 try {
                     val cloudDeviceId = preferences.cloudDeviceIdFlow.first()
@@ -1328,8 +1356,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 } finally {
                     _isSyncingNow.value = false
                 }
-            } else {
-                pullFromMainOnce(silent = false)
+                } else {
+                    pullFromMainOnce(silent = false)
+                }
+            } finally {
+                _isSyncingNow.value = false
             }
         }
     }
@@ -1514,14 +1545,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
         if (workspaceId.isBlank()) return
+        require(hasValidatedInternetConnection()) { "يلزم اتصال إنترنت موثّق قبل تنفيذ عملية على مخزن فرعي" }
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
         val senderUserId = cloudCollaborationRepo.currentUserIdOrNull()
             ?: error("انتهت جلسة حساب Google")
         val cloudDevices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
         val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
             slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-                (slot.warehousePermissions.any { it.warehouseId in warehouseIds && it.canView } ||
-                    (slot.canViewAllWarehouses && slot.warehousePermissions.isEmpty()))
+                warehouseIds.all { warehouseId ->
+                    slot.warehousePermissions.any {
+                        it.warehouseId == warehouseId && it.canView && it.canWorkOffline
+                    }
+                }
         }
         for (slot in slots) {
             val target = cloudDevices.firstOrNull {
@@ -1784,14 +1819,22 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         repository.replaceDatabaseFromCloudEntitiesSafely(records).getOrThrow()
+        val operationTitle = body.optString("operationTitle", "عملية من الجهاز الرئيسي")
+        val operationDetails = body.optString("operationDetails", "")
+        val actorName = body.optString("actorName", "المستخدم الرئيسي")
         repository.recordOperation(
             OperationAuditLog(
-                actorName = body.optString("actorName", "المستخدم الرئيسي"),
-                deviceName = "الجهاز الرئيسي",
+                actorName = actorName,
+                deviceName = "الجهاز الرئيسي • سحابي",
                 operationType = actionType,
-                title = body.optString("operationTitle", "عملية من الجهاز الرئيسي"),
-                details = body.optString("operationDetails", "")
+                title = operationTitle,
+                details = operationDetails
             )
+        )
+        notificationManager.notifyOperation(
+            title = "عملية من المستخدم الرئيسي: $operationTitle",
+            details = "بواسطة: $actorName • $operationDetails",
+            isRemoteSubDeviceAlert = true
         )
         repository.markSyncOperationApplied(operationId)
     }
