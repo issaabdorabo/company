@@ -682,7 +682,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 _isOperationRunning.value = true
                 try {
-                    if (isMainDevice.value && cloudAuthorizationEnabled.value && warehouseIds.isNotEmpty()) {
+                    if (isMainDevice.value && warehouseIds.isNotEmpty()) {
                         awaitLinkedSubDevicesReady(action, warehouseIds)
                     }
                     validateCloudWarehousePermission(action, warehouseIds)
@@ -1743,20 +1743,27 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         action: DeviceAction,
         warehouseIds: Set<Long>
     ) {
+        val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
+            !slot.isKicked && !slot.wasUnlinked &&
+                warehouseIds.any { warehouseId ->
+                    slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
+                }
+        }
+        if (slots.isEmpty()) return
+        require(cloudAuthorizationEnabled.value) {
+            "هذا المخزن مخصص لجهاز فرعي. سجّل الجهازين في التعاون السحابي؛ الربط المحلي أو نقطة الاتصال غير مدعومين."
+        }
         val workspaceId = preferences.cloudWorkspaceIdFlow.first()
-        if (workspaceId.isBlank()) return
+        require(workspaceId.isNotBlank()) { "مساحة التعاون السحابي غير جاهزة لهذا المخزن." }
         require(hasValidatedInternetConnection()) { "يلزم اتصال إنترنت موثّق قبل تنفيذ عملية على مخزن فرعي" }
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
         val senderUserId = cloudCollaborationRepo.currentUserIdOrNull()
             ?: error("انتهت جلسة حساب Google")
         val cloudDevices = cloudCollaborationRepo.listWorkspaceDevices(workspaceId)
-        val slots = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
-            slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-                warehouseIds.any { warehouseId ->
-                    slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
-                }
-        }
         for (slot in slots) {
+            require(slot.isClaimed) {
+                "المخزن مخصص للجهاز (" + slot.deviceName + ") لكنه لم يُربط بعد."
+            }
             val assignedWarehouseIds = warehouseIds.filter { warehouseId ->
                 slot.warehousePermissions.any { it.warehouseId == warehouseId && it.canView }
             }.toSet()
