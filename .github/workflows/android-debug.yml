@@ -48,8 +48,15 @@ jobs:
             echo "::error::Could not read SHA-1 from the permanent keystore."
             exit 1
           fi
-          echo "EXPECTED_APK_SHA1=$ACTUAL_SHA1" >> "$GITHUB_ENV"
-          echo "Permanent keystore verified. SHA-1: $ACTUAL_SHA1"
+          # Pin the public certificate fingerprint so rotating the GitHub secret
+          # cannot silently change the Android signing identity.
+          PINNED_ANDROID_DEBUG_SHA1="1C2B35EEA72DCCF60289517E8B614E6A2DF2ABDE"
+          if [ "$ACTUAL_SHA1" != "$PINNED_ANDROID_DEBUG_SHA1" ]; then
+            echo "::error::Permanent keystore mismatch. Expected $PINNED_ANDROID_DEBUG_SHA1 but found $ACTUAL_SHA1."
+            exit 1
+          fi
+          echo "EXPECTED_APK_SHA1=$PINNED_ANDROID_DEBUG_SHA1" >> "$GITHUB_ENV"
+          echo "Permanent keystore verified against pinned SHA-1: $PINNED_ANDROID_DEBUG_SHA1"
 
       - name: Find Gradle project
         shell: bash
