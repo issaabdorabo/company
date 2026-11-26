@@ -463,36 +463,25 @@ class CloudCollaborationRepository {
         )
     }
 
+    /**
+     * Supabase stores only the warehouse identity needed to scope memberships and chat.
+     * Operational details, stock and vouchers remain in the local Room database.
+     */
     suspend fun ensureCloudWarehouse(
         workspaceId: String,
         localId: Long,
-        name: String,
-        data: JsonObject = JsonObject(emptyMap())
+        name: String
     ): String = client.postgrest.rpc(
         "ensure_cloud_warehouse",
         buildJsonObject {
             put("p_workspace", JsonPrimitive(workspaceId))
             put("p_local_id", JsonPrimitive(localId))
-            put("p_name", JsonPrimitive(name))
-            put("p_data", data)
+            put("p_name", JsonPrimitive(name.trim()))
         }
     ).decodeAs<String>()
 
     suspend fun ensureCloudWarehouse(workspaceId: String, warehouse: Warehouse): String =
-        ensureCloudWarehouse(
-            workspaceId = workspaceId,
-            localId = warehouse.id,
-            name = warehouse.name,
-            data = buildJsonObject {
-                put("id", JsonPrimitive(warehouse.id))
-                put("name", JsonPrimitive(warehouse.name))
-                put("location", JsonPrimitive(warehouse.location))
-                put("managerName", JsonPrimitive(warehouse.managerName))
-                put("phone", JsonPrimitive(warehouse.phone))
-                put("notes", JsonPrimitive(warehouse.notes))
-                put("createdAt", JsonPrimitive(warehouse.createdAt))
-            }
-        )
+        ensureCloudWarehouse(workspaceId, warehouse.id, warehouse.name)
 
     suspend fun seedWorkspaceSnapshot(
         workspaceId: String,
