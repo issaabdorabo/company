@@ -1290,17 +1290,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 val fingerprint = preferences.getOrCreateInstallationId()
                 val existingDeviceId = preferences.cloudDeviceIdFlow.first()
-                val registeredDeviceId = if (existingDeviceId.isNotBlank()) {
-                    existingDeviceId
-                } else {
-                    val existingDevice = cloudCollaborationRepo.listWorkspaceDevices(payload.cloudWorkspaceId)
-                        .firstOrNull { it.userId == userId && it.deviceFingerprint == fingerprint && !it.isRevoked }
-                    (existingDevice?.id ?: cloudCollaborationRepo.registerDevice(
-                        payload.cloudWorkspaceId,
-                        preferences.deviceNameFlow.first().ifBlank { "Android " + android.os.Build.MODEL.orEmpty().take(40) },
-                        fingerprint
-                    )).also { preferences.saveCloudDeviceId(it) }
+                val registeredDevices = cloudCollaborationRepo.listWorkspaceDevices(payload.cloudWorkspaceId)
+                val validSavedDevice = registeredDevices.firstOrNull {
+                    it.id == existingDeviceId && it.userId == userId &&
+                        it.deviceFingerprint == fingerprint && !it.isRevoked
                 }
+                val existingDevice = registeredDevices.firstOrNull {
+                    it.userId == userId && it.deviceFingerprint == fingerprint && !it.isRevoked
+                }
+                val registeredDeviceId = (validSavedDevice?.id ?: existingDevice?.id ?: cloudCollaborationRepo.registerDevice(
+                    payload.cloudWorkspaceId,
+                    preferences.deviceNameFlow.first().ifBlank { "Android " + android.os.Build.MODEL.orEmpty().take(40) },
+                    fingerprint
+                )).also { preferences.saveCloudDeviceId(it) }
 
                 val claimOperationId = UUID.randomUUID().toString()
                 val claim = buildJsonObject {
