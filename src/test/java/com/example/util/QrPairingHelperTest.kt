@@ -86,4 +86,29 @@ class QrPairingHelperTest {
         assertEquals("ABCDEFGH2345", QrPairingHelper.normalizeCloudInviteCode("ab-cd efgh-2345"))
     }
 
+
+    @Test
+    fun generatedCloudInviteQr_decodesToTheSameManualCode() {
+        val code = QrPairingHelper.generateCloudInviteCode()
+        val payload = QrPairingHelper.encodeCloudPairingPayload(code)
+        val bitmap = QrPairingHelper.generateQrBitmap(payload, sizePx = 320)
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        val luminance = ByteArray(width * height) { index ->
+            val color = pixels[index]
+            val red = (color shr 16) and 0xFF
+            val green = (color shr 8) and 0xFF
+            val blue = color and 0xFF
+            ((red + green + blue) / 3).toByte()
+        }
+
+        val decoded = QrPairingHelper.decodeQrFromLuminance(luminance, width, height)
+        val parsed = QrPairingHelper.parsePairingQr(decoded.orEmpty())
+        assertNotNull(parsed)
+        assertEquals(code, parsed!!.inviteCode)
+    }
+
 }
