@@ -1219,6 +1219,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             current[idx] = previous.copy(
                 isKicked = false,
                 isClaimed = false,
+                wasUnlinked = false,
                 boundInstallationId = "",
                 sessionToken = newSecret,
                 updatedAt = System.currentTimeMillis()
