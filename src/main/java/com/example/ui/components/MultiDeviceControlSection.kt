@@ -1040,7 +1040,7 @@ private fun CreateSubDeviceDialog(
         },
         confirmButton = {
             Button(onClick = { onCreate(name, canAdd, canInward, canDisburse, canEditGeneral, canBackup, allWarehouses, grants, canDeleteItem, canEditIssue, canDeleteIssue, canEditSupply, canDeleteSupply, canEditCatalogItems) }, enabled = name.trim().isNotBlank() && !existingDeviceNames.any { it.trim().equals(name.trim(), ignoreCase = true) }, modifier = Modifier.testTag("confirm_create_sub_device_btn")) {
-                Text("إنشاء كلمة المرور")
+                Text("إنشاء دعوة مؤقتة ورمز ربط")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
