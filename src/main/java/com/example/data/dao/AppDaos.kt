@@ -428,6 +428,18 @@ interface VoucherDao {
     @Query("UPDATE vouchers SET attachmentUri = NULL, attachmentType = NULL WHERE id = :voucherId")
     suspend fun removeAttachment(voucherId: Long)
 
+    @Query("UPDATE vouchers SET supplierName = :newName WHERE supplierName = :oldName")
+    suspend fun renameSupplierInVouchers(oldName: String, newName: String)
+
+    @Query("UPDATE vouchers SET receiverName = :newName WHERE receiverName = :oldName")
+    suspend fun renamePartyInVoucherReceivers(oldName: String, newName: String)
+
+    @Query("UPDATE vouchers SET disburserName = :newName WHERE disburserName = :oldName")
+    suspend fun renamePartyInVoucherDisbursers(oldName: String, newName: String)
+
+    @Query("UPDATE voucher_items SET itemReceiverName = :newName WHERE itemReceiverName = :oldName")
+    suspend fun renamePartyInVoucherItems(oldName: String, newName: String)
+
     @Query("DELETE FROM voucher_items")
     suspend fun clearAllVoucherItems()
 
@@ -496,6 +508,9 @@ interface ItemUnitSerialDao {
 
     @Query("SELECT * FROM item_unit_serials ORDER BY warehouseId, itemId, unitIndex ASC")
     suspend fun getAllSerialsList(): List<ItemUnitSerialRecord>
+
+    @Query("SELECT COUNT(*) FROM item_unit_serials WHERE subUnit = :unitName")
+    suspend fun getSerialsCountForSubUnit(unitName: String): Int
 
     @Query("DELETE FROM item_unit_serials WHERE warehouseId = :warehouseId AND itemId = :itemId AND disbursedVoucherId IS NULL AND unitIndex > :newCount")
     suspend fun deleteSerialsBeyondCount(warehouseId: Long, itemId: Long, newCount: Int)
