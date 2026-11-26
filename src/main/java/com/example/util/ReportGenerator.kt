@@ -22,6 +22,8 @@ object ReportGenerator {
         VOUCHER_NUMBER("voucher_num", "رقم الحركة"),
         ITEM_NAME("name", "الصنف / السيارة"),
         ITEM_UNIT("unit", "الوحدة"),
+        STATUS("status", "حالة الصنف"),
+        SUB_UNIT("sub_unit", "الوحدة الفرعية"),
         WAREHOUSE("warehouse", "المخزن"),
         BENEFICIARY("beneficiary", "الجهة المستفيدة"),
         RECEIVER("receiver", "المستلم"),
@@ -39,6 +41,8 @@ object ReportGenerator {
         val warehouseName: String = "",
         val itemName: String = "",
         val itemUnit: String = "حبة",
+        val status: String = "",
+        val subUnit: String = "",
         val beneficiaryName: String = "",
         val supplierName: String = "",
         val receiverName: String = "",
@@ -165,6 +169,8 @@ object ReportGenerator {
                             ReportColumn.VOUCHER_NUMBER -> row.voucherNumber
                             ReportColumn.ITEM_NAME -> row.itemName
                             ReportColumn.ITEM_UNIT -> row.itemUnit
+                            ReportColumn.STATUS -> row.status
+                            ReportColumn.SUB_UNIT -> row.subUnit
                             ReportColumn.WAREHOUSE -> row.warehouseName
                             ReportColumn.BENEFICIARY -> row.beneficiaryName
                             ReportColumn.RECEIVER -> row.receiverName
@@ -452,6 +458,8 @@ object ReportGenerator {
                         ReportColumn.VOUCHER_NUMBER -> row.voucherNumber
                         ReportColumn.ITEM_NAME -> row.itemName
                         ReportColumn.ITEM_UNIT -> row.itemUnit
+                            ReportColumn.STATUS -> row.status
+                            ReportColumn.SUB_UNIT -> row.subUnit
                         ReportColumn.WAREHOUSE -> row.warehouseName
                         ReportColumn.BENEFICIARY -> row.beneficiaryName
                         ReportColumn.RECEIVER -> row.receiverName

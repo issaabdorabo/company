@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,6 +48,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
@@ -119,6 +121,9 @@ fun ItemUnitSerialTrackingScreen(
     // Serials State List (holds only active, non-disbursed units)
     val serialsList = remember { mutableStateListOf<ItemUnitSerialRecord>() }
     val selectedUnitIndices = remember { mutableStateListOf<Int>() }
+    val selectedStatuses = remember { mutableStateListOf<String>() }
+    val selectedSubUnits = remember { mutableStateListOf<String>() }
+    val serialListState = rememberLazyListState()
 
     // DB-backed status options merged with any status values on loaded records
     val statusOptions = remember(dbStatuses, serialsList.toList()) {
@@ -130,13 +135,20 @@ fun ItemUnitSerialTrackingScreen(
     }
     var sortField by remember { mutableStateOf("الرقم المميز") }
     var sortAscending by remember { mutableStateOf(true) }
-    val displaySerials = remember(serialsList.toList(), sortField, sortAscending) {
+    val displaySerials = remember(serialsList.toList(), sortField, sortAscending, selectedStatuses.toList(), selectedSubUnits.toList()) {
+        val filtered = serialsList.filter { record ->
+            (selectedStatuses.isEmpty() || record.status in selectedStatuses) &&
+                (selectedSubUnits.isEmpty() || record.subUnit in selectedSubUnits)
+        }
         val sorted = when (sortField) {
-            "الحالة" -> serialsList.sortedWith(compareBy<ItemUnitSerialRecord> { it.status.lowercase() }.thenBy { it.unitIndex })
-            "الوحدة الفرعية" -> serialsList.sortedWith(compareBy<ItemUnitSerialRecord> { it.subUnit.lowercase() }.thenBy { it.unitIndex })
-            else -> serialsList.sortedWith(compareBy<ItemUnitSerialRecord> { it.serialNumber.ifBlank { it.unitIndex.toString() }.lowercase() }.thenBy { it.unitIndex })
+            "الحالة" -> filtered.sortedWith(compareBy<ItemUnitSerialRecord> { it.status.lowercase() }.thenBy { it.unitIndex })
+            "الوحدة الفرعية" -> filtered.sortedWith(compareBy<ItemUnitSerialRecord> { it.subUnit.lowercase() }.thenBy { it.unitIndex })
+            else -> filtered.sortedWith(compareBy<ItemUnitSerialRecord> { it.serialNumber.ifBlank { it.unitIndex.toString() }.lowercase() }.thenBy { it.unitIndex })
         }
         if (sortAscending) sorted else sorted.reversed()
+    }
+    LaunchedEffect(sortField, sortAscending, selectedStatuses.toList(), selectedSubUnits.toList()) {
+        serialListState.scrollToItem(0)
     }
 
     var showAddStatusDialog by remember { mutableStateOf(false) }
@@ -395,13 +407,61 @@ fun ItemUnitSerialTrackingScreen(
                 TextButton(onClick = { sortAscending = !sortAscending }) { Text(if (sortAscending) "تصاعدي ↑" else "تنازلي ↓") }
             }
 
-            if (serialsList.isEmpty()) {
+            Text("فلترة الحالات (اختر حالة أو أكثر):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilterChip(
+                    selected = selectedStatuses.isEmpty(),
+                    onClick = { selectedStatuses.clear() },
+                    label = { Text("الكل (${serialsList.size})", fontSize = 10.sp) }
+                )
+                statusOptions.forEach { status ->
+                    val count = serialsList.count { it.status == status }
+                    FilterChip(
+                        selected = status in selectedStatuses,
+                        onClick = {
+                            if (status in selectedStatuses) selectedStatuses.remove(status)
+                            else selectedStatuses.add(status)
+                        },
+                        label = { Text("$status ($count)", fontSize = 10.sp) }
+                    )
+                }
+            }
+            if (subUnitOptions.isNotEmpty()) {
+                Text("فلترة الوحدات الفرعية:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedSubUnits.isEmpty(),
+                        onClick = { selectedSubUnits.clear() },
+                        label = { Text("كل الوحدات", fontSize = 10.sp) }
+                    )
+                    subUnitOptions.forEach { unit ->
+                        val count = serialsList.count { it.subUnit == unit }
+                        FilterChip(
+                            selected = unit in selectedSubUnits,
+                            onClick = {
+                                if (unit in selectedSubUnits) selectedSubUnits.remove(unit)
+                                else selectedSubUnits.add(unit)
+                            },
+                            label = { Text("$unit ($count)", fontSize = 10.sp) }
+                        )
+                    }
+                }
+            }
+            Text("المعروض: ${displaySerials.size} من ${serialsList.size} وحدة", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            if (displaySerials.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "لا توجد وحدات متبقية في هذا المخزن (الرصيد: 0 ${itemStock.itemUnit})",
+                        text = if (serialsList.isEmpty()) "لا توجد وحدات متبقية في هذا المخزن (الرصيد: 0 ${itemStock.itemUnit})" else "لا توجد وحدات تطابق الفلاتر المحددة.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -409,6 +469,7 @@ fun ItemUnitSerialTrackingScreen(
             } else {
                 // Unit serial rows list keyed by stable unitIndex
                 LazyColumn(
+                    state = serialListState,
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 20.dp)
@@ -955,6 +1016,7 @@ private fun ItemSerialsExportDialog(
     val showItemName = remember { mutableStateOf(true) }
     val showStatus = remember { mutableStateOf(true) }
     val showNotes = remember { mutableStateOf(true) }
+    val showSubUnit = remember { mutableStateOf(true) }
 
     val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd", Locale.getDefault()) }
     val dateStr = dateFormat.format(Date())
@@ -996,6 +1058,10 @@ private fun ItemSerialsExportDialog(
                         Text("الملاحظة", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = showSubUnit.value, onCheckedChange = { showSubUnit.value = it })
+                    Text("الوحدة الفرعية", style = MaterialTheme.typography.labelSmall)
+                }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
@@ -1014,6 +1080,7 @@ private fun ItemSerialsExportDialog(
                             if (showItemName.value) Text("الصنف", modifier = Modifier.width(110.dp), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             if (showSerial.value) Text("الرقم المميز", modifier = Modifier.width(110.dp), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             if (showStatus.value) Text("الحالة", modifier = Modifier.width(80.dp), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            if (showSubUnit.value) Text("الوحدة الفرعية", modifier = Modifier.width(100.dp), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             if (showNotes.value) Text("الملاحظات", modifier = Modifier.width(120.dp), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
 
@@ -1023,6 +1090,7 @@ private fun ItemSerialsExportDialog(
                                 if (showItemName.value) Text(itemName, modifier = Modifier.width(110.dp), fontSize = 11.sp)
                                 if (showSerial.value) Text(s.serialNumber.ifBlank { "-" }, modifier = Modifier.width(110.dp), fontSize = 11.sp)
                                 if (showStatus.value) Text(s.status, modifier = Modifier.width(80.dp), fontSize = 11.sp)
+                                if (showSubUnit.value) Text(s.subUnit.ifBlank { "-" }, modifier = Modifier.width(100.dp), fontSize = 11.sp)
                                 if (showNotes.value) Text(s.notes.ifBlank { "-" }, modifier = Modifier.width(120.dp), fontSize = 11.sp)
                             }
                         }
@@ -1037,6 +1105,8 @@ private fun ItemSerialsExportDialog(
                     warehouseName = warehouseName,
                     itemName = itemName,
                     itemUnit = itemUnit,
+                    status = s.status,
+                    subUnit = s.subUnit,
                     beneficiaryName = s.status,
                     receiverName = "-",
                     disburserName = "-",
@@ -1052,7 +1122,8 @@ private fun ItemSerialsExportDialog(
             val selectedCols = mutableSetOf(ReportGenerator.ReportColumn.SERIAL).apply {
                 if (showSerial.value) add(ReportGenerator.ReportColumn.VOUCHER_NUMBER)
                 if (showItemName.value) add(ReportGenerator.ReportColumn.ITEM_NAME)
-                if (showStatus.value) add(ReportGenerator.ReportColumn.BENEFICIARY) // used for status in this export
+                if (showStatus.value) add(ReportGenerator.ReportColumn.STATUS)
+                if (showSubUnit.value) add(ReportGenerator.ReportColumn.SUB_UNIT)
                 add(ReportGenerator.ReportColumn.WAREHOUSE)
             }
 

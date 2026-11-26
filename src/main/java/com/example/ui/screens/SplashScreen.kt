@@ -214,7 +214,7 @@ fun SplashScreen(
                     text = "771438740",
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
+                    color = Color.Black
                 )
             }
         }
