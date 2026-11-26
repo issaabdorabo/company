@@ -86,6 +86,15 @@ class CloudPresenceService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // Android 15+ enforces a rolling six-hour daily quota for dataSync foreground services.
+        // Stop cleanly rather than allowing the OS to crash the process on timeout.
+        heartbeatJob?.cancel()
+        serviceScope.cancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
+    }
+
     override fun onDestroy() {
         heartbeatJob?.cancel()
         serviceScope.cancel()
