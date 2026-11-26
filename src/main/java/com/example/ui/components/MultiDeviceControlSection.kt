@@ -402,7 +402,8 @@ fun MultiDeviceControlSection(
                     linkedSubDevices.forEach { slot ->
                         SubDeviceManagementCard(
                             slot = slot,
-                            hasQrAvailable = !slot.isClaimed && !slot.isKicked && sessionPairingCredentials.containsKey(slot.id),
+                            hasQrAvailable = !slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
+                                (sessionPairingCredentials.containsKey(slot.id) || isCloudSyncEnabled),
                             onShowQr = { viewModel.showSessionCredentialsQr(slot.id) },
                             warehouses = availableWarehouses,
                             onUpdatePermissions = { add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog ->
