@@ -99,6 +99,7 @@ fun MultiDeviceControlSection(
     val mainHostUrl by viewModel.mainHostUrl.collectAsState()
     val deviceName by viewModel.deviceName.collectAsState()
     val isSubConnected by viewModel.isSubConnected.collectAsState()
+    val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val availableWarehouses by viewModel.warehouses.collectAsState()
     val serverStatus by viewModel.serverStatus.collectAsState()
@@ -448,6 +449,7 @@ fun MultiDeviceControlSection(
                         Text("مسح باركود الربط بالكاميرا (ربط تلقائي فوري)", fontWeight = FontWeight.Bold)
                     }
 
+                    if (!isCloudSyncEnabled) {
                     OutlinedTextField(
                         value = hostInput,
                         onValueChange = { hostInput = it },
@@ -477,6 +479,14 @@ fun MultiDeviceControlSection(
                             .testTag("sub_password_input"),
                         singleLine = true
                     )
+
+                    } else {
+                        Text(
+                            text = "تم تسجيل الحساب في مساحة التعاون. استخدم مسح رمز QR للربط عبر الإنترنت؛ لا تدخل عنوان IP أو كلمة مرور LAN.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
 
                     if (remainingLockSeconds > 0L) {
                         Surface(
@@ -512,6 +522,7 @@ fun MultiDeviceControlSection(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        if (!isCloudSyncEnabled) {
                         Button(
                             onClick = {
                                 viewModel.pairWithMainDevice(
@@ -541,6 +552,7 @@ fun MultiDeviceControlSection(
                             }
                         }
 
+                        }
                         OutlinedButton(
                             onClick = { viewModel.switchToMainDeviceMode() },
                             modifier = Modifier
