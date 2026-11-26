@@ -2036,7 +2036,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 if (cloudAuthorizationEnabled.value && cloudDeviceId.isNotBlank() && cloudWorkspaceId.isNotBlank()) {
                     val transportSecrets = if (isMainDevice.value) {
                         preferences.getLinkedSubDevicesSnapshot()
-                            .filter { it.isClaimed && !it.isKicked && !it.wasUnlinked && it.sessionToken.isNotBlank() }
+                            .filter { !it.isKicked && !it.wasUnlinked && it.sessionToken.isNotBlank() }
                             .map { it.sessionToken }
                             .distinct()
                     } else {
