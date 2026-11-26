@@ -1593,11 +1593,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val host = preferences.mainHostUrlFlow.first()
             val token = preferences.subSessionTokenFlow.first()
             val name = deviceName.value.ifBlank { "الجهاز الفرعي" }
-            if (host.isNotBlank() && token.isNotBlank()) {
-                val remote = syncClient.unlinkFromMain(host, token)
-                if (remote.isFailure) {
-                    _userMessage.emit("تعذر إبلاغ الجهاز الرئيسي بفك الارتباط الآن؛ سيتم حفظ سجل العملية محلياً")
-                }
+            // Do not fall back to a LAN request when unlinking legacy pairings.
+            // Cloud membership/device revocation is managed by the collaboration flow.
+            if (!cloudAuthorizationEnabled.value && host.isNotBlank() && token.isNotBlank()) {
+                _userMessage.emit("تم إيقاف طلبات فك الارتباط عبر الشبكة المحلية؛ أدر إلغاء الجهاز من مساحة التعاون السحابي.")
             }
             repository.recordOperation(OperationAuditLog(
                 actorName = userName.value.ifBlank { name },
