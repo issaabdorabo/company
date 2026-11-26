@@ -16,10 +16,18 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import org.json.JSONObject
 
 data class QrPairingPayload(
-    val host: String,
-    val code: String,
-    val pwd: String
-)
+    val host: String = "",
+    val code: String = "",
+    val pwd: String = "",
+    val cloudWorkspaceId: String = "",
+    val mainCloudDeviceId: String = "",
+    val deviceSlotId: String = "",
+    val sessionToken: String = ""
+) {
+    val isCloudPairing: Boolean
+        get() = cloudWorkspaceId.isNotBlank() && mainCloudDeviceId.isNotBlank() &&
+            deviceSlotId.isNotBlank() && sessionToken.isNotBlank()
+}
 
 object QrPairingHelper {
     private const val PAYLOAD_TYPE = "SMART_INV_PAIR"
@@ -37,17 +45,51 @@ object QrPairingHelper {
         }.toString()
     }
 
+    fun encodeCloudPairingPayload(
+        workspaceId: String,
+        mainDeviceId: String,
+        deviceSlotId: String,
+        sessionToken: String
+    ): String {
+        require(workspaceId.isNotBlank() && mainDeviceId.isNotBlank() &&
+            deviceSlotId.isNotBlank() && sessionToken.isNotBlank())
+        return JSONObject().apply {
+            put("t", "SMART_INV_CLOUD_PAIR")
+            put("workspace", workspaceId)
+            put("mainDevice", mainDeviceId)
+            put("slot", deviceSlotId)
+            put("secret", sessionToken)
+        }.toString()
+    }
+
     fun parsePairingQr(raw: String): QrPairingPayload? {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return null
         return try {
             val obj = JSONObject(trimmed)
-            if (obj.optString("t") != PAYLOAD_TYPE) return null
-            val host = obj.optString("host").trim()
-            val code = obj.optString("code").trim().uppercase()
-            val pwd = obj.optString("pwd").trim()
-            if (host.isBlank() || code.isBlank() || pwd.isBlank()) return null
-            QrPairingPayload(host = host, code = code, pwd = pwd)
+            when (obj.optString("t")) {
+                "SMART_INV_CLOUD_PAIR" -> {
+                    val workspace = obj.optString("workspace").trim()
+                    val mainDevice = obj.optString("mainDevice").trim()
+                    val slot = obj.optString("slot").trim()
+                    val secret = obj.optString("secret").trim()
+                    if (workspace.isBlank() || mainDevice.isBlank() || slot.isBlank() || secret.isBlank()) return null
+                    QrPairingPayload(
+                        cloudWorkspaceId = workspace,
+                        mainCloudDeviceId = mainDevice,
+                        deviceSlotId = slot,
+                        sessionToken = secret
+                    )
+                }
+                PAYLOAD_TYPE -> {
+                    val host = obj.optString("host").trim()
+                    val code = obj.optString("code").trim().uppercase()
+                    val pwd = obj.optString("pwd").trim()
+                    if (host.isBlank() || code.isBlank() || pwd.isBlank()) return null
+                    QrPairingPayload(host = host, code = code, pwd = pwd)
+                }
+                else -> null
+            }
         } catch (_: Exception) {
             null
         }
