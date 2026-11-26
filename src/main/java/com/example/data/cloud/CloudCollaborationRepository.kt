@@ -297,7 +297,7 @@ class CloudCollaborationRepository {
         // impractical to enumerate or subscribe to.
         val proof = MessageDigest.getInstance("SHA-256").digest(
             "smart-inventory-topic-v1|$workspaceId|$deviceId|$transportSecret".toByteArray(Charsets.UTF_8)
-        ).joinToString("") { byte -> "%02x".format(byte) }
+        ).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
         return "workspace:$workspaceId:device:$deviceId:pair:$proof"
     }
 
