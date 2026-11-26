@@ -6,6 +6,8 @@ import androidx.core.content.ContextCompat
 import com.example.data.cloud.CloudBackupRepository
 import com.example.data.cloud.CloudCollaborationRepository
 import com.example.service.CloudPresenceService
+import com.example.ui.viewmodel.InventoryViewModel
+import kotlinx.coroutines.Job
 import com.example.data.database.AppDatabase
 import com.example.data.preferences.UserPreferencesManager
 import com.example.data.repository.InventoryRepository
@@ -24,6 +26,23 @@ class InventoryApp : Application() {
     val repository by lazy { InventoryRepository(database, this) }
     val preferencesManager by lazy { UserPreferencesManager(this) }
     val cloudBackupRepository by lazy { CloudBackupRepository(this) }
+
+    @Volatile private var cloudCoordinatorJob: Job? = null
+    @Volatile private var backgroundCoordinatorOwner: InventoryViewModel? = null
+
+    @Synchronized
+    fun replaceCloudCoordinator(owner: InventoryViewModel, job: Job) {
+        cloudCoordinatorJob?.takeIf { it !== job }?.cancel()
+        cloudCoordinatorJob = job
+        if (backgroundCoordinatorOwner !== owner) backgroundCoordinatorOwner = null
+    }
+
+    @Synchronized
+    fun ensureCloudCoordinator() {
+        if (cloudCoordinatorJob?.isActive != true) {
+            backgroundCoordinatorOwner = InventoryViewModel(this)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
