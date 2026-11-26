@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warehouse
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -177,6 +178,7 @@ fun MainApp(
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val currentDeviceName by viewModel.deviceName.collectAsState()
     val isOperationRunning by viewModel.isOperationRunning.collectAsState()
+    val isSyncingNow by viewModel.isSyncingNow.collectAsState()
 
     var hasAskedNotificationPermission by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -396,6 +398,33 @@ fun MainApp(
                                         },
                                         modifier = Modifier.width(82.dp).testTag("nav_item_${destination.name.lowercase()}")
                                     )
+                                }
+                            }
+                        }
+                        if (isOperationRunning || isSyncingNow) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Surface(
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    shadowElevation = 10.dp
+                                ) {
+                                    androidx.compose.foundation.layout.Column(
+                                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        CircularProgressIndicator(strokeWidth = 4.dp)
+                                        Text(
+                                            text = if (isSyncingNow) "جارٍ مزامنة البيانات بين الأجهزة..." else "جارٍ تنفيذ العملية...",
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
                             }
                         }
