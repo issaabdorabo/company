@@ -172,6 +172,7 @@ fun MainApp(
     val isMainDevice by viewModel.isMainDevice.collectAsState()
     val devicePermissions by viewModel.devicePermissions.collectAsState()
     val isSubConnected by viewModel.isSubConnected.collectAsState()
+    val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
     val serverStatus by viewModel.serverStatus.collectAsState()
     val kickedAlertMessage by viewModel.kickedAlertMessage.collectAsState()
     val operationAuditLogs by viewModel.operationAuditLogs.collectAsState()
@@ -268,7 +269,7 @@ fun MainApp(
                                 }
                             },
                             navigationIcon = {
-                                val syncReady = if (isMainDevice) serverStatus.isRunning else isSubConnected
+                                val syncReady = isCloudSyncEnabled || if (isMainDevice) serverStatus.isRunning else isSubConnected
                                 IconButton(
                                     onClick = { navigateTo(AppNavDestination.DEVICES) },
                                     modifier = Modifier.testTag("top_bar_sync_status_btn")
@@ -345,10 +346,14 @@ fun MainApp(
                                 permissions = devicePermissions
                             )
                             val linkLabel = when {
+                                isCloudSyncEnabled && isMainDevice ->
+                                    "☁️ اتصال سحابي نشط — الربط يعمل عبر شبكات مختلفة"
+                                isCloudSyncEnabled && isSubConnected ->
+                                    "☁️ متصل بالجهاز الرئيسي عبر الإنترنت"
                                 isMainDevice && serverStatus.isRunning && serverStatus.hostAddresses.isNotEmpty() ->
-                                    "🌐 خادم الربط نشط (${serverStatus.primaryAddress})"
+                                    "🌐 خادم الربط المحلي نشط (${serverStatus.primaryAddress})"
                                 isMainDevice ->
-                                    "🌐 جاهز للربط المباشر عبر الشبكة"
+                                    "🌐 جاهز للربط المحلي أو تفعيل التعاون السحابي"
                                 isSubConnected ->
                                     "🔗 متصل بالجهاز الرئيسي"
                                 else ->
@@ -358,7 +363,7 @@ fun MainApp(
                                 text = linkLabel,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = if (isMainDevice || isSubConnected) SuccessGreen else WarningOrange
+                                color = if (isCloudSyncEnabled || isMainDevice || isSubConnected) SuccessGreen else WarningOrange
                             )
                         }
                     }
