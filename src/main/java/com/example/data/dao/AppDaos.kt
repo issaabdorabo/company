@@ -102,6 +102,9 @@ interface SupplierDao {
     @Query("SELECT COUNT(*) FROM vouchers WHERE supplierName = :supplierName")
     suspend fun getVouchersCountForSupplier(supplierName: String): Int
 
+    @Query("UPDATE vouchers SET supplierName = :newName WHERE supplierName = :oldName")
+    suspend fun renameSupplierInVouchers(oldName: String, newName: String)
+
     @Query("DELETE FROM suppliers")
     suspend fun clearAll()
 }
@@ -126,8 +129,17 @@ interface WarehousePartyDao {
     @Delete
     suspend fun deleteParty(party: WarehouseParty)
 
-    @Query("SELECT COUNT(*) FROM vouchers WHERE receiverName = :name OR disburserName = :name")
+    @Query("SELECT (SELECT COUNT(*) FROM vouchers WHERE receiverName = :name OR disburserName = :name) + (SELECT COUNT(*) FROM voucher_items WHERE itemReceiverName = :name)")
     suspend fun getVouchersCountForParty(name: String): Int
+
+    @Query("UPDATE vouchers SET receiverName = :newName WHERE receiverName = :oldName")
+    suspend fun renamePartyInVoucherReceivers(oldName: String, newName: String)
+
+    @Query("UPDATE vouchers SET disburserName = :newName WHERE disburserName = :oldName")
+    suspend fun renamePartyInVoucherDisbursers(oldName: String, newName: String)
+
+    @Query("UPDATE voucher_items SET itemReceiverName = :newName WHERE itemReceiverName = :oldName")
+    suspend fun renamePartyInVoucherItems(oldName: String, newName: String)
 
     @Query("DELETE FROM warehouse_parties")
     suspend fun clearAll()
@@ -266,6 +278,9 @@ interface ItemStatusDao {
 
     @Query("SELECT COUNT(*) FROM item_unit_serials WHERE status = :statusName")
     suspend fun getSerialsCountForStatus(statusName: String): Int
+
+    @Query("SELECT COUNT(*) FROM item_unit_serials WHERE subUnit = :unitName")
+    suspend fun getSerialsCountForSubUnit(unitName: String): Int
 
     @Query("SELECT COUNT(*) FROM voucher_items WHERE itemStatus = :statusName")
     suspend fun getVoucherItemsCountForStatus(statusName: String): Int
@@ -489,6 +504,33 @@ interface ItemUnitSerialDao {
 }
 
 
+
+@Dao
+interface ItemSerialSubUnitDao {
+    @Query("SELECT * FROM item_serial_sub_units ORDER BY name COLLATE NOCASE ASC")
+    fun getAll(): Flow<List<ItemSerialSubUnit>>
+
+    @Query("SELECT * FROM item_serial_sub_units ORDER BY name COLLATE NOCASE ASC")
+    suspend fun getAllList(): List<ItemSerialSubUnit>
+
+    @Query("SELECT * FROM item_serial_sub_units WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): ItemSerialSubUnit?
+
+    @Query("SELECT * FROM item_serial_sub_units WHERE name = :name COLLATE NOCASE LIMIT 1")
+    suspend fun getByName(name: String): ItemSerialSubUnit?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(unit: ItemSerialSubUnit): Long
+
+    @Update
+    suspend fun update(unit: ItemSerialSubUnit)
+
+    @Delete
+    suspend fun delete(unit: ItemSerialSubUnit)
+
+    @Query("DELETE FROM item_serial_sub_units")
+    suspend fun clearAll()
+}
 
 @Dao
 interface OperationAuditLogDao {

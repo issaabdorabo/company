@@ -110,6 +110,7 @@ fun ItemsScreen(
     snapshot: StockSnapshot?
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val appUserName by viewModel.userName.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     var showEditDialog by remember { mutableStateOf(false) }
@@ -438,6 +439,7 @@ fun ItemsScreen(
                 warehouses = listOf(targetWh),
                 items = itemsList.map { it.item },
                 beneficiaries = beneficiaries,
+                appUserName = appUserName,
                 suppliers = suppliers,
                 parties = parties,
                 stockMap = snapshot?.stockMap ?: emptyMap(),

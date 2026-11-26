@@ -102,6 +102,7 @@ fun VoucherFormDialog(
     warehouses: List<Warehouse>,
     items: List<Item>,
     beneficiaries: List<Beneficiary>,
+    appUserName: String = "مستخدم التطبيق",
     suppliers: List<Supplier> = emptyList(),
     parties: List<WarehouseParty> = emptyList(),
     stockMap: Map<Pair<Long, Long>, Double> = emptyMap(),
@@ -291,25 +292,12 @@ fun VoucherFormDialog(
                             }
                         )
 
-                        // Warehouse Receiver Dropdown with Edit and Safe Delete
-                        SearchableDropdownWithAdd(
-                            label = "اسم المستلم في المخزن *",
-                            items = parties.map { it.name }.sorted(),
-                            selected = selectedReceiverName,
-                            onSelect = { selectedReceiverName = it },
-                            onAddNew = { showAddPartyDialog = true },
-                            onEdit = { oldName, newName ->
-                                onUpdateParty?.invoke(oldName, newName)
-                            },
-                            onDelete = { name ->
-                                val pty = parties.find { it.name == name }
-                                if (pty != null) {
-                                    onDeleteParty?.invoke(pty) {}
-                                }
-                            },
-                            checkHasTransactions = { name ->
-                                checkPartyHasTransactions?.invoke(name) ?: false
-                            }
+                        OutlinedTextField(
+                            value = appUserName.ifBlank { "مستخدم التطبيق" },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("المستلم في المخزن (مستخدم التطبيق)") },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
 
@@ -329,24 +317,12 @@ fun VoucherFormDialog(
                             onSelect = { destWarehouseId = it }
                         )
 
-                        SearchableDropdownWithAdd(
-                            label = "اسم القائم بالصرف والتحويل *",
-                            items = parties.map { it.name }.sorted(),
-                            selected = selectedDisburserName,
-                            onSelect = { selectedDisburserName = it },
-                            onAddNew = { showAddPartyDialog = true },
-                            onEdit = { oldName, newName ->
-                                onUpdateParty?.invoke(oldName, newName)
-                            },
-                            onDelete = { name ->
-                                val pty = parties.find { it.name == name }
-                                if (pty != null) {
-                                    onDeleteParty?.invoke(pty) {}
-                                }
-                            },
-                            checkHasTransactions = { name ->
-                                checkPartyHasTransactions?.invoke(name) ?: false
-                            }
+                        OutlinedTextField(
+                            value = appUserName.ifBlank { "مستخدم التطبيق" },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("القائم بالتحويل (مستخدم التطبيق)") },
+                            modifier = Modifier.fillMaxWidth()
                         )
 
                         SearchableDropdownWithAdd(
@@ -387,11 +363,18 @@ fun VoucherFormDialog(
                             onAddNew = { showAddBeneficiaryDialog = true }
                         )
 
+                        OutlinedTextField(
+                            value = appUserName.ifBlank { "مستخدم التطبيق" },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("القائم بالصرف (مستخدم التطبيق)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                         SearchableDropdownWithAdd(
-                            label = "اسم القائم بالصرف *",
+                            label = "اسم المستلم *",
                             items = parties.map { it.name }.sorted(),
-                            selected = selectedDisburserName,
-                            onSelect = { selectedDisburserName = it },
+                            selected = selectedReceiverName,
+                            onSelect = { selectedReceiverName = it },
                             onAddNew = { showAddPartyDialog = true },
                             onEdit = { oldName, newName ->
                                 onUpdateParty?.invoke(oldName, newName)
@@ -645,10 +628,10 @@ fun VoucherFormDialog(
                         sourceWarehouseId = sourceWarehouseId,
                         destinationWarehouseId = destWarehouseId,
                         supplierName = selectedSupplierName.trim(),
-                        receiverName = selectedReceiverName.trim(),
+                        receiverName = if (voucherType == VoucherType.INWARD) appUserName.ifBlank { "مستخدم التطبيق" }.trim() else selectedReceiverName.trim(),
                         beneficiaryId = selectedBeneficiaryId,
                         beneficiaryName = beneficiaryName,
-                        disburserName = selectedDisburserName.trim(),
+                        disburserName = if (voucherType == VoucherType.INWARD) "" else appUserName.ifBlank { "مستخدم التطبيق" }.trim(),
                         notes = notes.trim(),
                         attachmentUri = attachmentUri,
                         attachmentType = attachmentType
@@ -662,18 +645,13 @@ fun VoucherFormDialog(
                     }
 
                     // Auto-persist new receiver if not already present
-                    if (selectedReceiverName.isNotBlank()) {
+                    if (voucherType != VoucherType.INWARD && selectedReceiverName.isNotBlank()) {
                         if (parties.none { it.name.trim().equals(selectedReceiverName.trim(), ignoreCase = true) }) {
                             onAddNewParty?.invoke(WarehouseParty(name = selectedReceiverName.trim()), {})
                         }
                     }
 
-                    // Auto-persist new disburser if not already present
-                    if (selectedDisburserName.isNotBlank()) {
-                        if (parties.none { it.name.trim().equals(selectedDisburserName.trim(), ignoreCase = true) }) {
-                            onAddNewParty?.invoke(WarehouseParty(name = selectedDisburserName.trim()), {})
-                        }
-                    }
+                    // Cashier is always the signed-in app user and is never stored as a catalog party.
 
                     onSave(v, lineItems.toList())
                 },
@@ -763,8 +741,7 @@ fun VoucherFormDialog(
             onDismiss = { showAddPartyDialog = false },
             onSave = { pty ->
                 onAddNewParty?.invoke(pty) {
-                    if (voucherType == VoucherType.INWARD) selectedReceiverName = pty.name
-                    else selectedDisburserName = pty.name
+                    selectedReceiverName = pty.name
                     showAddPartyDialog = false
                 }
             }

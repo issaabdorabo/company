@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -31,6 +32,7 @@ import com.example.data.model.ItemCategory
 import com.example.data.model.ItemStatus
 import com.example.data.model.ItemUnit
 import com.example.data.model.ItemUnitSerialRecord
+import com.example.data.model.ItemSerialSubUnit
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
 import com.example.data.model.CloudPendingSyncOperation
@@ -87,6 +89,18 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     val isOperationRunning: StateFlow<Boolean> = _isOperationRunning.asStateFlow()
 
     private val syncClient = LocalNetworkSyncClient()
+    private val connectivityManager = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private val connectivityCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            viewModelScope.launch {
+                delay(1_500L)
+                if (hasValidatedInternetConnection()) {
+                    if (!isMainDevice.value && isSubConnected.value) runCatching { flushPendingSubDeviceSyncOperations() }
+                    runCatching { flushCloudPendingSyncOperations() }
+                }
+            }
+        }
+    }
 
     private val syncServer = LocalNetworkSyncServer(
         scope = viewModelScope,
@@ -376,6 +390,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     val itemStatuses: StateFlow<List<ItemStatus>> = repository.allItemStatuses
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val itemSerialSubUnits: StateFlow<List<ItemSerialSubUnit>> = repository.allItemSerialSubUnits
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // UI Feedback Messages
     private val _userMessage = MutableSharedFlow<String>()
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
@@ -399,6 +416,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
         startMultiDeviceCoordinator()
         startCloudOutboxCoordinator()
+        runCatching { connectivityManager?.registerDefaultNetworkCallback(connectivityCallback) }
     }
 
     private fun startMultiDeviceCoordinator() {
@@ -448,6 +466,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         super.onCleared()
         subSyncJob?.cancel()
         cloudOutboxJob?.cancel()
+        runCatching { connectivityManager?.unregisterNetworkCallback(connectivityCallback) }
         syncServer.stop()
     }
 
@@ -1311,6 +1330,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 // by the repository, so late audit writes are not missed.
                 repository.importOperationLogsFromMain(snapshot.auditLogs)
                 val lastApplied = preferences.lastAppliedRevisionFlow.first()
+                if (snapshot.syncVersion < lastApplied) {
+                    _lastSyncError.value = "وصلت نسخة أقدم من بيانات الجهاز الرئيسي؛ تم تجاهلها للحفاظ على أحدث بيانات محلية."
+                    return@onSuccess
+                }
                 if (snapshot.syncVersion != lastApplied) {
                     if (snapshot.entities.isEmpty()) {
                         val localEntities = repository.exportAllEntitiesForCloud()
@@ -3267,6 +3290,33 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch { preferences.setOrgName(name) }
     }
 
+    fun saveItemSerialSubUnit(name: String, onDone: (Long) -> Unit = {}) {
+        runAuthorizedAction(action = DeviceAction.ADD_OR_MANAGE_CATALOG, deniedMessage = "إضافة الوحدات الفرعية متاحة للمستخدم الرئيسي فقط") {
+            val id = repository.saveItemSerialSubUnit(name)
+            notifyAndPropagate(action = DeviceAction.ADD_OR_MANAGE_CATALOG, notificationTitle = "إضافة وحدة فرعية", notificationDetails = name.trim())
+            onDone(id)
+        }
+    }
+
+    suspend fun checkItemSerialSubUnitHasOperations(name: String): Boolean =
+        repository.checkItemSerialSubUnitHasOperations(name)
+
+    fun updateItemSerialSubUnitSafely(unit: ItemSerialSubUnit, newName: String, onResult: (Boolean) -> Unit = {}) {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "تعديل الوحدات الفرعية متاح للمستخدم الرئيسي فقط") {
+            val ok = repository.updateItemSerialSubUnitSafely(unit, newName)
+            if (ok) notifyAndPropagate(action = DeviceAction.EDIT_CATALOG_ITEMS, notificationTitle = "تعديل وحدة فرعية", notificationDetails = "${unit.name} ← ${newName.trim()}")
+            onResult(ok)
+        }
+    }
+
+    fun deleteItemSerialSubUnitSafely(unit: ItemSerialSubUnit, onResult: (Boolean) -> Unit = {}) {
+        runAuthorizedAction(action = DeviceAction.EDIT_CATALOG_ITEMS, deniedMessage = "حذف الوحدات الفرعية متاح للمستخدم الرئيسي فقط") {
+            val ok = repository.deleteItemSerialSubUnitSafely(unit)
+            if (ok) notifyAndPropagate(action = DeviceAction.EDIT_CATALOG_ITEMS, notificationTitle = "حذف وحدة فرعية", notificationDetails = unit.name)
+            onResult(ok)
+        }
+    }
+
     // Item Unit Serial Tracking
     fun getSerialsForWarehouseItem(warehouseId: Long, itemId: Long): kotlinx.coroutines.flow.Flow<List<ItemUnitSerialRecord>> {
         return repository.getSerialsForWarehouseItem(warehouseId, itemId)
@@ -3290,7 +3340,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val old = if (candidate.id > 0L) oldRows.firstOrNull { it.id == candidate.id }
                 else oldRows.firstOrNull { it.unitIndex == candidate.unitIndex }
             old == null || old.serialNumber != candidate.serialNumber ||
-                old.status != candidate.status || old.notes != candidate.notes
+                old.status != candidate.status || old.subUnit != candidate.subUnit || old.notes != candidate.notes
         }
     }
 
@@ -3354,7 +3404,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val itemName = items.value.firstOrNull { it.id == key.first }?.name ?: "صنف رقم ${key.first}"
             val warehouseName = warehouses.value.firstOrNull { it.id == key.second }?.name ?: "مخزن رقم ${key.second}"
             val entries = rows.joinToString("، ") { row ->
-                "${row.serialNumber.ifBlank { "وحدة ${row.unitIndex}" }} [${row.status}]" + if (row.notes.isBlank()) "" else " (${row.notes})"
+                "${row.serialNumber.ifBlank { "وحدة ${row.unitIndex}" }} [${row.status}]" +
+                    (row.subUnit.takeIf { it.isNotBlank() }?.let { " / $it" } ?: "") +
+                    if (row.notes.isBlank()) "" else " (${row.notes})"
             }
             "رقم الصنف: ${key.first} | الصنف: $itemName | المخزن: $warehouseName | الأرقام/الحالات: $entries"
         }

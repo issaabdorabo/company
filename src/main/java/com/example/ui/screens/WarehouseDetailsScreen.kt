@@ -571,6 +571,7 @@ fun WarehouseDetailsScreen(
                 warehouses = listOf(warehouse),
                 items = allCatalogItems,
                 beneficiaries = beneficiaries,
+                appUserName = appUserName,
                 suppliers = suppliers,
                 parties = parties,
                 stockMap = snapshot?.stockMap ?: emptyMap(),

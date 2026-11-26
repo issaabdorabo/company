@@ -15,6 +15,7 @@ import com.example.data.dao.ItemDao
 import com.example.data.dao.ItemStatusDao
 import com.example.data.dao.ItemUnitDao
 import com.example.data.dao.ItemUnitSerialDao
+import com.example.data.dao.ItemSerialSubUnitDao
 import com.example.data.dao.OperationAuditLogDao
 import com.example.data.dao.PendingSyncOperationDao
 import com.example.data.dao.CloudPendingSyncOperationDao
@@ -32,6 +33,7 @@ import com.example.data.model.ItemCategory
 import com.example.data.model.ItemStatus
 import com.example.data.model.ItemUnit
 import com.example.data.model.ItemUnitSerialRecord
+import com.example.data.model.ItemSerialSubUnit
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
 import com.example.data.model.AppliedSyncOperation
@@ -79,12 +81,13 @@ class DatabaseConverters {
         StockAdjustmentLog::class,
         WarehouseItemAssociation::class,
         ItemUnitSerialRecord::class,
+        ItemSerialSubUnit::class,
         OperationAuditLog::class,
         PendingSyncOperation::class,
         AppliedSyncOperation::class,
         CloudPendingSyncOperation::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
@@ -103,6 +106,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun stockAdjustmentDao(): StockAdjustmentDao
     abstract fun warehouseItemAssociationDao(): WarehouseItemAssociationDao
     abstract fun itemUnitSerialDao(): ItemUnitSerialDao
+    abstract fun itemSerialSubUnitDao(): ItemSerialSubUnitDao
     abstract fun operationAuditLogDao(): OperationAuditLogDao
     abstract fun pendingSyncOperationDao(): PendingSyncOperationDao
     abstract fun cloudPendingSyncOperationDao(): CloudPendingSyncOperationDao
@@ -348,6 +352,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!hasColumn(db, "item_unit_serials", "subUnit")) {
+                    db.execSQL("ALTER TABLE `item_unit_serials` ADD COLUMN `subUnit` TEXT NOT NULL DEFAULT ''")
+                }
+                db.execSQL("CREATE TABLE IF NOT EXISTS `item_serial_sub_units` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -367,7 +380,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_9_10,
                         MIGRATION_10_11,
                         MIGRATION_11_12,
-                        MIGRATION_12_13
+                        MIGRATION_12_13,
+                        MIGRATION_13_14
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()

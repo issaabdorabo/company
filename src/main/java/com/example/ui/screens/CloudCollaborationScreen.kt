@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -102,6 +103,7 @@ import com.example.data.cloud.CloudWarehouse
 import com.example.data.cloud.CloudWarehouseMembership
 import com.example.data.cloud.CloudWorkspaceMember
 import com.example.ui.viewmodel.CloudCollaborationViewModel
+import com.example.ui.theme.SuccessGreen
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -117,6 +119,7 @@ fun CloudCollaborationScreen(
     val activeWorkspace by viewModel.activeWorkspace.collectAsState()
     val canCreateFirstWorkspace by viewModel.canCreateFirstWorkspace.collectAsState()
     val members by viewModel.members.collectAsState()
+    val devices by viewModel.devices.collectAsState()
     val registeredUsers by viewModel.registeredUsers.collectAsState()
     val warehouses by viewModel.warehouses.collectAsState()
     val warehouseMemberships by viewModel.warehouseMemberships.collectAsState()
@@ -412,6 +415,28 @@ fun CloudCollaborationScreen(
                                             onClick = { viewModel.registerCurrentDevice() },
                                             enabled = !busy
                                         ) { Text("تسجيل / تحديث") }
+                                    }
+                                    HorizontalDivider()
+                                    Text("حالة اتصال الأجهزة", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    devices.forEach { device ->
+                                        val lastSeenMillis = device.lastSeenAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L
+                                        val isOnline = lastSeenMillis > 0L && System.currentTimeMillis() - lastSeenMillis <= 45_000L
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(device.deviceName, fontWeight = FontWeight.SemiBold)
+                                                Text(if (isOnline) "آخر نبضة: الآن" else "آخر اتصال: " + (device.lastSeenAt ?: "غير معروف"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                            Text(
+                                                if (isOnline) "متصل" else "غير متصل",
+                                                color = if (isOnline) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 } else {
                                     Text(
@@ -788,6 +813,11 @@ private fun ChatConversationPanel(
     }
     var selectedMessageId by remember(conversation.id) { mutableStateOf<String?>(null) }
     var selectedMessageIds by remember(conversation.id) { mutableStateOf<Set<String>>(emptySet()) }
+
+    BackHandler(enabled = selectedMessageIds.isNotEmpty() || selectedMessageId != null) {
+        selectedMessageIds = emptySet()
+        selectedMessageId = null
+    }
     var editingMessageId by remember(conversation.id) { mutableStateOf<String?>(null) }
     var editDraft by remember(conversation.id) { mutableStateOf("") }
     var replyToMessageId by remember(conversation.id) { mutableStateOf<String?>(null) }
@@ -1094,6 +1124,7 @@ private fun ChatConversationPanel(
                 } else {
                     items(messages, key = { it.id }) { message ->
                         val mine = message.senderUserId == currentUserId
+                        val isMessageSelected = message.id in selectedMessageIds || message.id == selectedMessageId
                         var messageMenuExpanded by remember(message.id) { mutableStateOf(false) }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1111,7 +1142,8 @@ private fun ChatConversationPanel(
                                         selectedMessageId = null
                                     }
                                 ),
-                                color = if (mine) myBubbleColor else otherBubbleColor,
+                                color = if (isMessageSelected) MaterialTheme.colorScheme.primaryContainer else if (mine) myBubbleColor else otherBubbleColor,
+                                border = if (isMessageSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
                                 shape = RoundedCornerShape(
                                     topStart = 18.dp,
                                     topEnd = 18.dp,

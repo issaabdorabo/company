@@ -110,6 +110,13 @@ data class SmallerUnit(
     val mediumUnitName: String = "" // اسم الوحدة المتوسطة إن كانت مرتبطة بها
 )
 
+@Entity(tableName = "item_serial_sub_units")
+data class ItemSerialSubUnit(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 @Entity(tableName = "item_statuses")
 data class ItemStatus(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -327,6 +334,7 @@ data class ItemUnitSerialRecord(
     val unitIndex: Int, // 1, 2, 3...
     val serialNumber: String = "",
     val status: String = "موجود", // موجود، مفقود، مدمر، عاطل
+    val subUnit: String = "",
     val notes: String = "",
     val disbursedVoucherId: Long? = null,
     val updatedAt: Long = System.currentTimeMillis()

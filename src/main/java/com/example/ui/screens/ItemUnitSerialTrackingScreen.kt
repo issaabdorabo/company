@@ -45,6 +45,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -77,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ItemStatus
 import com.example.data.model.ItemUnitSerialRecord
+import com.example.data.model.ItemSerialSubUnit
 import com.example.data.model.Warehouse
 import com.example.data.model.WarehouseItemStock
 import com.example.ui.components.SimpleConfirmDialog
@@ -109,6 +111,8 @@ fun ItemUnitSerialTrackingScreen(
     val appUserName by viewModel.userName.collectAsState()
     val orgName by viewModel.orgName.collectAsState()
     val dbStatuses by viewModel.itemStatuses.collectAsState()
+    val dbSerialSubUnits by viewModel.itemSerialSubUnits.collectAsState()
+    val isMainDevice by viewModel.isMainDevice.collectAsState()
 
     val totalCount = itemStock.currentStock.toInt().coerceAtLeast(0)
 
@@ -121,11 +125,31 @@ fun ItemUnitSerialTrackingScreen(
         (dbStatuses.map { it.name } + serialsList.map { it.status }.filter { it.isNotBlank() }).distinct()
             .ifEmpty { listOf("موجود", "مفقود", "مدمر", "عاطل") }
     }
+    val subUnitOptions = remember(dbSerialSubUnits, serialsList.toList()) {
+        (dbSerialSubUnits.map { it.name } + serialsList.map { it.subUnit }.filter { it.isNotBlank() }).distinct().sorted()
+    }
+    var sortField by remember { mutableStateOf("الرقم المميز") }
+    var sortAscending by remember { mutableStateOf(true) }
+    val displaySerials = remember(serialsList.toList(), sortField, sortAscending) {
+        val sorted = when (sortField) {
+            "الحالة" -> serialsList.sortedWith(compareBy<ItemUnitSerialRecord> { it.status.lowercase() }.thenBy { it.unitIndex })
+            "الوحدة الفرعية" -> serialsList.sortedWith(compareBy<ItemUnitSerialRecord> { it.subUnit.lowercase() }.thenBy { it.unitIndex })
+            else -> serialsList.sortedWith(compareBy<ItemUnitSerialRecord> { it.serialNumber.ifBlank { it.unitIndex.toString() }.lowercase() }.thenBy { it.unitIndex })
+        }
+        if (sortAscending) sorted else sorted.reversed()
+    }
 
     var showAddStatusDialog by remember { mutableStateOf(false) }
     var statusToEdit by remember { mutableStateOf<ItemStatus?>(null) }
     var statusToDelete by remember { mutableStateOf<ItemStatus?>(null) }
     var statusBlockedMessage by remember { mutableStateOf<String?>(null) }
+    var showAddSubUnitDialog by remember { mutableStateOf(false) }
+    var newSubUnitName by remember { mutableStateOf("") }
+    var subUnitToEdit by remember { mutableStateOf<ItemSerialSubUnit?>(null) }
+    var subUnitToDelete by remember { mutableStateOf<ItemSerialSubUnit?>(null) }
+    var subUnitEditName by remember { mutableStateOf("") }
+    var subUnitBlockedMessage by remember { mutableStateOf<String?>(null) }
+    var showSortMenu by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var restrictedActionName by remember { mutableStateOf<String?>(null) }
     var isLoadingSerials by remember { mutableStateOf(true) }
@@ -354,6 +378,22 @@ fun ItemUnitSerialTrackingScreen(
             }
 
             Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("فرز حسب:", style = MaterialTheme.typography.labelMedium)
+                Box {
+                    TextButton(onClick = { showSortMenu = true }) { Text(sortField) }
+                    DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                        listOf("الرقم المميز", "الحالة", "الوحدة الفرعية").forEach { field ->
+                            DropdownMenuItem(text = { Text(field) }, onClick = { sortField = field; showSortMenu = false })
+                        }
+                    }
+                }
+                TextButton(onClick = { sortAscending = !sortAscending }) { Text(if (sortAscending) "تصاعدي ↑" else "تنازلي ↓") }
+            }
 
             if (serialsList.isEmpty()) {
                 Box(
@@ -373,8 +413,8 @@ fun ItemUnitSerialTrackingScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 20.dp)
                 ) {
-                    itemsIndexed(serialsList, key = { _, rec -> rec.unitIndex }) { index, serialRec ->
-                        val unitNumber = index + 1
+                    itemsIndexed(displaySerials, key = { _, rec -> rec.unitIndex }) { _, serialRec ->
+                        val unitNumber = serialRec.unitIndex
                         val unitKey = serialRec.unitIndex
                         val isSelected = selectedUnitIndices.contains(unitKey)
 
@@ -383,13 +423,16 @@ fun ItemUnitSerialTrackingScreen(
                             itemName = itemStock.itemName,
                             serialRecord = serialRec,
                             statusOptions = statusOptions,
+                            subUnitOptions = subUnitOptions,
+                            canManageCatalog = isMainDevice,
                             isSelected = isSelected,
                             onToggleSelect = {
                                 if (isSelected) selectedUnitIndices.remove(unitKey)
                                 else selectedUnitIndices.add(unitKey)
                             },
                             onUpdate = { updated ->
-                                serialsList[index] = updated
+                                val originalIndex = serialsList.indexOfFirst { it.unitIndex == unitKey }
+                                if (originalIndex >= 0) serialsList[originalIndex] = updated
                             },
                             onAddNewStatus = {
                                 viewModel.checkPermission(
@@ -445,6 +488,33 @@ fun ItemUnitSerialTrackingScreen(
                                             statusToDelete = dbObj
                                         }
                                     }
+                                }
+                            },
+                            onAddNewSubUnit = {
+                                if (!isMainDevice) restrictedActionName = "إدارة الوحدات الفرعية"
+                                else viewModel.checkPermission(
+                                    action = DeviceAction.ADD_OR_MANAGE_CATALOG,
+                                    onDenied = { restrictedActionName = "إضافة وحدة فرعية" }
+                                ) { showAddSubUnitDialog = true }
+                            },
+                            onEditSubUnit = { name ->
+                                if (!isMainDevice) restrictedActionName = "تعديل الوحدات الفرعية"
+                                else coroutineScope.launch {
+                                    val used = viewModel.checkItemSerialSubUnitHasOperations(name)
+                                    val existing = dbSerialSubUnits.firstOrNull { it.name == name }
+                                    if (used) subUnitBlockedMessage = "لا يمكن تعديل الوحدة الفرعية ($name) لوجود عمليات سابقة مرتبطة بها."
+                                    else if (existing == null) subUnitBlockedMessage = "تعذر العثور على الوحدة الفرعية."
+                                    else { subUnitToEdit = existing; subUnitEditName = existing.name }
+                                }
+                            },
+                            onDeleteSubUnit = { name ->
+                                if (!isMainDevice) restrictedActionName = "حذف الوحدات الفرعية"
+                                else coroutineScope.launch {
+                                    val used = viewModel.checkItemSerialSubUnitHasOperations(name)
+                                    val existing = dbSerialSubUnits.firstOrNull { it.name == name }
+                                    if (used) subUnitBlockedMessage = "لا يمكن حذف الوحدة الفرعية ($name) لوجود عمليات سابقة مرتبطة بها."
+                                    else if (existing == null) subUnitBlockedMessage = "تعذر العثور على الوحدة الفرعية."
+                                    else subUnitToDelete = existing
                                 }
                             }
                         )
@@ -586,6 +656,49 @@ fun ItemUnitSerialTrackingScreen(
         )
     }
 
+    if (showAddSubUnitDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddSubUnitDialog = false },
+            title = { Text("إضافة وحدة فرعية") },
+            text = { OutlinedTextField(value = newSubUnitName, onValueChange = { newSubUnitName = it }, label = { Text("اسم الوحدة الفرعية") }, singleLine = true) },
+            confirmButton = {
+                Button(onClick = {
+                    val name = newSubUnitName.trim()
+                    if (name.isNotBlank() && subUnitOptions.none { it.equals(name, true) }) {
+                        viewModel.saveItemSerialSubUnit(name) { newSubUnitName = ""; showAddSubUnitDialog = false }
+                    } else subUnitBlockedMessage = if (name.isBlank()) "أدخل اسم الوحدة الفرعية." else "هذه الوحدة موجودة مسبقاً."
+                }) { Text("إضافة") }
+            },
+            dismissButton = { OutlinedButton(onClick = { showAddSubUnitDialog = false }) { Text("إلغاء") } }
+        )
+    }
+    subUnitToEdit?.let { target ->
+        AlertDialog(
+            onDismissRequest = { subUnitToEdit = null }, title = { Text("تعديل الوحدة الفرعية") },
+            text = { OutlinedTextField(value = subUnitEditName, onValueChange = { subUnitEditName = it }, label = { Text("الاسم الجديد") }, singleLine = true) },
+            confirmButton = {
+                Button(onClick = {
+                    val name = subUnitEditName.trim()
+                    if (name.isNotBlank()) viewModel.updateItemSerialSubUnitSafely(target, name) {
+                        if (it) subUnitToEdit = null else subUnitBlockedMessage = "تعذر تعديل الوحدة الفرعية لوجود استخدام مرتبط بها."
+                    }
+                }) { Text("حفظ") }
+            },
+            dismissButton = { OutlinedButton(onClick = { subUnitToEdit = null }) { Text("إلغاء") } }
+        )
+    }
+    subUnitToDelete?.let { target ->
+        SimpleConfirmDialog(
+            title = "تأكيد حذف الوحدة الفرعية", message = "هل تريد حذف (${target.name})؟",
+            confirmButtonText = "نعم، احذف", isDestructive = true,
+            onConfirm = { viewModel.deleteItemSerialSubUnitSafely(target) { ok -> subUnitToDelete = null; if (!ok) subUnitBlockedMessage = "لا يمكن حذف الوحدة الفرعية لوجود عمليات سابقة." } },
+            onDismiss = { subUnitToDelete = null }
+        )
+    }
+    subUnitBlockedMessage?.let { message ->
+        AlertDialog(onDismissRequest = { subUnitBlockedMessage = null }, title = { Text("تنبيه") }, text = { Text(message) }, confirmButton = { Button(onClick = { subUnitBlockedMessage = null }) { Text("حسناً") } })
+    }
+
     // Export & Preview Dialog with column selection
     if (showExportDialog) {
         ItemSerialsExportDialog(
@@ -607,14 +720,20 @@ private fun UnitSerialCard(
     itemName: String,
     serialRecord: ItemUnitSerialRecord,
     statusOptions: List<String>,
+    subUnitOptions: List<String>,
+    canManageCatalog: Boolean,
     isSelected: Boolean,
     onToggleSelect: () -> Unit,
     onUpdate: (ItemUnitSerialRecord) -> Unit,
     onAddNewStatus: () -> Unit,
     onEditStatus: (String) -> Unit,
-    onDeleteStatus: (String) -> Unit
+    onDeleteStatus: (String) -> Unit,
+    onAddNewSubUnit: () -> Unit,
+    onEditSubUnit: (String) -> Unit,
+    onDeleteSubUnit: (String) -> Unit
 ) {
     var statusDropdownExpanded by remember { mutableStateOf(false) }
+    var subUnitDropdownExpanded by remember { mutableStateOf(false) }
 
     val statusColor = when (serialRecord.status) {
         "موجود" -> SuccessGreen
@@ -703,13 +822,14 @@ private fun UnitSerialCard(
                 Box(modifier = Modifier.weight(1f)) {
                     ExposedDropdownMenuBox(
                         expanded = statusDropdownExpanded,
-                        onExpandedChange = { statusDropdownExpanded = !statusDropdownExpanded },
+                        onExpandedChange = { if (canManageCatalog) statusDropdownExpanded = !statusDropdownExpanded },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         OutlinedTextField(
                             value = serialRecord.status.ifBlank { "موجود" },
                             onValueChange = {},
                             readOnly = true,
+                            enabled = canManageCatalog,
                             label = { Text("الحالة") },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = statusDropdownExpanded) },
                             modifier = Modifier
@@ -730,33 +850,13 @@ private fun UnitSerialCard(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(opt, modifier = Modifier.weight(1f), maxLines = 1)
-                                            IconButton(
-                                                onClick = {
-                                                    statusDropdownExpanded = false
-                                                    onEditStatus(opt)
-                                                },
-                                                modifier = Modifier.size(32.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Edit,
-                                                    contentDescription = "تعديل الحالة",
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                            IconButton(
-                                                onClick = {
-                                                    statusDropdownExpanded = false
-                                                    onDeleteStatus(opt)
-                                                },
-                                                modifier = Modifier.size(32.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Delete,
-                                                    contentDescription = "حذف الحالة",
-                                                    tint = DangerRed,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
+                                            if (canManageCatalog) {
+                                                IconButton(onClick = { statusDropdownExpanded = false; onEditStatus(opt) }, modifier = Modifier.size(32.dp)) {
+                                                    Icon(Icons.Default.Edit, contentDescription = "تعديل الحالة", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                                }
+                                                IconButton(onClick = { statusDropdownExpanded = false; onDeleteStatus(opt) }, modifier = Modifier.size(32.dp)) {
+                                                    Icon(Icons.Default.Delete, contentDescription = "حذف الحالة", tint = DangerRed, modifier = Modifier.size(16.dp))
+                                                }
                                             }
                                         }
                                     },
@@ -766,21 +866,51 @@ private fun UnitSerialCard(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("+ إضافة حالة جديدة", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                                    }
-                                },
-                                onClick = {
-                                    statusDropdownExpanded = false
-                                    onAddNewStatus()
-                                }
-                            )
+                            if (canManageCatalog) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("+ إضافة حالة جديدة", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                        }
+                                    },
+                                    onClick = { statusDropdownExpanded = false; onAddNewStatus() }
+                                )
+                            }
                         }
                     }
+                }
+            }
+
+            ExposedDropdownMenuBox(
+                expanded = subUnitDropdownExpanded,
+                onExpandedChange = { if (canManageCatalog) subUnitDropdownExpanded = !subUnitDropdownExpanded },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    value = serialRecord.subUnit,
+                    onValueChange = {}, readOnly = true, enabled = canManageCatalog,
+                    label = { Text("الوحدة الفرعية") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = subUnitDropdownExpanded) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                ExposedDropdownMenu(expanded = subUnitDropdownExpanded, onDismissRequest = { subUnitDropdownExpanded = false }) {
+                    subUnitOptions.forEach { option ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(option, modifier = Modifier.weight(1f))
+                                    if (canManageCatalog) {
+                                        IconButton(onClick = { subUnitDropdownExpanded = false; onEditSubUnit(option) }) { Icon(Icons.Default.Edit, contentDescription = "تعديل الوحدة", tint = MaterialTheme.colorScheme.primary) }
+                                        IconButton(onClick = { subUnitDropdownExpanded = false; onDeleteSubUnit(option) }) { Icon(Icons.Default.Delete, contentDescription = "حذف الوحدة", tint = DangerRed) }
+                                    }
+                                }
+                            },
+                            onClick = { onUpdate(serialRecord.copy(subUnit = option)); subUnitDropdownExpanded = false }
+                        )
+                    }
+                    if (canManageCatalog) DropdownMenuItem(text = { Text("+ إضافة وحدة فرعية", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }, onClick = { subUnitDropdownExpanded = false; onAddNewSubUnit() })
                 }
             }
 

@@ -1,14 +1,18 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Intent
 import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.InventoryApp
+import com.example.service.CloudPresenceService
 import com.example.data.cloud.CloudCollaborationRepository
 import com.example.data.cloud.CloudConversation
+import com.example.data.cloud.CloudDevice
 import com.example.data.cloud.CloudMessage
 import com.example.data.cloud.CloudRegisteredUser
 import com.example.data.cloud.CloudWarehouse
@@ -53,6 +57,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
 
     private val _members = MutableStateFlow<List<CloudWorkspaceMember>>(emptyList())
     val members: StateFlow<List<CloudWorkspaceMember>> = _members.asStateFlow()
+
+    private val _devices = MutableStateFlow<List<CloudDevice>>(emptyList())
+    val devices: StateFlow<List<CloudDevice>> = _devices.asStateFlow()
 
     private val _registeredUsers = MutableStateFlow<List<CloudRegisteredUser>>(emptyList())
     val registeredUsers: StateFlow<List<CloudRegisteredUser>> = _registeredUsers.asStateFlow()
@@ -101,7 +108,9 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                     _activeWorkspace.value = null
                     _currentUserId.value = ""
                     _members.value = emptyList()
+                    _devices.value = emptyList()
                     _registeredUsers.value = emptyList()
+                    stopCloudPresenceService()
                     _warehouses.value = emptyList()
                     _conversations.value = emptyList()
                     _notice.value = "اربط حساب Google من الإعدادات أولاً لتفعيل التعاون السحابي."
@@ -113,6 +122,8 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 val available = repository.listMyWorkspaces()
                 _workspaces.value = available
                 if (available.isEmpty()) {
+                    _devices.value = emptyList()
+                    stopCloudPresenceService()
                     _canCreateFirstWorkspace.value = repository.canCreateFirstWorkspace()
                     _activeWorkspace.value = null
                     _members.value = emptyList()
@@ -382,6 +393,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                 val deviceId = preferences.cloudDeviceIdFlow.first()
                 if (deviceId.isBlank()) error("هذا الجهاز غير مسجل في مساحة العمل")
                 val localWarehouses = localInventoryRepository.allWarehouses.first()
+                if (localWarehouses.isEmpty()) error("لا توجد مخازن محلية لرفعها؛ لم يتم تغيير البيانات السحابية.")
                 localWarehouses.forEach { warehouse ->
                     repository.ensureCloudWarehouse(workspace.id, warehouse)
                 }
@@ -397,10 +409,11 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                     targetWarehouseLocalIds = targetLocalIds,
                     includeGlobalRecords = true
                 )
-                repository.seedWorkspaceSnapshot(workspace.id, deviceId, encoded)
+                val replacedCount = repository.replaceCloudWorkspaceSnapshot(workspace.id, deviceId, encoded)
                 val seeded = repository.fetchCloudEntitySnapshotVersioned(workspace.id)
                 preferences.saveCloudSnapshotSignature(seeded.updatedAtSignature)
-                _notice.value = "تم رفع ${seeded.records.size} سجلاً إلى مساحة العمل السحابية."
+                preferences.incrementSyncRevision()
+                _notice.value = "تم تحديث بيانات السحابة بالكامل: $replacedCount سجلاً. تمت إزالة السجلات القديمة والمحذوفة من النسخة السابقة."
             }
         }
     }
@@ -427,6 +440,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
 
     private suspend fun loadWorkspaceContent(workspaceId: String) {
         _members.value = repository.listWorkspaceMembers(workspaceId)
+        _devices.value = runCatching { repository.listWorkspaceDevices(workspaceId) }.getOrDefault(emptyList())
         _registeredUsers.value = if (_activeWorkspace.value?.ownerUserId == repository.currentUserIdOrNull()) {
             repository.listRegisteredWorkspaceUsers(workspaceId)
         } else emptyList()
@@ -469,10 +483,12 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
     private suspend fun ensureCloudDeviceRegistered(workspace: CloudWorkspace, force: Boolean = false) {
         val existing = preferences.cloudDeviceIdFlow.first()
         if (!force && existing.isNotBlank()) {
+            startCloudPresenceService()
             heartbeatJob?.cancel()
             heartbeatJob = viewModelScope.launch {
                 while (true) {
                     runCatching { repository.heartbeat(existing) }
+                    runCatching { _devices.value = repository.listWorkspaceDevices(workspace.id) }
                     runCatching { refreshCloudSnapshotIfChanged(workspace.id) }
                     delay(20_000L)
                 }
@@ -485,14 +501,26 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
             .ifBlank { "Android ${Build.MODEL.orEmpty().take(40)}" }
         val deviceId = repository.registerDevice(workspace.id, deviceName, fingerprint)
         preferences.saveCloudDeviceId(deviceId)
+        startCloudPresenceService()
         heartbeatJob?.cancel()
         heartbeatJob = viewModelScope.launch {
             while (true) {
                 runCatching { repository.heartbeat(deviceId) }
+                runCatching { _devices.value = repository.listWorkspaceDevices(workspace.id) }
                 runCatching { refreshCloudSnapshotIfChanged(workspace.id) }
                 delay(20_000L)
             }
         }
+    }
+
+    private fun startCloudPresenceService() {
+        val context = getApplication<Application>()
+        runCatching { ContextCompat.startForegroundService(context, Intent(context, CloudPresenceService::class.java)) }
+    }
+
+    private fun stopCloudPresenceService() {
+        val context = getApplication<Application>()
+        runCatching { context.stopService(Intent(context, CloudPresenceService::class.java)) }
     }
 
     private suspend fun openConversationInternal(conversationId: String) {

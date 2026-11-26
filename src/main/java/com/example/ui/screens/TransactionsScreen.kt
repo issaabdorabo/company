@@ -438,6 +438,7 @@ fun TransactionsScreen(
             warehouses = warehouses,
             items = items,
             beneficiaries = beneficiaries,
+            appUserName = appUserName,
             suppliers = suppliers,
             parties = parties,
             stockMap = stockMap,

@@ -1,7 +1,11 @@
 package com.example
 
 import android.app.Application
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import com.example.data.cloud.CloudBackupRepository
+import com.example.data.cloud.CloudCollaborationRepository
+import com.example.service.CloudPresenceService
 import com.example.data.database.AppDatabase
 import com.example.data.preferences.UserPreferencesManager
 import com.example.data.repository.InventoryRepository
@@ -10,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 class InventoryApp : Application() {
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -34,6 +40,23 @@ class InventoryApp : Application() {
         applicationScope.launch {
             repository.seedInitialDataIfEmpty()
             repository.ensureDefaultLookupRecords()
+        }
+
+        // Restart the authenticated cloud-presence foreground service after an ordinary app launch.
+        applicationScope.launch {
+            delay(1_500L)
+            val workspaceId = preferencesManager.cloudWorkspaceIdFlow.first()
+            val deviceId = preferencesManager.cloudDeviceIdFlow.first()
+            if (workspaceId.isNotBlank() && deviceId.isNotBlank() &&
+                !CloudCollaborationRepository().currentUserIdOrNull().isNullOrBlank()
+            ) {
+                runCatching {
+                    ContextCompat.startForegroundService(
+                        this@InventoryApp,
+                        Intent(this@InventoryApp, CloudPresenceService::class.java)
+                    )
+                }
+            }
         }
     }
 }

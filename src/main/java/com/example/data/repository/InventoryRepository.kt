@@ -14,6 +14,7 @@ import com.example.data.model.ItemStatus
 import com.example.data.model.ItemStockInfo
 import com.example.data.model.ItemUnit
 import com.example.data.model.ItemUnitSerialRecord
+import com.example.data.model.ItemSerialSubUnit
 import com.example.data.model.OperationAuditLog
 import com.example.data.model.PendingSyncOperation
 import com.example.data.model.AppliedSyncOperation
@@ -57,6 +58,7 @@ class InventoryRepository(
     private val adjustmentDao = database.stockAdjustmentDao()
     private val warehouseItemAssociationDao = database.warehouseItemAssociationDao()
     private val itemUnitSerialDao = database.itemUnitSerialDao()
+    private val itemSerialSubUnitDao = database.itemSerialSubUnitDao()
     private val auditLogDao = database.operationAuditLogDao()
     private val pendingSyncDao = database.pendingSyncOperationDao()
     private val cloudPendingSyncDao = database.cloudPendingSyncOperationDao()
@@ -72,6 +74,7 @@ class InventoryRepository(
     val allCategories: Flow<List<ItemCategory>> = categoryDao.getAllCategories()
     val allUnits: Flow<List<ItemUnit>> = unitDao.getAllUnits()
     val allSmallerUnits: Flow<List<SmallerUnit>> = smallerUnitDao.getAllSmallerUnits()
+    val allItemSerialSubUnits: Flow<List<ItemSerialSubUnit>> = itemSerialSubUnitDao.getAll()
     val allItemStatuses: Flow<List<ItemStatus>> = itemStatusDao.getAllStatuses()
     val allAssociations: Flow<List<WarehouseItemAssociation>> = warehouseItemAssociationDao.getAllAssociations()
 
@@ -171,7 +174,13 @@ class InventoryRepository(
     }
 
     suspend fun updateSupplier(supplier: Supplier) = withContext(Dispatchers.IO) {
-        supplierDao.updateSupplier(supplier)
+        database.withTransaction {
+            val old = supplierDao.getAllSuppliersList().firstOrNull { it.id == supplier.id }
+            supplierDao.updateSupplier(supplier)
+            if (old != null && old.name != supplier.name) {
+                voucherDao.renameSupplierInVouchers(old.name, supplier.name)
+            }
+        }
     }
 
     suspend fun canDeleteSupplier(name: String): Boolean = withContext(Dispatchers.IO) {
@@ -192,7 +201,15 @@ class InventoryRepository(
     }
 
     suspend fun updateParty(party: WarehouseParty) = withContext(Dispatchers.IO) {
-        warehousePartyDao.updateParty(party)
+        database.withTransaction {
+            val old = warehousePartyDao.getAllPartiesList().firstOrNull { it.id == party.id }
+            warehousePartyDao.updateParty(party)
+            if (old != null && old.name != party.name) {
+                voucherDao.renamePartyInVoucherReceivers(old.name, party.name)
+                voucherDao.renamePartyInVoucherDisbursers(old.name, party.name)
+                voucherDao.renamePartyInVoucherItems(old.name, party.name)
+            }
+        }
     }
 
     suspend fun canDeleteParty(name: String): Boolean = withContext(Dispatchers.IO) {
@@ -487,7 +504,8 @@ class InventoryRepository(
         val inItems = smallerUnitDao.getItemsCountForSmallerUnit(name)
         val inVouchers = smallerUnitDao.getVoucherItemsCountForSmallerUnit(name)
         val inPkgUnits = smallerUnitDao.getPackageUnitsCountForSmallerUnit(name)
-        if ((inItems + inVouchers) > 0) return@withContext true
+        val inSerials = itemUnitSerialDao.getSerialsCountForSubUnit(name)
+        if ((inItems + inVouchers + inSerials) > 0) return@withContext true
         if (inPkgUnits > 0) {
             val linkedPkgs = unitDao.getAllUnitsList().filter { it.smallerUnit == name || it.mediumUnit == name }
             if (linkedPkgs.any { checkUnitHasTransactions(it.name) }) {
@@ -881,6 +899,32 @@ class InventoryRepository(
 
     suspend fun getNextStartUnitIndex(warehouseId: Long, itemId: Long): Int = withContext(Dispatchers.IO) {
         (itemUnitSerialDao.getMaxUnitIndex(warehouseId, itemId) ?: 0) + 1
+    }
+
+    suspend fun saveItemSerialSubUnit(name: String): Long = withContext(Dispatchers.IO) {
+        val clean = name.trim()
+        require(clean.isNotBlank()) { "اسم الوحدة الفرعية مطلوب" }
+        require(itemSerialSubUnitDao.getByName(clean) == null) { "اسم الوحدة الفرعية مسجل مسبقاً" }
+        itemSerialSubUnitDao.insert(ItemSerialSubUnit(name = clean))
+    }
+
+    suspend fun checkItemSerialSubUnitHasOperations(name: String): Boolean = withContext(Dispatchers.IO) {
+        itemUnitSerialDao.getSerialsCountForSubUnit(name) > 0
+    }
+
+    suspend fun updateItemSerialSubUnitSafely(existing: ItemSerialSubUnit, newName: String): Boolean = withContext(Dispatchers.IO) {
+        val clean = newName.trim()
+        if (clean.isBlank() || checkItemSerialSubUnitHasOperations(existing.name)) return@withContext false
+        val duplicate = itemSerialSubUnitDao.getByName(clean)
+        if (duplicate != null && duplicate.id != existing.id) return@withContext false
+        itemSerialSubUnitDao.update(existing.copy(name = clean))
+        true
+    }
+
+    suspend fun deleteItemSerialSubUnitSafely(unit: ItemSerialSubUnit): Boolean = withContext(Dispatchers.IO) {
+        if (checkItemSerialSubUnitHasOperations(unit.name)) return@withContext false
+        itemSerialSubUnitDao.delete(unit)
+        true
     }
 
     suspend fun saveSerialsAndReturn(serials: List<ItemUnitSerialRecord>): List<ItemUnitSerialRecord> = withContext(Dispatchers.IO) {
@@ -1454,12 +1498,23 @@ class InventoryRepository(
                 put("unitIndex", ser.unitIndex)
                 put("serialNumber", ser.serialNumber)
                 put("status", ser.status)
+                put("subUnit", ser.subUnit)
                 put("notes", ser.notes)
                 put("disbursedVoucherId", ser.disbursedVoucherId ?: JSONObject.NULL)
                 put("updatedAt", ser.updatedAt)
             })
         }
         json.put("itemUnitSerials", serArr)
+
+        val serialSubUnitArray = JSONArray()
+        itemSerialSubUnitDao.getAllList().forEach { unit ->
+            serialSubUnitArray.put(JSONObject().apply {
+                put("id", unit.id)
+                put("name", unit.name)
+                put("createdAt", unit.createdAt)
+            })
+        }
+        json.put("itemSerialSubUnits", serialSubUnitArray)
 
         val operationLogsArray = JSONArray()
         operationLogs.forEach { log ->
@@ -1785,6 +1840,7 @@ class InventoryRepository(
                                 unitIndex = obj.getInt("unitIndex"),
                                 serialNumber = obj.optString("serialNumber", ""),
                                 status = obj.optString("status", "موجود"),
+                                subUnit = obj.optString("subUnit", ""),
                                 notes = obj.optString("notes", ""),
                                 disbursedVoucherId = if (obj.isNull("disbursedVoucherId")) null else obj.optLong("disbursedVoucherId"),
                                 updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
@@ -1794,6 +1850,17 @@ class InventoryRepository(
                     if (serList.isNotEmpty()) {
                         itemUnitSerialDao.insertOrUpdateSerials(serList)
                     }
+                }
+
+                val serialSubUnitArray = json.optJSONArray("itemSerialSubUnits")
+                if (serialSubUnitArray != null) {
+                    val restored = mutableListOf<ItemSerialSubUnit>()
+                    for (index in 0 until serialSubUnitArray.length()) {
+                        val obj = serialSubUnitArray.getJSONObject(index)
+                        val name = obj.optString("name", "").trim()
+                        if (name.isNotBlank()) restored.add(ItemSerialSubUnit(id = obj.optLong("id", 0L), name = name, createdAt = obj.optLong("createdAt", System.currentTimeMillis())))
+                    }
+                    if (restored.isNotEmpty()) restored.forEach { itemSerialSubUnitDao.insert(it) }
                 }
 
                 // Restore the saved operation history when the backup contains it.
@@ -1855,6 +1922,7 @@ class InventoryRepository(
             pendingSyncDao.clearAllPending()
             cloudPendingSyncDao.clearAllPending()
             itemUnitSerialDao.clearAll()
+            itemSerialSubUnitDao.clearAll()
             voucherDao.clearAllVoucherItems()
             voucherDao.clearAllVouchers()
             adjustmentDao.clearAll()
@@ -2262,6 +2330,17 @@ class InventoryRepository(
             )
         }
 
+        itemSerialSubUnitDao.getAllList().forEach { unit ->
+            result.add(
+                CloudEntityUpsert(
+                    docId = "serial_sub_unit_${unit.id}",
+                    entityType = "serial_sub_unit",
+                    localId = unit.id,
+                    payload = mapOf("id" to unit.id, "name" to unit.name, "createdAt" to unit.createdAt)
+                )
+            )
+        }
+
         itemUnitSerialDao.getAllSerialsList().forEach { ser ->
             result.add(
                 CloudEntityUpsert(
@@ -2275,6 +2354,7 @@ class InventoryRepository(
                         "unitIndex" to ser.unitIndex,
                         "serialNumber" to ser.serialNumber,
                         "status" to ser.status,
+                        "subUnit" to ser.subUnit,
                         "notes" to ser.notes,
                         "disbursedVoucherId" to ser.disbursedVoucherId,
                         "updatedAt" to ser.updatedAt
@@ -2371,6 +2451,7 @@ class InventoryRepository(
         val vouchers = mutableListOf<Voucher>()
         val voucherItems = mutableListOf<VoucherItem>()
         val serials = mutableListOf<ItemUnitSerialRecord>()
+        val serialSubUnits = mutableListOf<ItemSerialSubUnit>()
 
         active.forEach { rec ->
             val p = rec.payload
@@ -2618,6 +2699,11 @@ class InventoryRepository(
                         )
                     }
                 }
+                "serial_sub_unit" -> {
+                    val id = asLong(p, "id", rec.localId)
+                    val name = asStr(p, "name").trim()
+                    if (id > 0L && name.isNotBlank()) serialSubUnits.add(ItemSerialSubUnit(id = id, name = name, createdAt = asLong(p, "createdAt", System.currentTimeMillis())))
+                }
                 "serial" -> {
                     val id = asLong(p, "id", rec.localId)
                     val wId = asLong(p, "warehouseId")
@@ -2631,6 +2717,7 @@ class InventoryRepository(
                                 unitIndex = asInt(p, "unitIndex", 1),
                                 serialNumber = asStr(p, "serialNumber"),
                                 status = asStr(p, "status", "موجود"),
+                                subUnit = asStr(p, "subUnit"),
                                 notes = asStr(p, "notes"),
                                 disbursedVoucherId = asNullableLong(p, "disbursedVoucherId"),
                                 updatedAt = asLong(p, "updatedAt", System.currentTimeMillis())
@@ -2675,6 +2762,9 @@ class InventoryRepository(
             if (serials.isNotEmpty()) {
                 itemUnitSerialDao.insertOrUpdateSerials(serials)
             }
+            if (serialSubUnits.isNotEmpty()) {
+                serialSubUnits.distinctBy { it.id }.forEach { itemSerialSubUnitDao.insert(it) }
+            }
         }
 
         return@withContext CloudRecoverySummary(
@@ -2684,7 +2774,7 @@ class InventoryRepository(
             serials = serials.size,
             totalRecords = warehouses.size + items.size + beneficiaries.size + suppliers.size +
                 parties.size + categories.size + units.size + associations.size +
-                adjustments.size + vouchers.size + voucherItems.size + serials.size
+                adjustments.size + vouchers.size + voucherItems.size + serials.size + serialSubUnits.size
         )
     }
 

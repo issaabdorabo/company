@@ -328,6 +328,24 @@ class CloudCollaborationRepository {
         }
     ).decodeAs<String>()
 
+    suspend fun listWorkspaceDevices(workspaceId: String): List<CloudDevice> =
+        client.postgrest["devices"].select {
+            filter { eq("workspace_id", workspaceId); eq("is_revoked", false) }
+        }.decodeList<CloudDevice>().sortedBy { it.deviceName.lowercase() }
+
+    suspend fun replaceCloudWorkspaceSnapshot(
+        workspaceId: String,
+        deviceId: String,
+        records: JsonArray
+    ): Int = client.postgrest.rpc(
+        "replace_cloud_workspace_snapshot",
+        buildJsonObject {
+            put("p_workspace", JsonPrimitive(workspaceId))
+            put("p_device", JsonPrimitive(deviceId))
+            put("p_records", records)
+        }
+    ).decodeAs<Int>()
+
     suspend fun heartbeat(deviceId: String, appState: String = "FOREGROUND") {
         client.postgrest.rpc(
             "heartbeat_device",
@@ -478,7 +496,7 @@ class CloudCollaborationRepository {
 
         val globalTypes = setOf(
             "item", "beneficiary", "supplier", "party", "category",
-            "unit", "smaller_unit", "item_status"
+            "unit", "smaller_unit", "item_status", "serial_sub_unit"
         )
         val encoded = mutableListOf<Pair<CloudEntityUpsert, Long?>>()
         entities.forEach { entity ->
