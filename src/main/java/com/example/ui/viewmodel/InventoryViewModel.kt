@@ -1538,7 +1538,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("warehouseIds", JSONArray(warehouseIds.toList()).toString())
             }
             val ack = cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                workspaceId, event, expectedSenderDeviceId = target.id
+                workspaceId, target.id, event, expectedSenderDeviceId = target.id
             )
             val accepted = ack["success"]?.jsonPrimitive?.contentOrNull == "true"
             if (!accepted) {
@@ -1614,17 +1614,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         workspaceId: String,
         operationId: String,
         success: Boolean,
-        error: String = "",
-        senderDeviceId: String = ""
+        recipientDeviceId: String,
+        error: String = ""
     ) {
+        val senderDeviceId = preferences.cloudDeviceIdFlow.first()
         cloudCollaborationRepo.broadcastWorkspaceEvent(
             workspaceId,
+            recipientDeviceId,
             buildJsonObject {
                 put("type", "ACK")
                 put("operationId", operationId)
                 put("success", success)
                 put("error", error)
-                put("senderDeviceId", senderDeviceId.ifBlank { preferences.cloudDeviceIdFlow.first() })
+                put("senderDeviceId", senderDeviceId)
             }
         )
     }
@@ -1651,14 +1653,17 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 it.isClaimed && !it.isKicked && !it.wasUnlinked &&
                     it.boundInstallationId == remoteDevice.deviceFingerprint
             } ?: error("لا يوجد جهاز فرعي مرتبط مطابق لهذا الحساب")
+            val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            require(targetDeviceId == preferences.cloudDeviceIdFlow.first()) { "العملية ليست موجهة إلى الجهاز الرئيسي الحالي" }
             syncServer.applyCloudOperation(slot.sessionToken, operationBody)
-            sendCloudAck(workspaceId, operationId, true)
+            sendCloudAck(workspaceId, operationId, true, recipientDeviceId = senderDeviceId)
         } catch (failure: Exception) {
             sendCloudAck(
                 workspaceId,
                 operationId,
                 false,
-                failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الرئيسي"
+                recipientDeviceId = senderDeviceId,
+                error = failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الرئيسي"
             )
         }
     }
@@ -1671,11 +1676,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val operationId = event["operationId"]?.jsonPrimitive?.contentOrNull ?: return
         val targetDeviceId = event["targetDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val senderUserId = event["senderUserId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val senderDeviceId = event["senderDeviceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val myDeviceId = preferences.cloudDeviceIdFlow.first()
         try {
             if (targetDeviceId != myDeviceId) return
             val workspace = cloudCollaborationRepo.getWorkspace(workspaceId)
             require(senderUserId == workspace.ownerUserId) { "العملية الواردة ليست من المستخدم الرئيسي" }
+            val verifiedMainDevice = cloudCollaborationRepo.listWorkspaceDevices(workspaceId).firstOrNull {
+                it.id == senderDeviceId && it.userId == workspace.ownerUserId && !it.isRevoked
+            } ?: error("جهاز المستخدم الرئيسي غير مسجل أو تم إيقافه")
             if (type == "PREPARE_MAIN_OPERATION") {
                 val warehouseIds = longIdsFromJson(event["warehouseIds"]?.jsonPrimitive?.contentOrNull.orEmpty())
                 // Deliver this device's offline queue before confirming readiness for a
@@ -1688,19 +1697,20 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     permissions.canViewAllWarehouses ||
                         permissions.warehousePermissions.any { it.warehouseId == id && it.canView }
                 }) { "الجهاز غير مخول للوصول إلى أحد المخازن المستهدفة" }
-                sendCloudAck(workspaceId, operationId, true)
+                sendCloudAck(workspaceId, operationId, true, recipientDeviceId = senderDeviceId)
                 return
             }
 
             val operationBody = event["operation"]?.jsonPrimitive?.contentOrNull.orEmpty()
             applyMainOperationLocally(operationId, operationBody, workspaceId)
-            sendCloudAck(workspaceId, operationId, true)
+            sendCloudAck(workspaceId, operationId, true, recipientDeviceId = senderDeviceId)
         } catch (failure: Exception) {
             sendCloudAck(
                 workspaceId,
                 operationId,
                 false,
-                failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الفرعي"
+                recipientDeviceId = senderDeviceId,
+                error = failure.localizedMessage ?: "تعذر تطبيق العملية على الجهاز الفرعي"
             )
         }
     }
@@ -1779,7 +1789,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     if (cloudRealtimeJob?.isActive != true) {
                         cloudRealtimeJob = viewModelScope.launch {
                             runCatching {
-                                cloudCollaborationRepo.observeWorkspaceEvents(cloudWorkspaceId).collect { event ->
+                                cloudCollaborationRepo.observeWorkspaceEvents(cloudWorkspaceId, cloudDeviceId).collect { event ->
                                     runCatching { handleCloudWorkspaceEvent(cloudWorkspaceId, event) }
                                         .onFailure { error ->
                                             _lastSyncError.value = error.localizedMessage ?: "تعذر معالجة عملية تعاون واردة"
@@ -1896,7 +1906,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 val ack = runCatching {
                     cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
-                        workspaceId, event, expectedSenderDeviceId = remoteDevice.id
+                        workspaceId, remoteDevice.id, event, expectedSenderDeviceId = remoteDevice.id
                     )
                 }.getOrElse { failure ->
                     repository.recordCloudPendingSyncFailure(
@@ -2090,6 +2100,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val senderDeviceId = preferences.cloudDeviceIdFlow.first()
         val senderUserId = cloudCollaborationRepo.currentUserIdOrNull() ?: return false
         if (workspaceId.isBlank() || senderDeviceId.isBlank()) return false
+        val workspace = runCatching { cloudCollaborationRepo.getWorkspace(workspaceId) }.getOrNull() ?: return false
+        val ownerDevice = runCatching { cloudCollaborationRepo.listWorkspaceDevices(workspaceId) }
+            .getOrNull()
+            ?.filter { it.userId == workspace.ownerUserId && !it.isRevoked }
+            ?.maxByOrNull { device ->
+                device.lastSeenAt?.let { value ->
+                    runCatching { java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrDefault(0L)
+                } ?: 0L
+            } ?: return false
+        val ownerLastSeen = ownerDevice.lastSeenAt?.let { value ->
+            runCatching { java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrDefault(0L)
+        } ?: 0L
+        if (System.currentTimeMillis() - ownerLastSeen !in 0L..45_000L) return false
 
         val pending = repository.getPendingSyncOperations()
         for (operation in pending) {
@@ -2108,10 +2131,13 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 put("operationId", operation.operationId)
                 put("senderDeviceId", senderDeviceId)
                 put("senderUserId", senderUserId)
+                put("targetDeviceId", ownerDevice.id)
                 put("operation", body.toString())
             }
             val ack = runCatching {
-                cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(workspaceId, event)
+                cloudCollaborationRepo.sendWorkspaceEventAndAwaitAck(
+                    workspaceId, ownerDevice.id, event, expectedSenderDeviceId = ownerDevice.id
+                )
             }.getOrElse { failure ->
                 repository.recordPendingSyncFailure(
                     operation.operationId,

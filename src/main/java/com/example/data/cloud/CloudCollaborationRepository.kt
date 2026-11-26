@@ -281,15 +281,17 @@ class CloudCollaborationRepository {
         const val CHAT_ATTACHMENTS_BUCKET = "chat-attachments"
     }
 
-    private fun inventoryTopic(workspaceId: String) = "workspace:$workspaceId:inventory"
+    private fun inventoryTopic(workspaceId: String, deviceId: String): String {
+        require(workspaceId.isNotBlank() && deviceId.isNotBlank()) { "بيانات قناة التعاون غير مكتملة" }
+        return "workspace:$workspaceId:device:$deviceId"
+    }
 
     /**
-     * Ephemeral, private Realtime channel. Broadcasts are transport-only and never create
-     * inventory rows in Postgres; operation durability is provided by the sender's Room outbox.
+     * Each device listens on its own private topic. Broadcasts are transient transport messages;
+     * Room outboxes provide durability and the ACK is sent only after the receiving transaction commits.
      */
-    fun observeWorkspaceEvents(workspaceId: String): Flow<JsonObject> = callbackFlow {
-        require(workspaceId.isNotBlank()) { "معرّف مساحة العمل غير صالح" }
-        val channel = client.realtime.channel(inventoryTopic(workspaceId)) {
+    fun observeWorkspaceEvents(workspaceId: String, deviceId: String): Flow<JsonObject> = callbackFlow {
+        val channel = client.realtime.channel(inventoryTopic(workspaceId, deviceId)) {
             isPrivate = true
         }
         val events = channel.broadcastFlow<JsonObject>("inventory_event")
@@ -312,9 +314,12 @@ class CloudCollaborationRepository {
         }
     }
 
-    suspend fun broadcastWorkspaceEvent(workspaceId: String, payload: JsonObject) {
-        require(workspaceId.isNotBlank()) { "معرّف مساحة العمل غير صالح" }
-        val channel = client.realtime.channel(inventoryTopic(workspaceId)) {
+    suspend fun broadcastWorkspaceEvent(
+        workspaceId: String,
+        recipientDeviceId: String,
+        payload: JsonObject
+    ) {
+        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId)) {
             isPrivate = true
         }
         try {
@@ -326,41 +331,52 @@ class CloudCollaborationRepository {
     }
 
     /**
-     * Sends one operation and keeps it in the local outbox until the target device explicitly
-     * acknowledges that Room has committed it. The server's broadcast ACK alone is not enough.
+     * Publish to one device topic and wait for the ACK on the sender's own topic.
+     * The target can never broadcast its operation payload to unrelated sub-devices.
      */
     suspend fun sendWorkspaceEventAndAwaitAck(
         workspaceId: String,
+        targetDeviceId: String,
         payload: JsonObject,
         timeoutMillis: Long = 25_000L,
         expectedSenderDeviceId: String? = null
     ): JsonObject = coroutineScope {
-        require(workspaceId.isNotBlank()) { "معرّف مساحة العمل غير صالح" }
+        val senderDeviceId = payload["senderDeviceId"]?.jsonPrimitive?.contentOrNull
+            ?: error("معرّف الجهاز المرسل غير موجود")
+        require(senderDeviceId.isNotBlank() && targetDeviceId.isNotBlank()) {
+            "معرّفات أجهزة التعاون غير مكتملة"
+        }
         val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف العملية غير موجود")
-        val channel = client.realtime.channel(inventoryTopic(workspaceId)) {
+
+        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId)) {
+            isPrivate = true
+        }
+        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId)) {
             isPrivate = true
         }
         val ack = CompletableDeferred<JsonObject>()
-        val acknowledgements = channel.broadcastFlow<JsonObject>("inventory_event")
+        val acknowledgements = senderChannel.broadcastFlow<JsonObject>("inventory_event")
         val collector = launch {
             acknowledgements.collect { response ->
                 val responseId = response["operationId"]?.jsonPrimitive?.contentOrNull
                 val type = response["type"]?.jsonPrimitive?.contentOrNull
-                val senderId = response["senderDeviceId"]?.jsonPrimitive?.contentOrNull
-                val expectedSenderMatches = expectedSenderDeviceId == null || senderId == expectedSenderDeviceId
+                val responderId = response["senderDeviceId"]?.jsonPrimitive?.contentOrNull
+                val expectedSenderMatches = expectedSenderDeviceId == null || responderId == expectedSenderDeviceId
                 if (type == "ACK" && responseId == operationId && expectedSenderMatches) {
                     ack.complete(response)
                 }
             }
         }
         try {
-            channel.subscribe(blockUntilSubscribed = true)
-            channel.broadcast(event = "inventory_event", message = payload)
+            senderChannel.subscribe(blockUntilSubscribed = true)
+            targetChannel.subscribe(blockUntilSubscribed = true)
+            targetChannel.broadcast(event = "inventory_event", message = payload)
             withTimeout(timeoutMillis) { ack.await() }
         } finally {
             collector.cancelAndJoin()
-            runCatching { client.realtime.removeChannel(channel) }
+            runCatching { client.realtime.removeChannel(targetChannel) }
+            runCatching { client.realtime.removeChannel(senderChannel) }
         }
     }
 
