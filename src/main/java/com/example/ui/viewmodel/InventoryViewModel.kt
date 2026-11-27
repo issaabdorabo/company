@@ -108,6 +108,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudCollaborationRepo = CloudCollaborationRepository()
     private val firebaseDeviceAccountsRepo = FirebaseDeviceAccountsRepository()
     private val firebaseOwnerSetupMutex = Mutex()
+    private var firebaseMainDeviceSetupUid: String? = null
     private val notificationManager = AppNotificationManager(application)
 
     private val authorizedActionRunning = AtomicBoolean(false)
@@ -512,6 +513,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private suspend fun ensureFirebaseMainDeviceRegistration() = firebaseOwnerSetupMutex.withLock {
         val user = FirebaseAuthClient.auth.currentUser ?: error("سجّل الدخول بحساب Google على الجهاز الرئيسي أولاً")
         firebaseDeviceAccountsRepo.registerCurrentAccount()
+        if (firebaseMainDeviceSetupUid == user.uid && cloudAuthorizationEnabled.value) {
+            return@withLock
+        }
         val ownerWorkspace = cloudCollaborationRepo.listMyWorkspaces()
             .firstOrNull { it.ownerUserId == user.uid }
             ?: cloudCollaborationRepo.createWorkspace("مخزني الذكي")
@@ -526,6 +530,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
         startCloudOutboxCoordinator()
         startFirebasePresenceService()
+        firebaseMainDeviceSetupUid = user.uid
     }
 
     private fun startFirebasePresenceService() {
