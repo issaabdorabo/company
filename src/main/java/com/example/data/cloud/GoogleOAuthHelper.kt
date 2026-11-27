@@ -17,9 +17,10 @@ sealed interface OAuthTokenResult {
 }
 
 object GoogleOAuthHelper {
-    // Only access the application's private Drive data area. No Gmail permissions are requested.
+    // Shared-folder collaboration requires normal Drive files and folder permissions.
+    // This is separate from Supabase chat auth; no Gmail scopes are requested.
     private const val OAUTH_SCOPE_STRING =
-        "oauth2:https://www.googleapis.com/auth/drive.appdata"
+        "oauth2:https://www.googleapis.com/auth/drive"
 
     suspend fun fetchAccessToken(context: Context, email: String): OAuthTokenResult {
         val cleanEmail = email.trim()
