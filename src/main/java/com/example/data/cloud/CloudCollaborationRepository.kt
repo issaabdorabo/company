@@ -1,6 +1,7 @@
 package com.example.data.cloud
 
 import android.util.Base64
+import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
@@ -484,7 +485,17 @@ class CloudCollaborationRepository {
     fun currentUserEmailOrNull(): String? =
         client.auth.currentSessionOrNull()?.user?.email
 
-    private suspend fun mirrorFirebaseWorkspaceAccess(workspace: CloudWorkspace) = withContext(Dispatchers.IO) {
+    private suspend fun runFirebaseMirror(label: String, action: suspend () -> Unit) {
+        try {
+            action()
+        } catch (failure: Exception) {
+            // Firebase rules are deployed separately from the Android APK. Until the
+            // project rules are published, keep the existing Supabase workflow usable.
+            Log.w("CloudCollaboration", "Firebase mirror unavailable ($label)", failure)
+        }
+    }
+
+    private suspend fun mirrorFirebaseWorkspaceAccess(workspace: CloudWorkspace) = runFirebaseMirror("workspace access") { withContext(Dispatchers.IO) {
         val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
         val db = FirebaseFirestore.getInstance()
         val workspaceRef = db.collection("workspaces").document(workspace.id)
@@ -536,7 +547,7 @@ class CloudCollaborationRepository {
             "active" to true,
             "createdAt" to FieldValue.serverTimestamp()
         )))
-    }
+    } }
 
     suspend fun listMyWorkspaces(): List<CloudWorkspace> {
         val userId = currentUserIdOrNull() ?: error("يجب ربط حساب Google أولاً")
@@ -592,7 +603,7 @@ class CloudCollaborationRepository {
             }
         ).decodeAs<String>()
 
-        withContext(Dispatchers.IO) {
+        runFirebaseMirror("device registration") { withContext(Dispatchers.IO) {
             val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
             val device = FirebaseFirestore.getInstance()
                 .collection("workspaces").document(workspaceId)
@@ -618,7 +629,7 @@ class CloudCollaborationRepository {
                     "createdAt" to FieldValue.serverTimestamp()
                 )))
             }
-        }
+        } }
         return deviceId
     }
 
@@ -652,7 +663,7 @@ class CloudCollaborationRepository {
                 put("p_app_state", JsonPrimitive(appState))
             }
         )
-        withContext(Dispatchers.IO) {
+        runFirebaseMirror("device heartbeat") { withContext(Dispatchers.IO) {
             val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
             val preferences = FirebaseFirestore.getInstance()
             // workspaceId is obtained from the registered device record in Supabase;
@@ -674,7 +685,7 @@ class CloudCollaborationRepository {
                 mapOf("lastSeenAt" to FieldValue.serverTimestamp()),
                 SetOptions.merge()
             ))
-        }
+        } }
     }
 
     private suspend fun deviceWorkspaceId(deviceId: String): String {
@@ -901,7 +912,7 @@ class CloudCollaborationRepository {
             }
         ).decodeAs<String>()
 
-        withContext(Dispatchers.IO) {
+        runFirebaseMirror("email invitation") { withContext(Dispatchers.IO) {
             val owner = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
             val normalizedEmail = email.trim().lowercase()
             val expiry = Timestamp(java.util.Date(System.currentTimeMillis() + 30L * 24L * 60L * 60L * 1000L))
@@ -916,7 +927,7 @@ class CloudCollaborationRepository {
                     "expiresAt" to expiry,
                     "createdBy" to owner.uid
                 ), SetOptions.merge()))
-        }
+        } }
         return memberId
     }
 
