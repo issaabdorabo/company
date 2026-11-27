@@ -5,6 +5,7 @@ import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
+import com.google.firebase.storage.FirebaseStorage
 
 import com.example.data.sync.LocalSyncJson
 import com.example.data.model.Warehouse
@@ -1020,7 +1021,7 @@ class CloudCollaborationRepository {
                 setWarehousePermissions(workspaceId, warehouse.id, userId, changed, false)
             }
         }
-        userIds.size
+        return userIds.size
     }
 
     suspend fun syncLinkedDevicePermissionsToCloud(workspaceId: String, slot: LinkedSubDevice): Int {
@@ -1059,7 +1060,7 @@ class CloudCollaborationRepository {
                 setWarehousePermissions(workspaceId, warehouse.id, userId, permissions, grant?.canWorkOffline == true && canView)
             }
         }
-        userIds.size
+        return userIds.size
     }
 
     fun observeMessages(conversationId: String): Flow<Unit> = flow { emit(Unit) }
