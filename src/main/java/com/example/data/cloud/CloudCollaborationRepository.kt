@@ -274,7 +274,7 @@ private data class SendMessageParams(
 /**
  * Authenticated cloud collaboration API. All privileged writes go through SECURITY DEFINER
  * RPCs that validate auth.uid(), workspace membership, warehouse permissions and device identity.
- * The Android application only contains the Supabase publishable key.
+ * Collaboration identity, metadata, pairing and chat are stored in Firebase Realtime Database.
  */
 class CloudCollaborationRepository {
 
@@ -790,7 +790,7 @@ class CloudCollaborationRepository {
     }
 
     /**
-     * Transitional Firebase mirror for the collaboration metadata being moved off Supabase.
+     * Firebase metadata storage for workspace warehouses and member permissions.
      * Inventory rows and operation payloads are deliberately excluded.
      */
     suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> {
