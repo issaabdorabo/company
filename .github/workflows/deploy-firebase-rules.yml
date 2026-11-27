@@ -1,0 +1,54 @@
+name: Deploy Firebase Firestore Rules
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "feature/email-google-drive-shared-sync"
+    paths:
+      - "firestore.rules"
+      - "firebase.json"
+      - ".firebaserc"
+      - ".github/workflows/deploy-firebase-rules.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-rules-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-firestore-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Configure Firebase service account
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FIREBASE_SERVICE_ACCOUNT}" ]; then
+            echo "::error::GitHub secret FIREBASE_SERVICE_ACCOUNT is missing."
+            exit 1
+          fi
+          CREDENTIAL_FILE="$RUNNER_TEMP/firebase-service-account.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$CREDENTIAL_FILE"
+          chmod 600 "$CREDENTIAL_FILE"
+          node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" "$CREDENTIAL_FILE"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$CREDENTIAL_FILE" >> "$GITHUB_ENV"
+          echo "Firebase service-account JSON validated."
+
+      - name: Deploy Firestore security rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@latest deploy --only firestore:rules --project mkhzny-c1402 --non-interactive
