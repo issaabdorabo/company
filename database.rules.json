@@ -93,6 +93,7 @@
     },
     "deviceLinkInvites": {
       "$candidateUid": {
+        ".read": "auth != null && auth.uid === $candidateUid",
         "$workspaceId": {
           ".read": "auth != null && auth.uid === $candidateUid",
           ".write": "auth != null && (auth.uid === $candidateUid || root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid)"
