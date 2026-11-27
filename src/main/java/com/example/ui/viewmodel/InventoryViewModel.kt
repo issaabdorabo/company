@@ -1020,6 +1020,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 return@launch
             }
             require(slot.pairingExpiresAt > System.currentTimeMillis()) { "انتهت صلاحية رمز الربط. أعد إصدار الرمز." }
+            // Refresh the Firebase listener whenever this QR token is shown or re-issued.
+            startCloudOutboxCoordinator()
             val credentials = CreatedDeviceCredentials(
                 deviceSlotId = slot.id,
                 deviceName = slot.deviceName,
@@ -1289,13 +1291,19 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 require(payload.isCloudPairing) { "رمز الربط السحابي غير مكتمل" }
                 val userId = cloudCollaborationRepo.currentUserIdOrNull()
                     ?: error("سجّل الدخول بحساب الجهاز الفرعي في شاشة التعاون السحابي أولاً")
-                val workspace = cloudCollaborationRepo.getWorkspace(payload.cloudWorkspaceId)
+                // Resolve the email invitation before checking membership. This is required
+                // when the sub-user scans the QR directly from Device Management without
+                // first opening the cloud workspace screen.
+                val availableWorkspaces = cloudCollaborationRepo.listMyWorkspaces()
+                val invitedWorkspace = availableWorkspaces.firstOrNull { it.id == payload.cloudWorkspaceId }
+                    ?: error("لم تتم إضافة بريد حساب الجهاز الفرعي إلى مساحة العمل الرئيسية بعد")
+                val workspace = cloudCollaborationRepo.getWorkspace(invitedWorkspace.id)
                 require(workspace.ownerUserId != userId) {
                     "استخدم حساباً فرعياً مختلفاً عن حساب الجهاز الرئيسي"
                 }
                 require(cloudCollaborationRepo.listWorkspaceMembers(payload.cloudWorkspaceId)
                     .any { it.userId == userId && it.isActive }) {
-                    "هذا الحساب غير مضاف إلى مساحة تعاون الجهاز الرئيسي"
+                    "تعذر تفعيل دعوة هذا الحساب في مساحة عمل الجهاز الرئيسي. تحقق من البريد المدعو."
                 }
 
                 val savedWorkspaceId = preferences.cloudWorkspaceIdFlow.first()

@@ -116,7 +116,7 @@ enum class AppNavDestination(val titleAr: String, val icon: ImageVector) {
     AUDIT_LOG("سجل العمليات", Icons.AutoMirrored.Filled.ReceiptLong),
     SETTINGS("الإعدادات", Icons.Default.Settings),
     DEVICES("الأجهزة", Icons.Default.Devices),
-    CLOUD_COLLABORATION("التعاون السحابي", Icons.Default.Cloud)
+    CLOUD_COLLABORATION("الحسابات والصلاحيات", Icons.Default.Cloud)
 }
 
 class MainActivity : ComponentActivity() {
@@ -351,10 +351,8 @@ fun MainApp(
                                     "☁️ اتصال سحابي نشط — الربط يعمل عبر شبكات مختلفة"
                                 isCloudSyncEnabled && isSubConnected ->
                                     "☁️ متصل بالجهاز الرئيسي عبر الإنترنت"
-                                isMainDevice && serverStatus.isRunning && serverStatus.hostAddresses.isNotEmpty() ->
-                                    "🌐 خادم الربط المحلي نشط (${serverStatus.primaryAddress})"
                                 isMainDevice ->
-                                    "🌐 جاهز للربط المحلي أو تفعيل التعاون السحابي"
+                                    "☁️ الجهاز الرئيسي: الربط متاح عبر الإنترنت بعد تسجيل حساب Firebase"
                                 isSubConnected ->
                                     "🔗 متصل بالجهاز الرئيسي"
                                 else ->

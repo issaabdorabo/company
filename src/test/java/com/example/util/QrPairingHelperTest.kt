@@ -11,6 +11,23 @@ import org.robolectric.RobolectricTestRunner
 class QrPairingHelperTest {
 
     @Test
+    fun encodeAndParseCloudPairingPayload_roundTripMatches() {
+        val raw = QrPairingHelper.encodeCloudPairingPayload(
+            workspaceId = "workspace-123",
+            mainDeviceId = "main-device-456",
+            deviceSlotId = "slot-789",
+            sessionToken = "one-time-secret"
+        )
+        val parsed = QrPairingHelper.parsePairingQr(raw)
+        assertNotNull(parsed)
+        assertEquals(true, parsed!!.isCloudPairing)
+        assertEquals("workspace-123", parsed.cloudWorkspaceId)
+        assertEquals("main-device-456", parsed.mainCloudDeviceId)
+        assertEquals("slot-789", parsed.deviceSlotId)
+        assertEquals("one-time-secret", parsed.sessionToken)
+    }
+
+    @Test
     fun encodeAndParsePairingPayload_roundTripMatches() {
         val raw = QrPairingHelper.encodePairingPayload(
             hostAddress = " 192.168.1.44:8765 ",
