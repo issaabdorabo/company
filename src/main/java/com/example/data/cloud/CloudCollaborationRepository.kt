@@ -324,43 +324,31 @@ class CloudCollaborationRepository {
     ): Flow<JsonObject> = callbackFlow {
         val secrets = transportSecrets.filter { it.isNotBlank() }.distinct()
         require(secrets.isNotEmpty()) { "مفتاح قناة التعاون غير متوفر" }
-        val channels = secrets.map { secret ->
-            secret to client.realtime.channel(inventoryTopic(workspaceId, deviceId, secret)) { isPrivate = true }
-        }
-        val collectors = mutableListOf<Job>()
-        try {
-            channels.forEach { (secret, channel) ->
-                val events = channel.broadcastFlow<JsonObject>("inventory_event")
-                collectors += launch {
-                    events.collect { envelope ->
-                        val decoded = decryptInventoryEnvelope(workspaceId, deviceId, secret, envelope)
-                        if (decoded != null) {
-                            val authenticatedEvent = buildJsonObject {
-                                decoded.forEach { (key, value) -> put(key, value) }
-                                // Local-only metadata: this is the exact pairing secret used to
-                                // decrypt the frame, never a field transmitted over Realtime.
-                                put("_transportSecret", secret)
-                            }
-                            trySend(authenticatedEvent).isSuccess
-                        }
-                    }
+        val ref = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+            .child("workspaceEvents").child(workspaceId).child(deviceId)
+        val listener = object : com.google.firebase.database.ChildEventListener {
+            override fun onChildAdded(snapshot: com.google.firebase.database.DataSnapshot, previousChildName: String?) {
+                val raw = snapshot.child("envelope").getValue(String::class.java) ?: return
+                val envelope = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return
+                val decoded = secrets.firstNotNullOfOrNull { secret ->
+                    decryptInventoryEnvelope(workspaceId, deviceId, secret, envelope)?.let { secret to it }
+                } ?: return
+                val authenticatedEvent = buildJsonObject {
+                    decoded.second.forEach { (key, value) -> put(key, value) }
+                    put("_transportSecret", decoded.first)
                 }
+                trySend(authenticatedEvent)
+                snapshot.ref.removeValue()
             }
-            channels.forEach { (_, channel) -> channel.subscribe(blockUntilSubscribed = true) }
-        } catch (failure: Exception) {
-            collectors.forEach { it.cancel() }
-            channels.forEach { (_, channel) -> runCatching { client.realtime.removeChannel(channel) } }
-            close(failure)
-            return@callbackFlow
-        }
-        awaitClose {
-            collectors.forEach { it.cancel() }
-            CoroutineScope(Dispatchers.IO).launch {
-                channels.forEach { (_, channel) ->
-                    runCatching { client.realtime.removeChannel(channel) }
-                }
+            override fun onChildChanged(snapshot: com.google.firebase.database.DataSnapshot, previousChildName: String?) = Unit
+            override fun onChildRemoved(snapshot: com.google.firebase.database.DataSnapshot) = Unit
+            override fun onChildMoved(snapshot: com.google.firebase.database.DataSnapshot, previousChildName: String?) = Unit
+            override fun onCancelled(error: com.google.firebase.database.DatabaseError) {
+                close(error.toException())
             }
         }
+        ref.addChildEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
     }
 
     private fun inventoryKey(workspaceId: String, transportSecret: String): SecretKeySpec {
@@ -417,22 +405,20 @@ class CloudCollaborationRepository {
         recipientDeviceId: String,
         payload: JsonObject,
         transportSecret: String
-    ) {
-        val channel = client.realtime.channel(inventoryTopic(workspaceId, recipientDeviceId, transportSecret)) { isPrivate = true }
-        try {
-            channel.subscribe(blockUntilSubscribed = true)
-            channel.broadcast(
-                event = "inventory_event",
-                message = encryptInventoryEnvelope(workspaceId, recipientDeviceId, transportSecret, payload)
-            )
-        } finally {
-            runCatching { client.realtime.removeChannel(channel) }
-        }
+    ) = withContext(Dispatchers.IO) {
+        val envelope = encryptInventoryEnvelope(workspaceId, recipientDeviceId, transportSecret, payload)
+        val ref = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+            .child("workspaceEvents").child(workspaceId).child(recipientDeviceId).push()
+        Tasks.await(ref.setValue(mapOf(
+            "envelope" to envelope.toString(),
+            "createdAt" to ServerValue.TIMESTAMP
+        )))
     }
 
     /**
-     * Publish to one device topic and wait for the ACK on the sender's own topic.
-     * The target can never broadcast its operation payload to unrelated sub-devices.
+     * Deliver an encrypted request through Firebase RTDB and wait for its matching ACK.
+     * This transport works across independent internet connections; it does not use LAN,
+     * IP addresses, Wi-Fi discovery, or a phone hotspot.
      */
     suspend fun sendWorkspaceEventAndAwaitAck(
         workspaceId: String,
@@ -449,35 +435,45 @@ class CloudCollaborationRepository {
         }
         val operationId = payload["operationId"]?.jsonPrimitive?.contentOrNull
             ?: error("معرّف العملية غير موجود")
-
-        val senderChannel = client.realtime.channel(inventoryTopic(workspaceId, senderDeviceId, transportSecret)) { isPrivate = true }
-        val targetChannel = client.realtime.channel(inventoryTopic(workspaceId, targetDeviceId, transportSecret)) { isPrivate = true }
+        val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+            .child("workspaceEvents").child(workspaceId)
+        val senderRef = root.child(senderDeviceId)
+        val targetRef = root.child(targetDeviceId).push()
         val ack = CompletableDeferred<JsonObject>()
-        val acknowledgements = senderChannel.broadcastFlow<JsonObject>("inventory_event")
-        val collector = launch {
-            acknowledgements.collect { envelope ->
-                val response = decryptInventoryEnvelope(workspaceId, senderDeviceId, transportSecret, envelope) ?: return@collect
+        val listener = object : com.google.firebase.database.ChildEventListener {
+            override fun onChildAdded(snapshot: com.google.firebase.database.DataSnapshot, previousChildName: String?) {
+                val raw = snapshot.child("envelope").getValue(String::class.java) ?: return
+                val envelope = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return
+                val response = decryptInventoryEnvelope(workspaceId, senderDeviceId, transportSecret, envelope) ?: return
                 val responseId = response["operationId"]?.jsonPrimitive?.contentOrNull
                 val type = response["type"]?.jsonPrimitive?.contentOrNull
                 val responderId = response["senderDeviceId"]?.jsonPrimitive?.contentOrNull
-                val expectedSenderMatches = expectedSenderDeviceId == null || responderId == expectedSenderDeviceId
-                if (type == "ACK" && responseId == operationId && expectedSenderMatches) {
+                val senderMatches = expectedSenderDeviceId == null || responderId == expectedSenderDeviceId
+                if (type == "ACK" && responseId == operationId && senderMatches) {
                     ack.complete(response)
+                    snapshot.ref.removeValue()
                 }
             }
+            override fun onChildChanged(snapshot: com.google.firebase.database.DataSnapshot, previousChildName: String?) = Unit
+            override fun onChildRemoved(snapshot: com.google.firebase.database.DataSnapshot) = Unit
+            override fun onChildMoved(snapshot: com.google.firebase.database.DataSnapshot, previousChildName: String?) = Unit
+            override fun onCancelled(error: com.google.firebase.database.DatabaseError) {
+                ack.completeExceptionally(error.toException())
+            }
         }
+        senderRef.addChildEventListener(listener)
         try {
-            senderChannel.subscribe(blockUntilSubscribed = true)
-            targetChannel.subscribe(blockUntilSubscribed = true)
-            targetChannel.broadcast(
-                event = "inventory_event",
-                message = encryptInventoryEnvelope(workspaceId, targetDeviceId, transportSecret, payload)
-            )
+            val envelope = encryptInventoryEnvelope(workspaceId, targetDeviceId, transportSecret, payload)
+            withContext(Dispatchers.IO) {
+                Tasks.await(targetRef.setValue(mapOf(
+                    "envelope" to envelope.toString(),
+                    "createdAt" to ServerValue.TIMESTAMP
+                )))
+            }
             withTimeout(timeoutMillis) { ack.await() }
         } finally {
-            collector.cancelAndJoin()
-            runCatching { client.realtime.removeChannel(targetChannel) }
-            runCatching { client.realtime.removeChannel(senderChannel) }
+            senderRef.removeEventListener(listener)
+            withContext(Dispatchers.IO) { runCatching { Tasks.await(targetRef.removeValue()) } }
         }
     }
 
