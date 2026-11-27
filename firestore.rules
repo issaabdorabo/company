@@ -1,0 +1,187 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function workspacePath(workspaceId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId);
+    }
+
+    function memberPath(workspaceId, userId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(userId);
+    }
+
+    function isOwner(workspaceId) {
+      return signedIn()
+        && exists(workspacePath(workspaceId))
+        && get(workspacePath(workspaceId)).data.ownerUserId == uid();
+    }
+
+    function isActiveMember(workspaceId) {
+      return signedIn()
+        && exists(memberPath(workspaceId, uid()))
+        && get(memberPath(workspaceId, uid())).data.active == true;
+    }
+
+    function canAccessWorkspace(workspaceId) {
+      return isOwner(workspaceId) || isActiveMember(workspaceId);
+    }
+
+    function ownsDevice(workspaceId, deviceId) {
+      let path = /databases/$(database)/documents/workspaces/$(workspaceId)/devices/$(deviceId);
+      return signedIn() && exists(path) && get(path).data.userId == uid();
+    }
+
+    function isConversationParticipant(workspaceId, conversationId) {
+      let participantPath = /databases/$(database)/documents/workspaces/$(workspaceId)/conversations/$(conversationId)/participants/$(uid());
+      return exists(participantPath);
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && uid() == userId;
+      allow create: if signedIn()
+        && uid() == userId
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if signedIn()
+        && uid() == userId
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['displayName', 'photoUrl', 'lastSeenAt']);
+      allow delete: if false;
+    }
+
+    // The document ID is the normalized email address. Only that signed-in
+    // address can read its invitation; workspace owners create/revoke invites.
+    match /emailInvites/{email} {
+      allow read: if signedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() == email;
+      allow create, update: if signedIn()
+        && request.resource.data.email == email
+        && isOwner(request.resource.data.workspaceId);
+      allow delete: if signedIn()
+        && (isOwner(resource.data.workspaceId)
+          || (request.auth.token.email != null
+            && request.auth.token.email.lower() == email));
+    }
+
+    match /workspaces/{workspaceId} {
+      allow create: if signedIn()
+        && request.resource.data.ownerUserId == uid();
+      allow read: if canAccessWorkspace(workspaceId);
+      allow update: if isOwner(workspaceId)
+        && request.resource.data.ownerUserId == resource.data.ownerUserId;
+      allow delete: if false;
+
+      match /members/{memberId} {
+        allow read: if canAccessWorkspace(workspaceId);
+        allow create: if isOwner(workspaceId)
+          || (signedIn()
+            && memberId == uid()
+            && request.resource.data.userId == uid()
+            && request.auth.token.email != null
+            && request.resource.data.email == request.auth.token.email
+            && exists(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower()))
+            && get(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower())).data.workspaceId == workspaceId);
+        allow update, delete: if isOwner(workspaceId);
+      }
+
+      match /devices/{deviceId} {
+        allow read: if canAccessWorkspace(workspaceId);
+        allow create: if isActiveMember(workspaceId)
+          && request.resource.data.userId == uid()
+          && request.resource.data.isRevoked == false;
+        allow update: if isOwner(workspaceId)
+          || (ownsDevice(workspaceId, deviceId)
+            && request.resource.data.userId == resource.data.userId
+            && request.resource.data.isRevoked == resource.data.isRevoked
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['lastSeenAt', 'appState', 'deviceName']));
+        allow delete: if isOwner(workspaceId);
+      }
+
+      match /warehouses/{warehouseId} {
+        allow read: if canAccessWorkspace(workspaceId);
+        allow write: if isOwner(workspaceId);
+      }
+
+      match /warehouseMemberships/{grantId} {
+        allow read: if canAccessWorkspace(workspaceId);
+        allow write: if isOwner(workspaceId);
+      }
+
+      match /conversations/{conversationId} {
+        allow read: if canAccessWorkspace(workspaceId)
+          && isConversationParticipant(workspaceId, conversationId);
+        allow create: if isActiveMember(workspaceId)
+          && request.resource.data.workspaceId == workspaceId;
+        allow update: if canAccessWorkspace(workspaceId)
+          && isConversationParticipant(workspaceId, conversationId);
+        allow delete: if isOwner(workspaceId);
+
+        match /participants/{participantId} {
+          allow read: if canAccessWorkspace(workspaceId)
+            && (participantId == uid() || isOwner(workspaceId));
+          allow create, update, delete: if isOwner(workspaceId);
+        }
+
+        match /messages/{messageId} {
+          allow read: if canAccessWorkspace(workspaceId)
+            && isConversationParticipant(workspaceId, conversationId);
+          allow create: if isActiveMember(workspaceId)
+            && isConversationParticipant(workspaceId, conversationId)
+            && request.resource.data.senderUserId == uid();
+          allow update: if canAccessWorkspace(workspaceId)
+            && isConversationParticipant(workspaceId, conversationId)
+            && (resource.data.senderUserId == uid() || isOwner(workspaceId));
+          allow delete: if canAccessWorkspace(workspaceId)
+            && isConversationParticipant(workspaceId, conversationId)
+            && (resource.data.senderUserId == uid() || isOwner(workspaceId));
+        }
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if canAccessWorkspace(workspaceId)
+          && resource.data.recipientUserId == uid();
+        allow create: if isOwner(workspaceId);
+        allow update: if signedIn()
+          && resource.data.recipientUserId == uid()
+          && request.resource.data.recipientUserId == resource.data.recipientUserId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+        allow delete: if isOwner(workspaceId);
+      }
+
+      match /auditLogs/{entryId} {
+        allow read: if canAccessWorkspace(workspaceId);
+        allow create: if isActiveMember(workspaceId)
+          && request.resource.data.actorUserId == uid();
+        allow update, delete: if isOwner(workspaceId);
+      }
+
+      // Short-lived encrypted device-to-device messages and acknowledgements.
+      match /deviceEvents/{eventId} {
+        allow create: if isActiveMember(workspaceId)
+          && ownsDevice(workspaceId, request.resource.data.fromDeviceId);
+        allow read: if canAccessWorkspace(workspaceId)
+          && ownsDevice(workspaceId, resource.data.toDeviceId);
+        allow update: if canAccessWorkspace(workspaceId)
+          && ownsDevice(workspaceId, resource.data.toDeviceId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acknowledgedAt']);
+        allow delete: if isOwner(workspaceId)
+          || (ownsDevice(workspaceId, resource.data.toDeviceId));
+      }
+    }
+
+    // Deny every collection not explicitly described above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
