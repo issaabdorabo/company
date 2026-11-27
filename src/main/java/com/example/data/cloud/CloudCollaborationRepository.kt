@@ -28,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
@@ -689,18 +690,19 @@ class CloudCollaborationRepository {
      * Supabase stores only the warehouse identity needed to scope memberships and chat.
      * Operational details, stock and vouchers remain in the local Room database.
      */
-    suspend fun ensureCloudWarehouse(
-        workspaceId: String,
-        localId: Long,
-        name: String
-    ): String = client.postgrest.rpc(
-        "ensure_cloud_warehouse",
-        buildJsonObject {
-            put("p_workspace", JsonPrimitive(workspaceId))
-            put("p_local_id", JsonPrimitive(localId))
-            put("p_name", JsonPrimitive(name.trim()))
-        }
-    ).decodeAs<String>()
+    suspend fun ensureCloudWarehouse(workspaceId: String, localId: Long, name: String): String = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val ref = firebaseRoot.child("workspaces").child(workspaceId)
+        val ws = Tasks.await(ref.get())
+        require(ws.textValue("ownerUserId") == uid || ws.child("members").child(uid).boolValue("active")) { "NOT_WORKSPACE_MEMBER" }
+        val existing = Tasks.await(ref.child("warehouses").get()).children.firstOrNull { it.longValue("localId") == localId }
+        val id = existing?.key ?: UUID.randomUUID().toString()
+        Tasks.await(ref.child("warehouses").child(id).updateChildren(mapOf(
+            "warehouseId" to id, "workspaceId" to workspaceId, "localId" to localId,
+            "name" to name.trim(), "updatedAt" to ServerValue.TIMESTAMP
+        )))
+        id
+    }
 
     suspend fun ensureCloudWarehouse(workspaceId: String, warehouse: Warehouse): String =
         ensureCloudWarehouse(workspaceId, warehouse.id, warehouse.name)
@@ -996,202 +998,168 @@ class CloudCollaborationRepository {
     }
 
     suspend fun listConversations(workspaceId: String, ownerUserId: String): List<CloudConversation> {
-        val currentUserId = currentUserIdOrNull() ?: error("يجب تسجيل الدخول بحساب Google")
-        val visible = client.postgrest["conversations"].select {
-            filter { eq("workspace_id", workspaceId) }
-        }.decodeList<CloudConversation>().sortedByDescending { it.createdAt }
-
-        val directIds = visible.filter { it.conversationType == "DIRECT" }.map { it.id }
-        val participantsByConversation = directIds.associateWith { id ->
-            client.postgrest["conversation_participants"].select {
-                filter { eq("conversation_id", id) }
-            }.decodeList<ConversationParticipant>().map { it.userId }.toSet()
-        }
-        // The peer details RPC checks that the caller is a participant, then returns only
-        // the other participant's public chat identity and current device name.
-        val peersByConversation = directIds.associateWith { id ->
-            runCatching {
-                client.postgrest.rpc(
-                    "get_conversation_peer_details",
-                    buildJsonObject { put("p_conversation", JsonPrimitive(id)) }
-                ).decodeList<ConversationPeerDetails>().firstOrNull()
-            }.getOrNull()
-        }
-        val enrichedVisible = visible.map { conversation ->
-            if (conversation.conversationType != "DIRECT") return@map conversation
-            val peer = peersByConversation[conversation.id]
-            val peerName = peer?.displayName?.takeIf { it.isNotBlank() }
-                ?: peer?.email.orEmpty()
-            conversation.copy(
-                title = conversation.title.ifBlank { peerName },
-                participantDisplayName = peerName,
-                participantDeviceName = peer?.deviceName.orEmpty()
-            )
-        }
-
-        val allWarehouses = listWarehouses(workspaceId)
-        val grantsByWarehouse = allWarehouses.associate { warehouse ->
-            warehouse.id to listWarehouseMemberships(warehouse.id)
-                .filter { it.permissions["canView"]?.toString() == "true" }
-        }
-        val multiUserWarehouseIds = grantsByWarehouse.filterValues { it.size > 1 }.keys
-        if (currentUserId == ownerUserId) {
-            return enrichedVisible.filter { conversation ->
-                conversation.conversationType != "WAREHOUSE_GROUP" ||
-                    conversation.warehouseId in multiUserWarehouseIds
-            }
-        }
-
-        val assignedWarehouseIds = multiUserWarehouseIds.filter { warehouseId ->
-            grantsByWarehouse[warehouseId].orEmpty().any { it.userId == currentUserId }
-        }.toSet()
-        return enrichedVisible.filter { conversation ->
-            when (conversation.conversationType) {
-                "DIRECT" -> participantsByConversation[conversation.id].orEmpty().contains(ownerUserId)
-                "WAREHOUSE_GROUP" -> conversation.warehouseId in assignedWarehouseIds
-                else -> false
-            }
-        }
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val root = firebaseRoot.child("workspaces").child(workspaceId)
+        val snap = readFirebase(root.child("conversations"))
+        return snap.children.mapNotNull { c ->
+            val participants = c.child("participants")
+            if (participants.child(uid).getValue(Boolean::class.java) != true && uid != ownerUserId) return@mapNotNull null
+            val id = c.key ?: return@mapNotNull null
+            val peerId = participants.children.mapNotNull { it.key }.firstOrNull { it != uid }.orEmpty()
+            val peer = readFirebase(root.child("members").child(peerId))
+            val peerName = peer.textValue("displayName").ifBlank { peer.textValue("email") }
+            CloudConversation(id, workspaceId, c.textValue("conversationType"),
+                c.textValue("title").ifBlank { peerName }, c.textValue("warehouseId").ifBlank { null },
+                c.textValue("createdBy"), c.textValue("createdAt"), peerName, peer.textValue("deviceName"))
+        }.sortedByDescending { it.createdAt }
     }
 
-    suspend fun createDirectConversation(workspaceId: String, otherUserId: String): String =
-        client.postgrest.rpc(
-            "create_direct_conversation",
-            buildJsonObject {
-                put("p_workspace", JsonPrimitive(workspaceId))
-                put("p_other_user", JsonPrimitive(otherUserId))
-            }
-        ).decodeAs<String>()
+    suspend fun createDirectConversation(workspaceId: String, otherUserId: String): String = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        require(uid != otherUserId) { "CANNOT_ADD_SELF" }
+        val pair = listOf(uid, otherUserId).sorted()
+        val digest = MessageDigest.getInstance("SHA-256").digest(pair.joinToString(":").toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(32)
+        val id = "direct_" + digest
+        val ref = firebaseRoot.child("workspaces").child(workspaceId).child("conversations").child(id)
+        if (!Tasks.await(ref.get()).exists()) Tasks.await(ref.setValue(mapOf(
+            "id" to id, "workspaceId" to workspaceId, "conversationType" to "DIRECT",
+            "createdBy" to uid, "createdAt" to System.currentTimeMillis().toString(),
+            "participants" to pair.associateWith { true }
+        )))
+        id
+    }
 
     suspend fun createWarehouseConversation(
-        workspaceId: String,
-        warehouseId: String,
-        title: String
-    ): String = client.postgrest.rpc(
-        "create_warehouse_conversation",
-        buildJsonObject {
-            put("p_workspace", JsonPrimitive(workspaceId))
-            put("p_warehouse", JsonPrimitive(warehouseId))
-            put("p_title", JsonPrimitive(title))
-        }
-    ).decodeAs<String>()
+        workspaceId: String, warehouseId: String, title: String
+    ): String = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val ref = firebaseRoot.child("workspaces").child(workspaceId)
+        val grants = Tasks.await(ref.child("warehouseMemberships").child(warehouseId).get())
+        val participants = mutableMapOf<String, Boolean>(uid to true)
+        grants.children.forEach { grant -> participants[grant.key ?: return@forEach] = true }
+        val convRef = ref.child("conversations").push()
+        val id = convRef.key ?: UUID.randomUUID().toString()
+        Tasks.await(convRef.setValue(mapOf("id" to id, "workspaceId" to workspaceId,
+            "conversationType" to "WAREHOUSE_GROUP", "title" to title, "warehouseId" to warehouseId,
+            "createdBy" to uid, "createdAt" to System.currentTimeMillis().toString(),
+            "participants" to participants)))
+        id
+    }
 
-    suspend fun listMessages(conversationId: String): List<CloudMessage> {
-        val hiddenIds = client.postgrest["message_user_deletions"].select {
-            filter { eq("user_id", currentUserIdOrNull() ?: error("يجب تسجيل الدخول")) }
-        }.decodeList<MessageDeletionRow>().map { it.messageId }.toSet()
-        return client.postgrest["messages"].select {
-            filter { eq("conversation_id", conversationId) }
-        }.decodeList<CloudMessage>().filterNot { it.id in hiddenIds }.sortedBy { it.createdAt }
+    suspend fun listMessages(conversationId: String): List<CloudMessage> = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val root = firebaseRoot
+        val workspaces = Tasks.await(root.child("workspaces").get())
+        val hidden = Tasks.await(root.child("users").child(uid).child("hiddenMessages").get())
+            .children.mapNotNull { it.key }.toSet()
+        val messages = mutableListOf<CloudMessage>()
+        for (workspace in workspaces.children) {
+            val conv = workspace.child("conversations").child(conversationId)
+            if (!conv.exists()) continue
+            require(conv.child("participants").child(uid).getValue(Boolean::class.java) == true ||
+                workspace.textValue("ownerUserId") == uid) { "هذه المحادثة غير متاحة لهذا الحساب" }
+            for (m in conv.child("messages").children) {
+                val id = m.key ?: continue
+                if (id in hidden) continue
+                messages += CloudMessage(id, conversationId, m.textValue("senderUserId"),
+                    m.textValue("clientMessageId"), m.textValue("body"),
+                    m.textValue("attachmentPath").ifBlank { null }, m.textValue("createdAt"),
+                    m.textValue("editedAt").ifBlank { null }, m.textValue("replyToMessageId").ifBlank { null })
+            }
+        }
+        messages.sortedBy { it.createdAt }
     }
 
     suspend fun sendMessage(conversationId: String, body: String, replyToMessageId: String? = null): CloudMessage =
         insertMessage(conversationId, body.trim(), null, replyToMessageId)
 
-    suspend fun sendAttachment(
-        conversationId: String,
-        fileName: String,
-        mimeType: String,
-        bytes: ByteArray
-    ): CloudMessage {
+    suspend fun sendAttachment(conversationId: String, fileName: String, mimeType: String, bytes: ByteArray): CloudMessage {
         require(bytes.isNotEmpty()) { "الملف فارغ" }
         require(bytes.size <= 20 * 1024 * 1024) { "حجم المرفق يتجاوز 20 ميجابايت" }
-        val normalizedMime = mimeType.trim().lowercase()
-        val allowedMimeTypes = setOf(
-            "image/jpeg", "image/png", "image/webp", "image/gif",
-            "application/pdf", "audio/mp4", "audio/aac",
-            "audio/ogg", "audio/mpeg", "audio/webm", "audio/3gpp",
-            "application/octet-stream", "text/plain", "text/csv", "application/csv",
-            "text/markdown", "application/json", "application/xml", "text/xml",
-            "application/rtf", "text/rtf", "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.ms-powerpoint",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "application/vnd.oasis.opendocument.text",
-            "application/vnd.oasis.opendocument.spreadsheet",
-            "application/vnd.oasis.opendocument.presentation",
-            "application/zip", "application/x-zip-compressed",
-            "application/x-7z-compressed", "application/vnd.rar", "application/x-rar-compressed"
-        )
-        require(normalizedMime in allowedMimeTypes) {
-            "نوع الملف غير مدعوم. الملفات المدعومة تشمل PDF وWord وExcel وPowerPoint والنصوص وZIP والصور والتسجيلات الصوتية."
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val ext = fileName.substringAfterLast('.', "bin").lowercase().takeIf { it.matches(Regex("[a-z0-9]{1,10}")) } ?: "bin"
+        val path = "chat-attachments/" + conversationId + "/" + uid + "/" + UUID.randomUUID().toString() + "." + ext
+        val ref = FirebaseStorage.getInstance().reference.child(path)
+        withContext(Dispatchers.IO) {
+            Tasks.await(ref.putBytes(bytes, com.google.firebase.storage.StorageMetadata.Builder().setContentType(mimeType).build()))
         }
-        val userId = currentUserIdOrNull()
-            ?: error("يجب تسجيل الدخول بحساب Google أولاً")
-        val extension = fileName.substringAfterLast('.', "bin")
-            .lowercase()
-            .takeIf { it.matches(Regex("[a-z0-9]{1,10}")) } ?: "bin"
-        val path = "$conversationId/$userId/${UUID.randomUUID()}.$extension"
-        val bucket = client.storage.from(CHAT_ATTACHMENTS_BUCKET)
-        bucket.upload(path, bytes) {
-            contentType = ContentType.parse(normalizedMime)
-        }
-        return try {
-            insertMessage(conversationId, fileName.trim().ifBlank { "مرفق" }.take(180), path)
-        } catch (failure: Exception) {
-            runCatching { bucket.delete(path) }
-            throw failure
-        }
+        return try { insertMessage(conversationId, fileName.trim().ifBlank { "مرفق" }.take(180), path) }
+        catch (e: Exception) { runCatching { withContext(Dispatchers.IO) { Tasks.await(ref.delete()) } }; throw e }
     }
 
     private suspend fun insertMessage(
-        conversationId: String,
-        body: String,
-        attachmentPath: String?,
-        replyToMessageId: String? = null
-    ): CloudMessage {
-        val cleanBody = body.trim()
-        require(cleanBody.isNotBlank() && cleanBody.length <= 10_000) {
-            "الرسالة فارغة أو أطول من الحد المسموح"
+        conversationId: String, body: String, attachmentPath: String?, replyToMessageId: String? = null
+    ): CloudMessage = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val clean = body.trim()
+        require(clean.isNotBlank() && clean.length <= 10_000) { "الرسالة فارغة أو أطول من الحد المسموح" }
+        val workspaces = Tasks.await(firebaseRoot.child("workspaces").get())
+        for (ws in workspaces.children) {
+            val conv = ws.child("conversations").child(conversationId)
+            if (!conv.exists()) continue
+            require(conv.child("participants").child(uid).getValue(Boolean::class.java) == true ||
+                ws.textValue("ownerUserId") == uid) { "هذه المحادثة غير متاحة" }
+            val ref = firebaseRoot.child("workspaces").child(ws.key!!).child("conversations")
+                .child(conversationId).child("messages").push()
+            val id = ref.key ?: UUID.randomUUID().toString()
+            val now = System.currentTimeMillis().toString()
+            val clientId = UUID.randomUUID().toString()
+            Tasks.await(ref.setValue(mapOf("id" to id, "conversationId" to conversationId,
+                "senderUserId" to uid, "clientMessageId" to clientId, "body" to clean,
+                "attachmentPath" to attachmentPath, "createdAt" to now, "replyToMessageId" to replyToMessageId)))
+            return@withContext CloudMessage(id, conversationId, uid, clientId, clean, attachmentPath, now, null, replyToMessageId)
         }
-        return client.postgrest.rpc(
-            "send_message",
-            buildJsonObject {
-                put("p_conversation", JsonPrimitive(conversationId))
-                put("p_client_message_id", JsonPrimitive(UUID.randomUUID().toString()))
-                put("p_body", JsonPrimitive(cleanBody))
-                put("p_attachment_path", attachmentPath?.let(::JsonPrimitive) ?: JsonNull)
-                put("p_reply_to_message_id", replyToMessageId?.let(::JsonPrimitive) ?: JsonNull)
-            }
-        ).decodeAs<CloudMessage>()
+        error("المحادثة غير موجودة")
     }
 
     @Serializable
-    private data class MessageDeletionRow(@SerialName("message_id") val messageId: String)
+    private data class MessageDeletionRow(val messageId: String)
 
-    suspend fun hideMessageForMe(messageId: String) {
-        client.postgrest.rpc(
-            "hide_message_for_me",
-            buildJsonObject { put("p_message", JsonPrimitive(messageId)) }
-        )
+    suspend fun hideMessageForMe(messageId: String) = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        Tasks.await(firebaseRoot.child("users").child(uid).child("hiddenMessages").child(messageId).setValue(true))
     }
 
-    suspend fun editMessage(messageId: String, body: String): CloudMessage =
-        client.postgrest.rpc(
-            "edit_message",
-            buildJsonObject {
-                put("p_message", JsonPrimitive(messageId))
-                put("p_body", JsonPrimitive(body.trim()))
-            }
-        ).decodeAs<CloudMessage>()
-
-    suspend fun deleteMessage(messageId: String) {
-        val message = client.postgrest["messages"].select {
-            filter { eq("id", messageId) }
-        }.decodeSingle<CloudMessage>()
-        client.postgrest.rpc(
-            "delete_message",
-            buildJsonObject { put("p_message", JsonPrimitive(messageId)) }
-        )
-        message.attachmentPath?.takeIf { it.isNotBlank() }?.let { path ->
-            runCatching { client.storage.from(CHAT_ATTACHMENTS_BUCKET).delete(path) }
+    suspend fun editMessage(messageId: String, body: String): CloudMessage = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val clean = body.trim()
+        require(clean.isNotBlank() && clean.length <= 10_000) { "نص الرسالة غير صالح" }
+        val workspaces = Tasks.await(firebaseRoot.child("workspaces").get())
+        for (ws in workspaces.children) for (conv in ws.child("conversations").children) {
+            val m = conv.child("messages").child(messageId)
+            if (!m.exists()) continue
+            require(m.textValue("senderUserId") == uid) { "يمكن لمُرسل الرسالة تعديلها فقط" }
+            val now = System.currentTimeMillis().toString()
+            val ref = firebaseRoot.child("workspaces").child(ws.key!!).child("conversations")
+                .child(conv.key!!).child("messages").child(messageId)
+            Tasks.await(ref.updateChildren(mapOf("body" to clean, "editedAt" to now)))
+            return@withContext CloudMessage(messageId, conv.key!!, uid, m.textValue("clientMessageId"),
+                clean, m.textValue("attachmentPath").ifBlank { null }, m.textValue("createdAt"), now,
+                m.textValue("replyToMessageId").ifBlank { null })
         }
+        error("الرسالة غير موجودة")
     }
 
-    suspend fun resolveAttachmentUrl(path: String): String =
-        client.storage.from(CHAT_ATTACHMENTS_BUCKET).createSignedUrl(path, 1.hours)
+    suspend fun deleteMessage(messageId: String) = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val workspaces = Tasks.await(firebaseRoot.child("workspaces").get())
+        for (ws in workspaces.children) for (conv in ws.child("conversations").children) {
+            val m = conv.child("messages").child(messageId)
+            if (!m.exists()) continue
+            require(m.textValue("senderUserId") == uid || ws.textValue("ownerUserId") == uid) { "لا تملك صلاحية حذف هذه الرسالة" }
+            val path = m.textValue("attachmentPath")
+            Tasks.await(firebaseRoot.child("workspaces").child(ws.key!!).child("conversations")
+                .child(conv.key!!).child("messages").child(messageId).removeValue())
+            if (path.isNotBlank()) runCatching { Tasks.await(FirebaseStorage.getInstance().reference.child(path).delete()) }
+            return@withContext
+        }
+        error("الرسالة غير موجودة")
+    }
+
+    suspend fun resolveAttachmentUrl(path: String): String = withContext(Dispatchers.IO) {
+        Tasks.await(FirebaseStorage.getInstance().reference.child(path).downloadUrl).toString()
+    }
 
     suspend fun clearOfflineWarehouseDesignationsForDevice(
         workspaceId: String,
@@ -1277,29 +1245,6 @@ class CloudCollaborationRepository {
         return userIds.size
     }
 
-    fun observeMessages(conversationId: String): Flow<Unit> = callbackFlow {
-        val channel = client.realtime.channel("cloud-chat-$conversationId")
-        val inserts = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
-            table = "messages"
-            filter("conversation_id", FilterOperator.EQ, conversationId)
-        }
-        val deletes = channel.postgresChangeFlow<PostgresAction.Delete>(schema = "public") {
-            table = "messages"
-        }
-        val insertCollector = launch {
-            inserts.collect { trySend(Unit).isSuccess }
-        }
-        val deleteCollector = launch {
-            deletes.collect { trySend(Unit).isSuccess }
-        }
-        channel.subscribe(blockUntilSubscribed = true)
-        trySend(Unit)
-        awaitClose {
-            insertCollector.cancel()
-            deleteCollector.cancel()
-            CoroutineScope(Dispatchers.IO).launch {
-                runCatching { client.realtime.removeChannel(channel) }
-            }
-        }
+    fun observeMessages(conversationId: String): Flow<Unit> = flow { emit(Unit) }
     }
 }
