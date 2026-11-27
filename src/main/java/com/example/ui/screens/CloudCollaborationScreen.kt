@@ -211,7 +211,7 @@ fun CloudCollaborationScreen(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    userEmail.ifBlank { "لم يتم تسجيل الدخول إلى Supabase Auth" },
+                    userEmail.ifBlank { "لم يتم تسجيل الدخول إلى Firebase Authentication" },
                     style = MaterialTheme.typography.bodySmall
                 )
                 if (!isAuthenticated) {
@@ -451,7 +451,7 @@ fun CloudCollaborationScreen(
 
                     if (activeWorkspace != null) {
                         Text(
-                            "قاعدة المخزون محلية على كل جهاز ولا تُرفع إلى Supabase. تُستخدم Supabase للصلاحيات والمحادثات وحالة اتصال الأجهزة، وتُحفظ النسخة الاحتياطية الكاملة عبر Google Drive.",
+                            "قاعدة المخزون محلية على كل جهاز ولا تُرفع إلى Supabase. يُستخدم Firebase للصلاحيات والمحادثات وحالة اتصال الأجهزة، وتُحفظ النسخة الاحتياطية الكاملة عبر Google Drive.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
