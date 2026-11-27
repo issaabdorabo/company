@@ -463,16 +463,7 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
-                            }
-{
-                                Text(
-                                    if (isFirebaseAuthenticated) "Firebase Authentication" else "Firebase غير مرتبط",
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = if (isFirebaseAuthenticated) InfoBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
+                            }               }
                         }
                     }
                     Text(
