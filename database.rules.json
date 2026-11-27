@@ -46,5 +46,16 @@
         }
       }
     }
+    "workspaceEvents": {
+      "$workspaceId": {
+        "$deviceId": {
+          ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true)",
+          ".write": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true)",
+          "$eventId": {
+            ".validate": "newData.hasChildren(['envelope', 'createdAt']) && newData.child('envelope').isString()"
+          }
+        }
+      }
+    },
   }
 }
