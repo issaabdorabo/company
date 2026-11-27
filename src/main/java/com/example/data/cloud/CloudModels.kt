@@ -69,7 +69,8 @@ data class LinkedSubDevice(
     val warehousePermissions: List<WarehousePermission> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
-    val lastSeenAt: Long = 0L
+    val lastSeenAt: Long = 0L,
+    val pairingExpiresAt: Long = 0L
 ) {
     fun toPermissions(): DevicePermissions {
         return if (isKicked) {
