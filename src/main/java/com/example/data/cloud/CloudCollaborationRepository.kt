@@ -597,16 +597,27 @@ class CloudCollaborationRepository {
             val device = FirebaseFirestore.getInstance()
                 .collection("workspaces").document(workspaceId)
                 .collection("devices").document(deviceId)
-            Tasks.await(device.set(mapOf(
-                "workspaceId" to workspaceId,
-                "userId" to user.uid,
-                "deviceName" to deviceName.trim().ifBlank { "جهاز Android" },
-                "deviceFingerprint" to stableFingerprint,
-                "isRevoked" to false,
-                "appState" to "FOREGROUND",
-                "lastSeenAt" to FieldValue.serverTimestamp(),
-                "createdAt" to FieldValue.serverTimestamp()
-            ), SetOptions.merge()))
+            val existing = Tasks.await(device.get())
+            val cleanDeviceName = deviceName.trim().ifBlank { "جهاز Android" }
+            if (existing.exists()) {
+                // Existing device documents may only change their live presence fields.
+                Tasks.await(device.set(mapOf(
+                    "deviceName" to cleanDeviceName,
+                    "appState" to "FOREGROUND",
+                    "lastSeenAt" to FieldValue.serverTimestamp()
+                ), SetOptions.merge()))
+            } else {
+                Tasks.await(device.set(mapOf(
+                    "workspaceId" to workspaceId,
+                    "userId" to user.uid,
+                    "deviceName" to cleanDeviceName,
+                    "deviceFingerprint" to stableFingerprint,
+                    "isRevoked" to false,
+                    "appState" to "FOREGROUND",
+                    "lastSeenAt" to FieldValue.serverTimestamp(),
+                    "createdAt" to FieldValue.serverTimestamp()
+                )))
+            }
         }
         return deviceId
     }
@@ -650,12 +661,14 @@ class CloudCollaborationRepository {
                 ?: deviceWorkspaceId(deviceId)
             val deviceRef = preferences.collection("workspaces").document(activeWorkspaceId)
                 .collection("devices").document(deviceId)
-            Tasks.await(deviceRef.update(
+            Tasks.await(deviceRef.set(
                 mapOf(
                     "userId" to user.uid,
+                    "isRevoked" to false,
                     "lastSeenAt" to FieldValue.serverTimestamp(),
                     "appState" to appState
-                )
+                ),
+                SetOptions.merge()
             ))
             Tasks.await(preferences.collection("users").document(user.uid).set(
                 mapOf("lastSeenAt" to FieldValue.serverTimestamp()),
