@@ -748,8 +748,8 @@ class CloudCollaborationRepository {
         return snap.children.mapNotNull { n ->
             val id = n.key ?: return@mapNotNull null
             CloudUserNotification(id, workspaceId, uid, n.textValue("notificationType"),
-                n.textValue("title"), n.textValue("body"), n.textValue("relatedOperationId").ifBlank { null },
-                n.textValue("readAt").ifBlank { null }, n.textValue("createdAt"))
+                n.textValue("title"), n.textValue("body"), n.textValue("relatedOperationId").takeIf { it.isNotBlank() },
+                n.textValue("readAt").takeIf { it.isNotBlank() }, n.textValue("createdAt"))
         }.sortedBy { it.createdAt }
     }
 
@@ -761,7 +761,7 @@ class CloudCollaborationRepository {
         val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId).child("operationAudit"))
         return snap.children.mapNotNull { n ->
             val id = n.key ?: return@mapNotNull null
-            CloudOperationAuditEntry(id, workspaceId, n.textValue("operationId").ifBlank { null },
+            CloudOperationAuditEntry(id, workspaceId, n.textValue("operationId").takeIf { it.isNotBlank() },
                 n.textValue("actorUserId"), n.textValue("deviceName"), n.textValue("operationType"),
                 n.textValue("title"), n.textValue("details"), n.textValue("createdAt"))
         }.sortedBy { it.createdAt }
@@ -843,7 +843,7 @@ class CloudCollaborationRepository {
             val peer = readFirebase(root.child("members").child(peerId))
             val peerName = peer.textValue("displayName").ifBlank { peer.textValue("email") }
             CloudConversation(id, workspaceId, c.textValue("conversationType"),
-                c.textValue("title").ifBlank { peerName }, c.textValue("warehouseId").ifBlank { null },
+                c.textValue("title").ifBlank { peerName }, c.textValue("warehouseId").takeIf { it.isNotBlank() },
                 c.textValue("createdBy"), c.textValue("createdAt"), peerName, peer.textValue("deviceName"))
         }.sortedByDescending { it.createdAt }
     }
@@ -899,8 +899,8 @@ class CloudCollaborationRepository {
                 if (id in hidden) continue
                 messages += CloudMessage(id, conversationId, m.textValue("senderUserId"),
                     m.textValue("clientMessageId"), m.textValue("body"),
-                    m.textValue("attachmentPath").ifBlank { null }, m.textValue("createdAt"),
-                    m.textValue("editedAt").ifBlank { null }, m.textValue("replyToMessageId").ifBlank { null })
+                    m.textValue("attachmentPath").takeIf { it.isNotBlank() }, m.textValue("createdAt"),
+                    m.textValue("editedAt").takeIf { it.isNotBlank() }, m.textValue("replyToMessageId").takeIf { it.isNotBlank() })
             }
         }
         messages.sortedBy { it.createdAt }
@@ -973,8 +973,8 @@ class CloudCollaborationRepository {
                 .child(conv.key!!).child("messages").child(messageId)
             Tasks.await(ref.updateChildren(mapOf("body" to clean, "editedAt" to now)))
             return@withContext CloudMessage(messageId, conv.key!!, uid, m.textValue("clientMessageId"),
-                clean, m.textValue("attachmentPath").ifBlank { null }, m.textValue("createdAt"), now,
-                m.textValue("replyToMessageId").ifBlank { null })
+                clean, m.textValue("attachmentPath").takeIf { it.isNotBlank() }, m.textValue("createdAt"), now,
+                m.textValue("replyToMessageId").takeIf { it.isNotBlank() })
           }
         }
         error("الرسالة غير موجودة")
