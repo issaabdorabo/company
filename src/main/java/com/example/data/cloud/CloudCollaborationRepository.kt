@@ -290,6 +290,25 @@ private data class SendMessageParams(
 class CloudCollaborationRepository {
     private val client get() = SupabaseAuthClient.client
 
+    private val firebaseRoot get() = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+
+    private suspend fun readFirebase(ref: com.google.firebase.database.DatabaseReference) =
+        withContext(Dispatchers.IO) { Tasks.await(ref.get()) }
+
+    private fun com.google.firebase.database.DataSnapshot.textValue(key: String): String =
+        child(key).getValue(String::class.java).orEmpty()
+
+    private fun com.google.firebase.database.DataSnapshot.boolValue(key: String, default: Boolean = false): Boolean =
+        child(key).getValue(Boolean::class.java) ?: default
+
+    private fun com.google.firebase.database.DataSnapshot.longValue(key: String, default: Long = 0L): Long =
+        child(key).getValue(Long::class.java) ?: default
+
+    private fun com.google.firebase.database.DataSnapshot.asCloudWorkspace(): CloudWorkspace? {
+        val idValue = key ?: return null
+        return CloudWorkspace(idValue, textValue("name"), textValue("ownerUserId"), longValue("createdAt").toString())
+    }
+
     private companion object {
         const val CHAT_ATTACHMENTS_BUCKET = "chat-attachments"
     }
@@ -477,11 +496,9 @@ class CloudCollaborationRepository {
         }
     }
 
-    fun currentUserIdOrNull(): String? =
-        client.auth.currentSessionOrNull()?.user?.id
+    fun currentUserIdOrNull(): String? = FirebaseAuthClient.currentUserIdOrNull()
 
-    fun currentUserEmailOrNull(): String? =
-        client.auth.currentSessionOrNull()?.user?.email
+    fun currentUserEmailOrNull(): String? = FirebaseAuthClient.currentUserEmailOrNull()
 
     private suspend fun runFirebaseMirror(label: String, action: suspend () -> Unit) {
         try {
@@ -554,87 +571,91 @@ class CloudCollaborationRepository {
         )))
     } }
 
-    suspend fun listMyWorkspaces(): List<CloudWorkspace> {
-        val userId = currentUserIdOrNull() ?: error("يجب ربط حساب Google أولاً")
-        val memberships = client.postgrest["workspace_members"].select {
-            filter {
-            eq("user_id", userId)
-            eq("is_active", true)
-        
+    suspend fun listMyWorkspaces(): List<CloudWorkspace> = withContext(Dispatchers.IO) {
+        val user = FirebaseAuthClient.auth.currentUser ?: error("يجب ربط حساب Google أولاً")
+        val email = user.email?.trim()?.lowercase().orEmpty()
+        val inviteKey = firebaseInviteKey(email)
+        val root = firebaseRoot
+        val invite = Tasks.await(root.child("emailInvites").child(inviteKey).get())
+        if (invite.child("active").getValue(Boolean::class.java) == true &&
+            invite.child("expiresAt").getValue(Long::class.java).let { (it ?: 0L) > System.currentTimeMillis() }) {
+            val workspaceId = invite.textValue("workspaceId")
+            if (workspaceId.isNotBlank()) {
+                val member = root.child("workspaces").child(workspaceId).child("members").child(user.uid)
+                if (!Tasks.await(member.get()).exists()) {
+                    Tasks.await(member.setValue(mapOf(
+                        "userId" to user.uid, "email" to email,
+                        "displayName" to invite.textValue("displayName").ifBlank { user.displayName.orEmpty() },
+                        "role" to "SUBUSER", "active" to true, "inviteKey" to inviteKey,
+                        "createdAt" to ServerValue.TIMESTAMP
+                    )))
+                }
             }
-        }.decodeList<CloudWorkspaceMember>()
-
-        val workspaces = memberships.mapNotNull { member ->
-            runCatching { getWorkspace(member.workspaceId) }.getOrNull()
-        }.distinctBy { it.id }
-        workspaces.forEach { mirrorFirebaseWorkspaceAccess(it) }
-        return workspaces
+        }
+        val workspaces = Tasks.await(root.child("workspaces").get())
+        workspaces.children.mapNotNull { ws ->
+            val isOwner = ws.textValue("ownerUserId") == user.uid
+            val isMember = ws.child("members").child(user.uid).boolValue("active")
+            if (isOwner || isMember) ws.asCloudWorkspace() else null
+        }
     }
 
-    suspend fun canCreateFirstWorkspace(): Boolean =
-        client.postgrest.rpc("can_create_first_workspace").decodeAs<Boolean>()
+    suspend fun canCreateFirstWorkspace(): Boolean = listMyWorkspaces().isEmpty()
 
-    suspend fun createWorkspace(name: String): CloudWorkspace {
+    suspend fun createWorkspace(name: String): CloudWorkspace = withContext(Dispatchers.IO) {
+        val user = FirebaseAuthClient.auth.currentUser ?: error("يجب تسجيل الدخول بحساب Google")
         val cleanName = name.trim()
         require(cleanName.length in 2..100) { "اسم مساحة العمل يجب أن يكون بين حرفين و100 حرف" }
-        val workspaceId = client.postgrest.rpc(
-            "create_workspace",
-            buildJsonObject { put("p_name", JsonPrimitive(cleanName)) }
-        ).decodeAs<String>()
-        val workspace = getWorkspace(workspaceId)
-        mirrorFirebaseWorkspaceAccess(workspace)
-        return workspace
+        require(listMyWorkspaces().isEmpty()) { "WORKSPACE_ALREADY_EXISTS_INVITE_REQUIRED" }
+        val ref = firebaseRoot.child("workspaces").push()
+        val id = ref.key ?: UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        Tasks.await(ref.setValue(mapOf(
+            "name" to cleanName, "ownerUserId" to user.uid, "createdAt" to now,
+            "members" to mapOf(user.uid to mapOf(
+                "userId" to user.uid, "email" to (user.email ?: "").lowercase(),
+                "displayName" to (user.displayName ?: ""), "role" to "OWNER",
+                "active" to true, "createdAt" to now
+            )),
+            "devices" to emptyMap<String, Any>(), "warehouses" to emptyMap<String, Any>(),
+            "warehouseMemberships" to emptyMap<String, Any>(), "conversations" to emptyMap<String, Any>()
+        )))
+        CloudWorkspace(id, cleanName, user.uid, now.toString())
     }
 
-    suspend fun getWorkspace(workspaceId: String): CloudWorkspace =
-        client.postgrest["workspaces"].select {
-            filter {
-            eq("id", workspaceId)
-        
-            }
-        }.decodeSingle<CloudWorkspace>()
-
-    suspend fun registerDevice(
-        workspaceId: String,
-        deviceName: String,
-        stableFingerprint: String
-    ): String {
-        val deviceId = client.postgrest.rpc(
-            "register_cloud_device",
-            buildJsonObject {
-                put("p_workspace", JsonPrimitive(workspaceId))
-                put("p_device_name", JsonPrimitive(deviceName.trim().ifBlank { "جهاز Android" }))
-                put("p_device_fingerprint", JsonPrimitive(stableFingerprint))
-            }
-        ).decodeAs<String>()
-
-        runFirebaseMirror("device registration") { withContext(Dispatchers.IO) {
-            val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
-            val device = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
-                .child("workspaces").child(workspaceId).child("devices").child(deviceId)
-            val existing = Tasks.await(device.get())
-            val cleanDeviceName = deviceName.trim().ifBlank { "جهاز Android" }
-            val values = mutableMapOf<String, Any>(
-                "deviceName" to cleanDeviceName,
-                "appState" to "FOREGROUND",
-                "lastSeenAt" to ServerValue.TIMESTAMP
-            )
-            if (!existing.exists()) values.putAll(mapOf(
-                "workspaceId" to workspaceId,
-                "userId" to user.uid,
-                "deviceFingerprint" to stableFingerprint,
-                "isRevoked" to false,
-                "createdAt" to ServerValue.TIMESTAMP
-            ))
-            Tasks.await(device.updateChildren(values))
-        } }
-        return deviceId
+    suspend fun getWorkspace(workspaceId: String): CloudWorkspace {
+        val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId))
+        return snap.asCloudWorkspace() ?: error("مساحة العمل غير موجودة")
     }
 
-    suspend fun listWorkspaceDevices(workspaceId: String): List<CloudDevice> =
-        client.postgrest["devices"].select {
-            filter { eq("workspace_id", workspaceId); eq("is_revoked", false) }
-        }.decodeList<CloudDevice>().sortedBy { it.deviceName.lowercase() }
+    suspend fun registerDevice(workspaceId: String, deviceName: String, stableFingerprint: String): String = withContext(Dispatchers.IO) {
+        val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
+        val devicesRef = firebaseRoot.child("workspaces").child(workspaceId).child("devices")
+        val all = Tasks.await(devicesRef.get())
+        val existing = all.children.firstOrNull {
+            it.textValue("userId") == user.uid && it.textValue("deviceFingerprint") == stableFingerprint && !it.boolValue("isRevoked")
+        }
+        val id = existing?.key ?: UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        Tasks.await(devicesRef.child(id).updateChildren(mapOf(
+            "workspaceId" to workspaceId, "userId" to user.uid,
+            "deviceName" to deviceName.trim().ifBlank { "جهاز Android" },
+            "deviceFingerprint" to stableFingerprint, "isRevoked" to false,
+            "appState" to "FOREGROUND", "lastSeenAt" to now,
+            "createdAt" to (existing?.longValue("createdAt") ?: now)
+        )))
+        id
+    }
+
+    suspend fun listWorkspaceDevices(workspaceId: String): List<CloudDevice> {
+        val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId).child("devices"))
+        return snap.children.mapNotNull { d ->
+            val id = d.key ?: return@mapNotNull null
+            CloudDevice(id, workspaceId, d.textValue("userId"), d.textValue("deviceName"),
+                d.textValue("deviceFingerprint"), d.boolValue("isRevoked"),
+                d.longValue("lastSeenAt").takeIf { it > 0 }?.toString(), d.longValue("createdAt").toString())
+        }.filterNot { it.isRevoked }.sortedBy { it.deviceName.lowercase() }
+    }
 
     suspend fun replaceCloudWorkspaceSnapshot(
         workspaceId: String,
@@ -649,40 +670,19 @@ class CloudCollaborationRepository {
         }
     ).decodeAs<Int>()
 
-    suspend fun heartbeat(
-        deviceId: String,
-        appState: String = "FOREGROUND",
-        workspaceId: String? = null
-    ) {
-        client.postgrest.rpc(
-            "heartbeat_device",
-            buildJsonObject {
-                put("p_device", JsonPrimitive(deviceId))
-                put("p_app_state", JsonPrimitive(appState))
-            }
-        )
-        runFirebaseMirror("device heartbeat") { withContext(Dispatchers.IO) {
-            val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
-            val activeWorkspaceId = workspaceId?.takeIf { it.isNotBlank() }
-                ?: deviceWorkspaceId(deviceId)
-            val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
-            val deviceRef = root.child("workspaces").child(activeWorkspaceId).child("devices").child(deviceId)
-            Tasks.await(deviceRef.updateChildren(mapOf(
-                "userId" to user.uid,
-                "isRevoked" to false,
-                "lastSeenAt" to ServerValue.TIMESTAMP,
-                "appState" to appState
-            )))
-            Tasks.await(root.child("users").child(user.uid)
-                .updateChildren(mapOf("lastSeenAt" to ServerValue.TIMESTAMP)))
-        } }
+    suspend fun heartbeat(deviceId: String, appState: String = "FOREGROUND", workspaceId: String? = null) = withContext(Dispatchers.IO) {
+        val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
+        val activeWorkspaceId = workspaceId?.takeIf { it.isNotBlank() } ?: deviceWorkspaceId(deviceId)
+        Tasks.await(firebaseRoot.child("workspaces").child(activeWorkspaceId).child("devices").child(deviceId)
+            .updateChildren(mapOf("userId" to user.uid, "isRevoked" to false,
+                "lastSeenAt" to ServerValue.TIMESTAMP, "appState" to appState)))
+        Tasks.await(firebaseRoot.child("users").child(user.uid).updateChildren(mapOf("lastSeenAt" to ServerValue.TIMESTAMP)))
     }
 
     private suspend fun deviceWorkspaceId(deviceId: String): String {
-        val rows = client.postgrest["devices"].select {
-            filter { eq("id", deviceId) }
-        }.decodeList<CloudDevice>()
-        return rows.firstOrNull()?.workspaceId ?: error("تعذر تحديد مساحة عمل الجهاز")
+        val workspaces = readFirebase(firebaseRoot.child("workspaces"))
+        return workspaces.children.firstOrNull { it.child("devices").child(deviceId).exists() }?.key
+            ?: error("تعذر تحديد مساحة عمل الجهاز")
     }
 
     /**
