@@ -849,77 +849,64 @@ class CloudCollaborationRepository {
         }
     }
 
-    suspend fun listWorkspaceMembers(workspaceId: String): List<CloudWorkspaceMember> =
-        client.postgrest["workspace_members"].select {
-            filter {
-                eq("workspace_id", workspaceId)
-            }
-        }.decodeList<CloudWorkspaceMember>()
+    suspend fun listWorkspaceMembers(workspaceId: String): List<CloudWorkspaceMember> {
+        val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId).child("members"))
+        return snap.children.mapNotNull { m ->
+            val uid = m.key ?: return@mapNotNull null
+            CloudWorkspaceMember(workspaceId, uid, m.textValue("role"),
+                m.textValue("displayName"), m.textValue("email"), m.boolValue("active"))
+        }
+    }
 
     /**
      * RLS restricts this result to notifications addressed to the signed-in user.
      * The workspace filter keeps the polling query scoped to the active collaboration space.
      */
-    suspend fun listMyOperationNotifications(workspaceId: String): List<CloudUserNotification> =
-        client.postgrest["user_notifications"].select {
-            filter {
-                eq("workspace_id", workspaceId)
-            }
-        }.decodeList<CloudUserNotification>().sortedBy { it.createdAt }
+    suspend fun listMyOperationNotifications(workspaceId: String): List<CloudUserNotification> {
+        val uid = currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId).child("notifications").child(uid))
+        return snap.children.mapNotNull { n ->
+            val id = n.key ?: return@mapNotNull null
+            CloudUserNotification(id, workspaceId, uid, n.textValue("notificationType"),
+                n.textValue("title"), n.textValue("body"), n.textValue("relatedOperationId").ifBlank { null },
+                n.textValue("readAt").ifBlank { null }, n.textValue("createdAt"))
+        }.sortedBy { it.createdAt }
+    }
 
     /**
      * Database RLS limits audit entries to the workspace owner or users assigned to
      * the warehouses referenced by each operation.
      */
-    suspend fun listAllowedOperationAuditEntries(workspaceId: String): List<CloudOperationAuditEntry> =
-        client.postgrest["operation_audit_logs"].select {
-            filter {
-                eq("workspace_id", workspaceId)
-            }
-        }.decodeList<CloudOperationAuditEntry>().sortedBy { it.createdAt }
+    suspend fun listAllowedOperationAuditEntries(workspaceId: String): List<CloudOperationAuditEntry> {
+        val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId).child("operationAudit"))
+        return snap.children.mapNotNull { n ->
+            val id = n.key ?: return@mapNotNull null
+            CloudOperationAuditEntry(id, workspaceId, n.textValue("operationId").ifBlank { null },
+                n.textValue("actorUserId"), n.textValue("deviceName"), n.textValue("operationType"),
+                n.textValue("title"), n.textValue("details"), n.textValue("createdAt"))
+        }.sortedBy { it.createdAt }
+    }
 
     suspend fun listRegisteredWorkspaceUsers(workspaceId: String): List<CloudRegisteredUser> =
-        client.postgrest.rpc(
-            "list_registered_workspace_users",
-            buildJsonObject { put("p_workspace", JsonPrimitive(workspaceId)) }
-        ).decodeList<CloudRegisteredUser>()
+        listWorkspaceMembers(workspaceId).map { CloudRegisteredUser(it.userId, it.email, it.displayName, "") }
 
     suspend fun addMemberByEmail(
-        workspaceId: String,
-        email: String,
-        role: String = "SUBUSER",
-        displayName: String = ""
-    ): String {
-        require(email.trim().contains("@")) { "أدخل بريداً إلكترونياً صحيحاً" }
+        workspaceId: String, email: String, role: String = "SUBUSER", displayName: String = ""
+    ): String = withContext(Dispatchers.IO) {
+        val owner = FirebaseAuthClient.auth.currentUser ?: error("يجب تسجيل الدخول")
+        val workspace = Tasks.await(firebaseRoot.child("workspaces").child(workspaceId).get())
+        require(workspace.textValue("ownerUserId") == owner.uid) { "OWNER_REQUIRED" }
+        val normalized = email.trim().lowercase()
+        require(normalized.contains("@")) { "أدخل بريداً إلكترونياً صحيحاً" }
         require(role == "SUBUSER") { "دور الدعوة غير مدعوم" }
-        val memberId = client.postgrest.rpc(
-            "add_workspace_member_by_email",
-            buildJsonObject {
-                put("p_workspace", JsonPrimitive(workspaceId))
-                put("p_email", JsonPrimitive(email.trim()))
-                put("p_role", JsonPrimitive(role))
-                put("p_display_name", JsonPrimitive(displayName.trim()))
-            }
-        ).decodeAs<String>()
-
-        runFirebaseMirror("email invitation") { withContext(Dispatchers.IO) {
-            val owner = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
-            val normalizedEmail = email.trim().lowercase()
-            val inviteKey = firebaseInviteKey(normalizedEmail)
-            val expiry = System.currentTimeMillis() + 30L * 24L * 60L * 60L * 1000L
-            Tasks.await(FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
-                .child("emailInvites").child(inviteKey).updateChildren(mapOf(
-                    "email" to normalizedEmail,
-                    "workspaceId" to workspaceId,
-                    "role" to "SUBUSER",
-                    "active" to true,
-                    "displayName" to displayName.trim(),
-                    "createdAt" to ServerValue.TIMESTAMP,
-                    "expiresAt" to expiry,
-                    "createdBy" to owner.uid
-                )))
-        } }
-        return memberId
+        val key = firebaseInviteKey(normalized)
+        val expiry = System.currentTimeMillis() + 30L * 24L * 60L * 60L * 1000L
+        Tasks.await(firebaseRoot.child("emailInvites").child(key).setValue(mapOf(
+            "email" to normalized, "workspaceId" to workspaceId, "role" to role,
+            "active" to true, "displayName" to displayName.trim(),
+            "createdAt" to ServerValue.TIMESTAMP, "expiresAt" to expiry, "createdBy" to owner.uid
+        )))
+        key
     }
 
     /**
@@ -971,36 +958,41 @@ class CloudCollaborationRepository {
     } }
 
     suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> {
-        val warehouses = client.postgrest["warehouses"].select {
-            filter { eq("workspace_id", workspaceId) }
-        }.decodeList<CloudWarehouse>()
-        mirrorFirebaseWarehouses(workspaceId, warehouses)
-        return warehouses
+        val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId).child("warehouses"))
+        return snap.children.mapNotNull { w ->
+            val id = w.key ?: return@mapNotNull null
+            CloudWarehouse(id, workspaceId, w.longValue("localId").takeIf { it >= 0 }, w.textValue("name"), w.longValue("updatedAt").toString())
+        }.sortedBy { it.name.lowercase() }
     }
 
-    suspend fun listWarehouseMemberships(warehouseId: String): List<CloudWarehouseMembership> =
-        client.postgrest["warehouse_memberships"].select {
-            filter { eq("warehouse_id", warehouseId) }
-        }.decodeList<CloudWarehouseMembership>()
+    suspend fun listWarehouseMemberships(warehouseId: String): List<CloudWarehouseMembership> {
+        val workspaces = readFirebase(firebaseRoot.child("workspaces"))
+        for (workspace in workspaces.children) {
+            val grants = workspace.child("warehouseMemberships").child(warehouseId)
+            if (!grants.exists()) continue
+            return grants.children.mapNotNull { g ->
+                val uid = g.key ?: return@mapNotNull null
+                val raw = g.textValue("permissionsJson")
+                val permissions = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: JsonObject(emptyMap())
+                CloudWarehouseMembership(warehouseId, uid, permissions)
+            }
+        }
+        return emptyList()
+    }
 
     suspend fun setWarehousePermissions(
-        workspaceId: String,
-        warehouseId: String,
-        userId: String,
-        permissions: JsonObject,
-        makeDedicated: Boolean
-    ) {
-        client.postgrest.rpc(
-            "grant_warehouse_membership",
-            buildJsonObject {
-                put("p_workspace", JsonPrimitive(workspaceId))
-                put("p_warehouse", JsonPrimitive(warehouseId))
-                put("p_user", JsonPrimitive(userId))
-                put("p_permissions", permissions)
-                put("p_make_dedicated", JsonPrimitive(makeDedicated))
-            }
-        )
-        mirrorFirebaseWarehousePermission(workspaceId, warehouseId, userId, permissions)
+        workspaceId: String, warehouseId: String, userId: String,
+        permissions: JsonObject, makeDedicated: Boolean
+    ) = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
+        val ws = firebaseRoot.child("workspaces").child(workspaceId)
+        val ownerId = Tasks.await(ws.child("ownerUserId").get()).getValue(String::class.java)
+        require(ownerId == uid) { "OWNER_REQUIRED" }
+        Tasks.await(ws.child("warehouseMemberships").child(warehouseId).child(userId).updateChildren(mapOf(
+            "warehouseId" to warehouseId, "userId" to userId,
+            "permissionsJson" to permissions.toString(), "makeDedicated" to makeDedicated,
+            "updatedAt" to ServerValue.TIMESTAMP
+        )))
     }
 
     suspend fun listConversations(workspaceId: String, ownerUserId: String): List<CloudConversation> {
