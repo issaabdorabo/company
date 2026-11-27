@@ -484,29 +484,68 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Called after the user selects one of the Google accounts saved on the phone. */
+    fun signInForDeviceLinkWithGoogleToken(idToken: String) {
+        if (_firebaseAuthBusy.value) return
+        viewModelScope.launch {
+            _firebaseAuthBusy.value = true
+            try {
+                FirebaseAuthClient.signInWithGoogleIdToken(idToken)
+                finishFirebaseDeviceSignIn()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                reportFirebaseSignInFailure(failure)
+            } finally {
+                _firebaseAuthBusy.value = false
+            }
+        }
+    }
+
+    /** Retained as a fallback for any older call sites still using Credential Manager. */
     fun signInForDeviceLink(context: Context) {
         if (_firebaseAuthBusy.value) return
         viewModelScope.launch {
             _firebaseAuthBusy.value = true
             try {
                 FirebaseAuthClient.signInWithGoogle(context)
-                _firebaseSignedInEmail.value = FirebaseAuthClient.currentUserEmailOrNull().orEmpty()
-                firebaseDeviceAccountsRepo.registerCurrentAccount()
-                if (isMainDevice.value) {
-                    ensureFirebaseMainDeviceRegistration()
-                    refreshFirebaseAccountsInternal()
-                    _userMessage.emit("تم تسجيل الدخول إلى Firebase وتجهيز الجهاز الرئيسي. تظهر الآن الحسابات المسجلة لاعتمادها.")
-                } else {
-                    checkApprovedFirebaseInviteInternal()
-                    _userMessage.emit("تم تسجيل الدخول إلى Firebase. انتظر اعتماد هذا الحساب من الجهاز الرئيسي.")
-                }
+                finishFirebaseDeviceSignIn()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                _userMessage.emit("تعذر تسجيل الدخول إلى Firebase: " + (failure.localizedMessage ?: "تحقق من حساب Google والإنترنت"))
+                reportFirebaseSignInFailure(failure)
             } finally {
                 _firebaseAuthBusy.value = false
             }
+        }
+    }
+
+    private suspend fun finishFirebaseDeviceSignIn() {
+        _firebaseSignedInEmail.value = FirebaseAuthClient.currentUserEmailOrNull().orEmpty()
+        firebaseDeviceAccountsRepo.registerCurrentAccount()
+        if (isMainDevice.value) {
+            ensureFirebaseMainDeviceRegistration()
+            refreshFirebaseAccountsInternal()
+            _userMessage.emit("تم تسجيل الدخول إلى Firebase وتجهيز الجهاز الرئيسي. تظهر الآن الحسابات المسجلة لاعتمادها.")
+        } else {
+            checkApprovedFirebaseInviteInternal()
+            _userMessage.emit("تم تسجيل الدخول إلى Firebase. انتظر اعتماد هذا الحساب من الجهاز الرئيسي.")
+        }
+    }
+
+    private suspend fun reportFirebaseSignInFailure(failure: Exception) {
+        val authenticatedEmail = FirebaseAuthClient.currentUserEmailOrNull().orEmpty()
+        if (authenticatedEmail.isNotBlank()) {
+            _firebaseSignedInEmail.value = authenticatedEmail
+            _userMessage.emit(
+                "تم تسجيل الدخول بالحساب $authenticatedEmail، لكن تعذر إكمال تسجيل الجهاز في Firebase: " +
+                    (failure.localizedMessage ?: "تحقق من صلاحيات قاعدة البيانات والإنترنت")
+            )
+        } else {
+            _userMessage.emit(
+                "تعذر تسجيل الدخول إلى Firebase: " +
+                    (failure.localizedMessage ?: "تحقق من حساب Google وخدمات Google والإنترنت")
+            )
         }
     }
 

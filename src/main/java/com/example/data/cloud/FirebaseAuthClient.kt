@@ -1,9 +1,13 @@
 package com.example.data.cloud
 
 import android.content.Context
+import android.content.Intent
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
@@ -21,8 +25,27 @@ import kotlinx.coroutines.withContext
  */
 object FirebaseAuthClient {
     // OAuth Web client ID configured for the Android app in Firebase Authentication.
-    private const val WEB_CLIENT_ID =
+    const val WEB_CLIENT_ID =
         "970638159667-gbt5i1nksbafkuf4lutsipv8icjvm5tr.apps.googleusercontent.com"
+
+    /**
+     * Opens the native Google account chooser, showing Google accounts already
+     * saved on the phone and allowing the user to add another account.
+     */
+    fun googleAccountPickerIntent(context: Context): Intent {
+        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(WEB_CLIENT_ID)
+            .requestEmail()
+            .build()
+        return GoogleSignIn.getClient(context, options).signInIntent
+    }
+
+    fun googleIdTokenFromSignInResult(data: Intent?): String {
+        val account = GoogleSignIn.getSignedInAccountFromIntent(data)
+            .getResult(ApiException::class.java)
+        return account.idToken?.takeIf { it.isNotBlank() }
+            ?: error("لم تُرجع Google رمز الدخول. تحقق من إعداد Web Client ID في Firebase.")
+    }
 
     const val databaseUrl = "https://mkhzny-c1402-default-rtdb.europe-west1.firebasedatabase.app"
 
@@ -72,10 +95,15 @@ object FirebaseAuthClient {
             user.photoUrl?.toString()?.takeIf { it.isNotBlank() }?.let {
                 profile["photoUrl"] = it
             }
-            Tasks.await(
-                FirebaseDatabase.getInstance(databaseUrl).reference
-                    .child("users").child(user.uid).updateChildren(profile)
-            )
+            // Authentication is already successful at this point. A profile write
+            // must not turn a valid Google/Firebase sign-in into a reported login failure;
+            // the device directory registration below reports its own actionable errors.
+            runCatching {
+                Tasks.await(
+                    FirebaseDatabase.getInstance(databaseUrl).reference
+                        .child("users").child(user.uid).updateChildren(profile)
+                )
+            }
         }
     }
 

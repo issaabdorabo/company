@@ -1,5 +1,9 @@
 package com.example.ui.components
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -59,6 +63,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.cloud.FirebaseAuthClient
 import com.example.data.cloud.LinkedSubDevice
 import com.example.data.cloud.RegisteredFirebaseAccount
 import com.example.data.cloud.WarehousePermission
@@ -77,6 +82,32 @@ fun MultiDeviceControlSection(
     viewModel: InventoryViewModel
 ) {
     val context = LocalContext.current
+    val googleAccountPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            runCatching { FirebaseAuthClient.googleIdTokenFromSignInResult(result.data) }
+                .onSuccess { idToken -> viewModel.signInForDeviceLinkWithGoogleToken(idToken) }
+                .onFailure { failure ->
+                    Toast.makeText(
+                        context,
+                        "تعذر اختيار حساب Google: ${failure.localizedMessage ?: "حاول مرة أخرى"}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
+    }
+    val openGoogleAccountPicker = {
+        runCatching { FirebaseAuthClient.googleAccountPickerIntent(context) }
+            .onSuccess { intent -> googleAccountPicker.launch(intent) }
+            .onFailure { failure ->
+                Toast.makeText(
+                    context,
+                    "تعذر فتح قائمة حسابات Google: ${failure.localizedMessage ?: "تحقق من خدمات Google"}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+    }
     val isMainDevice by viewModel.isMainDevice.collectAsState()
     val devicePermissions by viewModel.devicePermissions.collectAsState()
     val deviceName by viewModel.deviceName.collectAsState()
@@ -186,7 +217,7 @@ fun MultiDeviceControlSection(
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Button(
-                            onClick = { viewModel.signInForDeviceLink(context) },
+                            onClick = { openGoogleAccountPicker() },
                             enabled = !firebaseAuthBusy,
                             modifier = Modifier.fillMaxWidth().testTag("firebase_device_signin_btn")
                         ) {
@@ -306,7 +337,7 @@ fun MultiDeviceControlSection(
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                             } else {
                                 Button(
-                                    onClick = { viewModel.signInForDeviceLink(context) },
+                                    onClick = { openGoogleAccountPicker() },
                                     enabled = !firebaseAuthBusy,
                                     modifier = Modifier.fillMaxWidth().testTag("firebase_device_signin_btn")
                                 ) {
