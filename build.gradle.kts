@@ -39,9 +39,9 @@ android {
   signingConfigs {
     create("stableDebug") {
       storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-      storePassword = "android"
+      storePassword = System.getenv("ANDROID_DEBUG_KEYSTORE_PASSWORD")
       keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      keyPassword = System.getenv("ANDROID_DEBUG_KEYSTORE_PASSWORD")
     }
   }
 
