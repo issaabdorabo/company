@@ -54,7 +54,7 @@ object FirebaseAuthClient {
     /**
      * Reuses the Google ID token already obtained by the shared sign-in flow.
      * This avoids opening a second Google account picker and creates the Firebase
-     * identity/profile needed for the staged migration away from Supabase.
+     * identity/profile used by Firebase collaboration services.
      */
     suspend fun signInWithGoogleIdToken(idToken: String) {
         require(idToken.isNotBlank()) { "Google ID token is empty" }
