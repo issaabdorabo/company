@@ -8,9 +8,8 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ServerValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -24,6 +23,8 @@ object FirebaseAuthClient {
     // OAuth Web client ID configured for the Android app in Firebase Authentication.
     private const val WEB_CLIENT_ID =
         "970638159667-gbt5i1nksbafkuf4lutsipv8icjvm5tr.apps.googleusercontent.com"
+
+    const val databaseUrl = "https://mkhzny-c1402-default-rtdb.europe-west1.firebasedatabase.app"
 
     val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance() }
 
@@ -66,16 +67,14 @@ object FirebaseAuthClient {
             val profile = hashMapOf<String, Any>(
                 "email" to email,
                 "displayName" to (user.displayName ?: ""),
-                "lastSeenAt" to FieldValue.serverTimestamp()
+                "lastSeenAt" to ServerValue.TIMESTAMP
             )
             user.photoUrl?.toString()?.takeIf { it.isNotBlank() }?.let {
                 profile["photoUrl"] = it
             }
             Tasks.await(
-                FirebaseFirestore.getInstance()
-                    .collection("users")
-                    .document(user.uid)
-                    .set(profile, SetOptions.merge())
+                FirebaseDatabase.getInstance(databaseUrl).reference
+                    .child("users").child(user.uid).updateChildren(profile)
             )
         }
     }

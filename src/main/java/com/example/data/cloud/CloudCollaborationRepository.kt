@@ -3,10 +3,8 @@ package com.example.data.cloud
 import android.util.Base64
 import android.util.Log
 import com.google.android.gms.tasks.Tasks
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ServerValue
 
 import io.github.jan.supabase.auth.auth
 import com.example.data.sync.LocalSyncJson
@@ -497,55 +495,57 @@ class CloudCollaborationRepository {
 
     private suspend fun mirrorFirebaseWorkspaceAccess(workspace: CloudWorkspace) = runFirebaseMirror("workspace access") { withContext(Dispatchers.IO) {
         val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
-        val db = FirebaseFirestore.getInstance()
-        val workspaceRef = db.collection("workspaces").document(workspace.id)
-        var workspaceSnapshot = Tasks.await(workspaceRef.get())
+        val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+        val workspaceRef = root.child("workspaces").child(workspace.id)
+        val workspaceSnapshot = Tasks.await(workspaceRef.get())
         val isSupabaseOwner = workspace.ownerUserId == currentUserIdOrNull()
+        val isFirebaseWorkspaceOwner =
+            workspaceSnapshot.child("ownerUserId").getValue(String::class.java) == firebaseUser.uid
 
-        // The Supabase UUID and Firebase UID are different identities. Firestore always
-        // uses the Firebase UID for document ownership and member/device IDs.
         if (!workspaceSnapshot.exists() && isSupabaseOwner) {
-            Tasks.await(workspaceRef.set(mapOf(
+            Tasks.await(workspaceRef.updateChildren(mapOf(
                 "name" to workspace.name,
                 "ownerUserId" to firebaseUser.uid,
-                "createdAt" to FieldValue.serverTimestamp()
+                "createdAt" to ServerValue.TIMESTAMP
             )))
-            workspaceSnapshot = Tasks.await(workspaceRef.get())
+        } else if (!workspaceSnapshot.exists()) {
+            return@withContext
         }
-        if (!workspaceSnapshot.exists()) return@withContext
 
-        val memberRef = workspaceRef.collection("members").document(firebaseUser.uid)
+        val memberRef = workspaceRef.child("members").child(firebaseUser.uid)
         val memberSnapshot = Tasks.await(memberRef.get())
         if (memberSnapshot.exists()) return@withContext
 
-        if (isSupabaseOwner) {
-            Tasks.await(memberRef.set(mapOf(
+        if (isSupabaseOwner || isFirebaseWorkspaceOwner) {
+            Tasks.await(memberRef.updateChildren(mapOf(
                 "userId" to firebaseUser.uid,
                 "email" to (firebaseUser.email ?: "").trim().lowercase(),
                 "displayName" to (firebaseUser.displayName ?: ""),
                 "role" to "OWNER",
                 "active" to true,
-                "createdAt" to FieldValue.serverTimestamp()
+                "createdAt" to ServerValue.TIMESTAMP
             )))
             return@withContext
         }
 
         val email = firebaseUser.email?.trim()?.lowercase().orEmpty()
         if (email.isBlank()) return@withContext
-        val inviteSnapshot = Tasks.await(db.collection("emailInvites").document(email).get())
-        val invite = inviteSnapshot.data ?: return@withContext
-        val expiresAt = invite["expiresAt"] as? Timestamp ?: return@withContext
-        if (invite["active"] != true || invite["workspaceId"] != workspace.id ||
-            expiresAt <= Timestamp.now() || invite["role"] != "SUBUSER") return@withContext
+        val inviteKey = email.replace(".", ",")
+        val invite = Tasks.await(root.child("emailInvites").child(inviteKey).get())
+        val expiresAt = invite.child("expiresAt").getValue(Long::class.java) ?: return@withContext
+        if (invite.child("active").getValue(Boolean::class.java) != true ||
+            invite.child("workspaceId").getValue(String::class.java) != workspace.id ||
+            expiresAt <= System.currentTimeMillis() ||
+            invite.child("role").getValue(String::class.java) != "SUBUSER") return@withContext
 
-        Tasks.await(memberRef.set(mapOf(
+        Tasks.await(memberRef.updateChildren(mapOf(
             "userId" to firebaseUser.uid,
             "email" to email,
-            "displayName" to (invite["displayName"] as? String).orEmpty()
+            "displayName" to invite.child("displayName").getValue(String::class.java).orEmpty()
                 .ifBlank { firebaseUser.displayName.orEmpty() },
             "role" to "SUBUSER",
             "active" to true,
-            "createdAt" to FieldValue.serverTimestamp()
+            "createdAt" to ServerValue.TIMESTAMP
         )))
     } }
 
@@ -605,30 +605,23 @@ class CloudCollaborationRepository {
 
         runFirebaseMirror("device registration") { withContext(Dispatchers.IO) {
             val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
-            val device = FirebaseFirestore.getInstance()
-                .collection("workspaces").document(workspaceId)
-                .collection("devices").document(deviceId)
+            val device = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+                .child("workspaces").child(workspaceId).child("devices").child(deviceId)
             val existing = Tasks.await(device.get())
             val cleanDeviceName = deviceName.trim().ifBlank { "جهاز Android" }
-            if (existing.exists()) {
-                // Existing device documents may only change their live presence fields.
-                Tasks.await(device.set(mapOf(
-                    "deviceName" to cleanDeviceName,
-                    "appState" to "FOREGROUND",
-                    "lastSeenAt" to FieldValue.serverTimestamp()
-                ), SetOptions.merge()))
-            } else {
-                Tasks.await(device.set(mapOf(
-                    "workspaceId" to workspaceId,
-                    "userId" to user.uid,
-                    "deviceName" to cleanDeviceName,
-                    "deviceFingerprint" to stableFingerprint,
-                    "isRevoked" to false,
-                    "appState" to "FOREGROUND",
-                    "lastSeenAt" to FieldValue.serverTimestamp(),
-                    "createdAt" to FieldValue.serverTimestamp()
-                )))
-            }
+            val values = mutableMapOf<String, Any>(
+                "deviceName" to cleanDeviceName,
+                "appState" to "FOREGROUND",
+                "lastSeenAt" to ServerValue.TIMESTAMP
+            )
+            if (!existing.exists()) values.putAll(mapOf(
+                "workspaceId" to workspaceId,
+                "userId" to user.uid,
+                "deviceFingerprint" to stableFingerprint,
+                "isRevoked" to false,
+                "createdAt" to ServerValue.TIMESTAMP
+            ))
+            Tasks.await(device.updateChildren(values))
         } }
         return deviceId
     }
@@ -665,26 +658,18 @@ class CloudCollaborationRepository {
         )
         runFirebaseMirror("device heartbeat") { withContext(Dispatchers.IO) {
             val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
-            val preferences = FirebaseFirestore.getInstance()
-            // workspaceId is obtained from the registered device record in Supabase;
-            // the app-scoped preference is the same active workspace used by the service.
             val activeWorkspaceId = workspaceId?.takeIf { it.isNotBlank() }
                 ?: deviceWorkspaceId(deviceId)
-            val deviceRef = preferences.collection("workspaces").document(activeWorkspaceId)
-                .collection("devices").document(deviceId)
-            Tasks.await(deviceRef.set(
-                mapOf(
-                    "userId" to user.uid,
-                    "isRevoked" to false,
-                    "lastSeenAt" to FieldValue.serverTimestamp(),
-                    "appState" to appState
-                ),
-                SetOptions.merge()
-            ))
-            Tasks.await(preferences.collection("users").document(user.uid).set(
-                mapOf("lastSeenAt" to FieldValue.serverTimestamp()),
-                SetOptions.merge()
-            ))
+            val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+            val deviceRef = root.child("workspaces").child(activeWorkspaceId).child("devices").child(deviceId)
+            Tasks.await(deviceRef.updateChildren(mapOf(
+                "userId" to user.uid,
+                "isRevoked" to false,
+                "lastSeenAt" to ServerValue.TIMESTAMP,
+                "appState" to appState
+            )))
+            Tasks.await(root.child("users").child(user.uid)
+                .updateChildren(mapOf("lastSeenAt" to ServerValue.TIMESTAMP)))
         } }
     }
 
@@ -915,18 +900,19 @@ class CloudCollaborationRepository {
         runFirebaseMirror("email invitation") { withContext(Dispatchers.IO) {
             val owner = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
             val normalizedEmail = email.trim().lowercase()
-            val expiry = Timestamp(java.util.Date(System.currentTimeMillis() + 30L * 24L * 60L * 60L * 1000L))
-            Tasks.await(FirebaseFirestore.getInstance().collection("emailInvites")
-                .document(normalizedEmail).set(mapOf(
+            val inviteKey = normalizedEmail.replace(".", ",")
+            val expiry = System.currentTimeMillis() + 30L * 24L * 60L * 60L * 1000L
+            Tasks.await(FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+                .child("emailInvites").child(inviteKey).updateChildren(mapOf(
                     "email" to normalizedEmail,
                     "workspaceId" to workspaceId,
                     "role" to "SUBUSER",
                     "active" to true,
                     "displayName" to displayName.trim(),
-                    "createdAt" to FieldValue.serverTimestamp(),
+                    "createdAt" to ServerValue.TIMESTAMP,
                     "expiresAt" to expiry,
                     "createdBy" to owner.uid
-                ), SetOptions.merge()))
+                )))
         } }
         return memberId
     }

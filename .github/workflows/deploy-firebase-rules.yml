@@ -1,4 +1,4 @@
-name: Deploy Firebase Firestore Rules
+name: Deploy Firebase Realtime Database Rules
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     branches:
       - "feature/email-google-drive-shared-sync"
     paths:
-      - "firestore.rules"
+      - "database.rules.json"
       - "firebase.json"
       - ".firebaserc"
       - ".github/workflows/deploy-firebase-rules.yml"
@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy-firestore-rules:
+  deploy-realtime-database-rules:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -47,8 +47,8 @@ jobs:
           echo "GOOGLE_APPLICATION_CREDENTIALS=$CREDENTIAL_FILE" >> "$GITHUB_ENV"
           echo "Firebase service-account JSON validated."
 
-      - name: Deploy Firestore security rules
+      - name: Deploy Realtime Database security rules
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes firebase-tools@latest deploy --only firestore:rules --project mkhzny-c1402 --non-interactive
+          npx --yes firebase-tools@latest deploy --only database --project mkhzny-c1402 --non-interactive
