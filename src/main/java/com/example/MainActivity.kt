@@ -173,6 +173,10 @@ fun MainApp(
     val isOperationRunning by viewModel.isOperationRunning.collectAsState()
     val isSyncingNow by viewModel.isSyncingNow.collectAsState()
     val isPairingInProgress by viewModel.isPairingInProgress.collectAsState()
+    val firebaseAuthBusy by viewModel.firebaseAuthBusy.collectAsState()
+    val isRunningDiagnostics by viewModel.isRunningDiagnostics.collectAsState()
+    val isCloudBackupBusy by viewModel.isCloudBackupBusy.collectAsState()
+    val cloudSyncOperationLabel by viewModel.cloudSyncOperationLabel.collectAsState()
 
     var hasAskedNotificationPermission by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -397,37 +401,6 @@ fun MainApp(
                                 }
                             }
                         }
-                        if (isOperationRunning || isSyncingNow || isPairingInProgress) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.18f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Surface(
-                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
-                                    color = MaterialTheme.colorScheme.surface,
-                                    shadowElevation = 10.dp
-                                ) {
-                                    androidx.compose.foundation.layout.Column(
-                                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        CircularProgressIndicator(strokeWidth = 4.dp)
-                                        Text(
-                                            text = when {
-                                                isPairingInProgress -> "جارٍ ربط الجهاز عبر الإنترنت ونقل البيانات..."
-                                                isSyncingNow -> "جارٍ مزامنة البيانات بين الأجهزة..."
-                                                else -> "جارٍ تنفيذ العملية..."
-                                            },
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             ) { innerPadding ->
@@ -523,6 +496,43 @@ fun MainApp(
                     }
                 }
             }
+            val showTaskProgress = isOperationRunning || isSyncingNow || isPairingInProgress ||
+                firebaseAuthBusy || isRunningDiagnostics || isCloudBackupBusy
+            if (showTaskProgress) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.22f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Surface(
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        shadowElevation = 12.dp
+                    ) {
+                        androidx.compose.foundation.layout.Column(
+                            modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            CircularProgressIndicator(strokeWidth = 4.dp, modifier = Modifier.size(42.dp))
+                            Text(
+                                text = when {
+                                    firebaseAuthBusy -> "جارٍ تسجيل الدخول والتحقق من حساب Google..."
+                                    isPairingInProgress -> "جارٍ ربط الجهاز عبر الإنترنت..."
+                                    isSyncingNow -> "جارٍ مزامنة البيانات بين الأجهزة..."
+                                    isRunningDiagnostics -> "جارٍ فحص اتصال Firebase..."
+                                    isCloudBackupBusy -> cloudSyncOperationLabel ?: "جارٍ تنفيذ النسخ الاحتياطي..."
+                                    else -> "جارٍ تنفيذ العملية..."
+                                },
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+
         }
     }
 }

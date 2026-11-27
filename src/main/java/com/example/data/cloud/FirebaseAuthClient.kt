@@ -1,13 +1,10 @@
 package com.example.data.cloud
 
 import android.content.Context
-import android.content.Intent
 import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import com.google.android.gms.tasks.Tasks
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.ApiException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
@@ -24,27 +21,24 @@ import kotlinx.coroutines.withContext
  * to authorize Google Drive backup/restore and must not be signed out as a side effect.
  */
 object FirebaseAuthClient {
-    // OAuth Web client ID configured for the Android app in Firebase Authentication.
-    const val WEB_CLIENT_ID =
-        "970638159667-gbt5i1nksbafkuf4lutsipv8icjvm5tr.apps.googleusercontent.com"
-
     /**
-     * Opens the native Google account chooser, showing Google accounts already
-     * saved on the phone and allowing the user to add another account.
+     * Uses the OAuth Web client generated from this Firebase project's
+     * google-services.json. Never reuse a client ID from another Firebase project.
      */
-    fun googleAccountPickerIntent(context: Context): Intent {
-        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(WEB_CLIENT_ID)
-            .requestEmail()
-            .build()
-        return GoogleSignIn.getClient(context, options).signInIntent
-    }
-
-    fun googleIdTokenFromSignInResult(data: Intent?): String {
-        val account = GoogleSignIn.getSignedInAccountFromIntent(data)
-            .getResult(ApiException::class.java)
-        return account.idToken?.takeIf { it.isNotBlank() }
-            ?: error("لم تُرجع Google رمز الدخول. تحقق من إعداد Web Client ID في Firebase.")
+    private fun webClientId(context: Context): String {
+        val resourceId = context.resources.getIdentifier(
+            "default_web_client_id",
+            "string",
+            context.packageName
+        )
+        if (resourceId == 0) {
+            error(
+                "إعداد تسجيل Google غير مكتمل في Firebase: ملف google-services.json لا يحتوي على " +
+                    "OAuth Web Client ID. فعّل Google من Firebase Authentication ثم نزّل الملف المحدّث."
+            )
+        }
+        return context.getString(resourceId).takeIf { it.isNotBlank() }
+            ?: error("OAuth Web Client ID في إعداد Firebase فارغ.")
     }
 
     const val databaseUrl = "https://mkhzny-c1402-default-rtdb.europe-west1.firebasedatabase.app"
@@ -58,7 +52,7 @@ object FirebaseAuthClient {
     suspend fun signInWithGoogle(context: Context) {
         val googleOption = GetGoogleIdOption.Builder()
             .setFilterByAuthorizedAccounts(false)
-            .setServerClientId(WEB_CLIENT_ID)
+            .setServerClientId(webClientId(context))
             .build()
 
         val request = GetCredentialRequest.Builder()
@@ -70,7 +64,13 @@ object FirebaseAuthClient {
             request = request,
             context = context
         )
-        val googleCredential = GoogleIdTokenCredential.createFrom(result.credential.data)
+        val credential = result.credential
+        if (credential !is CustomCredential ||
+            credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+        ) {
+            error("لم تُرجع Google بيانات اعتماد صالحة. اختر حساب Google ثم أعد المحاولة.")
+        }
+        val googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
         signInWithGoogleIdToken(googleCredential.idToken)
     }
 
