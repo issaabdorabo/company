@@ -744,19 +744,33 @@ class CloudCollaborationRepository {
     ).decodeAs<String>()
 
     suspend fun checkCloudWarehouseAccess(
-        workspaceId: String,
-        deviceId: String,
-        operationType: String,
-        warehouseIds: Set<String>
-    ): Boolean = client.postgrest.rpc(
-        "check_cloud_warehouse_access",
-        buildJsonObject {
-            put("p_workspace", JsonPrimitive(workspaceId))
-            put("p_device", JsonPrimitive(deviceId))
-            put("p_operation_type", JsonPrimitive(operationType))
-            put("p_warehouse_ids", buildJsonArray { warehouseIds.forEach { add(JsonPrimitive(it)) } })
+        workspaceId: String, deviceId: String, operationType: String, warehouseIds: Set<String>
+    ): Boolean = withContext(Dispatchers.IO) {
+        val uid = FirebaseAuthClient.currentUserIdOrNull() ?: return@withContext false
+        val ws = Tasks.await(firebaseRoot.child("workspaces").child(workspaceId).get())
+        if (ws.textValue("ownerUserId") == uid) return@withContext true
+        val device = ws.child("devices").child(deviceId)
+        if (!device.exists() || device.textValue("userId") != uid || device.boolValue("isRevoked")) return@withContext false
+        val permissionKey = when (operationType.uppercase()) {
+            "INWARD", "SUPPLY", "CREATE_SUPPLY" -> "canInward"
+            "DISBURSEMENT", "OUTWARD", "ISSUE", "CREATE_ISSUE" -> "canDisburse"
+            "TRANSFER" -> "canTransfer"
+            "ADJUST", "ADJUSTMENT" -> "canAdjust"
+            "REPORT", "REPORTS" -> "canReports"
+            "EDIT", "UPDATE" -> "canEdit"
+            "DELETE" -> "canDeleteItem"
+            else -> ""
         }
-    ).decodeAs<Boolean>()
+        warehouseIds.all { warehouseId ->
+            val grant = ws.child("warehouseMemberships").child(warehouseId).child(uid)
+            if (!grant.exists()) return@all false
+            val raw = grant.textValue("permissionsJson")
+            val perms = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return@all false
+            val canView = perms["canView"]?.jsonPrimitive?.contentOrNull == "true"
+            val allowed = permissionKey.isBlank() || perms[permissionKey]?.jsonPrimitive?.contentOrNull == "true"
+            canView && allowed
+        }
+    }
 
     suspend fun fetchCloudEntitySnapshot(workspaceId: String): List<CloudEntityRecord> =
         fetchCloudEntitySnapshotVersioned(workspaceId).records
@@ -1162,67 +1176,41 @@ class CloudCollaborationRepository {
     }
 
     suspend fun clearOfflineWarehouseDesignationsForDevice(
-        workspaceId: String,
-        deviceFingerprint: String
+        workspaceId: String, deviceFingerprint: String
     ): Int {
         if (deviceFingerprint.isBlank()) return 0
-        val registeredDevices = client.postgrest["devices"].select {
-            filter {
-                eq("workspace_id", workspaceId)
-                eq("device_fingerprint", deviceFingerprint)
-                eq("is_revoked", false)
-            }
-        }.decodeList<CloudDevice>()
-        val userIds = registeredDevices.map { it.userId }.distinct()
-        if (userIds.isEmpty()) return 0
-        val cloudWarehouses = listWarehouses(workspaceId).filter { it.localId != null }
-        val membershipsByWarehouse = cloudWarehouses.associate { warehouse ->
-            warehouse.id to listWarehouseMemberships(warehouse.id)
-        }
+        val devices = listWorkspaceDevices(workspaceId).filter { it.deviceFingerprint == deviceFingerprint }
+        val userIds = devices.map { it.userId }.distinct()
+        val warehouses = listWarehouses(workspaceId)
         userIds.forEach { userId ->
-            cloudWarehouses.forEach { warehouse ->
-                val membership = membershipsByWarehouse[warehouse.id].orEmpty()
-                    .firstOrNull { it.userId == userId } ?: return@forEach
-                setWarehousePermissions(
-                    workspaceId,
-                    warehouse.id,
-                    userId,
-                    membership.permissions,
-                    makeDedicated = false
-                )
+            warehouses.forEach { warehouse ->
+                val grant = listWarehouseMemberships(warehouse.id).firstOrNull { it.userId == userId } ?: return@forEach
+                val changed = buildJsonObject {
+                    grant.permissions.forEach { (key, value) -> put(key, value) }
+                    put("canWorkOffline", false)
+                }
+                setWarehousePermissions(workspaceId, warehouse.id, userId, changed, false)
             }
         }
-        return userIds.size
+        userIds.size
     }
 
-    suspend fun syncLinkedDevicePermissionsToCloud(
-        workspaceId: String,
-        slot: LinkedSubDevice
-    ): Int {
+    suspend fun syncLinkedDevicePermissionsToCloud(workspaceId: String, slot: LinkedSubDevice): Int {
         if (slot.boundInstallationId.isBlank()) return 0
-        val registeredDevices = client.postgrest["devices"].select {
-            filter {
-                eq("workspace_id", workspaceId)
-                eq("device_fingerprint", slot.boundInstallationId)
-                eq("is_revoked", false)
-            }
-        }.decodeList<CloudDevice>()
-        val userIds = registeredDevices.map { it.userId }.distinct()
+        val devices = listWorkspaceDevices(workspaceId).filter {
+            it.deviceFingerprint == slot.boundInstallationId && !it.isRevoked
+        }
+        val userIds = devices.map { it.userId }.distinct()
         if (userIds.isEmpty()) return 0
-
-        val cloudWarehouses = listWarehouses(workspaceId).filter { it.localId != null }
-        val grantsByLocalId = slot.warehousePermissions.associateBy { it.warehouseId }
+        val warehouses = listWarehouses(workspaceId).filter { it.localId != null }
+        val grants = slot.warehousePermissions.associateBy { it.warehouseId }
         userIds.forEach { userId ->
-            cloudWarehouses.forEach { warehouse ->
-                val localWarehouseId = warehouse.localId ?: return@forEach
-                val grant = grantsByLocalId[localWarehouseId]
-                val canView = !slot.isKicked &&
-                    (slot.canViewAllWarehouses || grant?.canView == true)
+            warehouses.forEach { warehouse ->
+                val localId = warehouse.localId ?: return@forEach
+                val grant = grants[localId]
+                val canView = !slot.isKicked && (slot.canViewAllWarehouses || grant?.canView == true)
                 val permissions = buildJsonObject {
                     put("canView", canView)
-                    // Warehouse-level grants are authoritative when present. Do not
-                    // intersect them with legacy device-wide toggles: doing so silently
-                    // revokes a grant when the old global flag was never enabled.
                     put("canInward", canView && (grant?.canInward ?: slot.canInward))
                     put("canDisburse", canView && (grant?.canDisburse ?: slot.canDisburse))
                     put("canTransfer", canView && (grant?.canTransfer == true))
@@ -1238,11 +1226,12 @@ class CloudCollaborationRepository {
                     put("canAddItems", canView && slot.canAddItems)
                     put("canEditCatalogItems", canView && slot.canEditCatalogItems)
                     put("canBackup", canView && slot.canBackup)
+                    put("canWorkOffline", canView && grant?.canWorkOffline == true)
                 }
-                setWarehousePermissions(workspaceId, warehouse.id, userId, permissions, grant?.canWorkOffline == true && grant.canView)
+                setWarehousePermissions(workspaceId, warehouse.id, userId, permissions, grant?.canWorkOffline == true && canView)
             }
         }
-        return userIds.size
+        userIds.size
     }
 
     fun observeMessages(conversationId: String): Flow<Unit> = flow { emit(Unit) }
