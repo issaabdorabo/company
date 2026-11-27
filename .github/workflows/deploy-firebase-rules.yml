@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - "feature/email-google-drive-shared-sync"
+      - "firebase-only-migration"
     paths:
       - "database.rules.json"
       - "firebase.json"
