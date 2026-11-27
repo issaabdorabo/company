@@ -531,6 +531,7 @@ class UserPreferencesManager(private val context: Context) {
             device.put("sessionToken", UUID.randomUUID().toString())
             device.put("boundInstallationId", "")
             device.put("isClaimed", false)
+            device.put("pairingExpiresAt", 0L)
         }
         return devices.toString()
     }
@@ -599,6 +600,7 @@ class UserPreferencesManager(private val context: Context) {
                     put("createdAt", d.createdAt)
                     put("updatedAt", d.updatedAt)
                     put("lastSeenAt", d.lastSeenAt)
+                    put("pairingExpiresAt", d.pairingExpiresAt)
                 }
             )
         }
