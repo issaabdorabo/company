@@ -617,7 +617,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "فحص سلامة قاعدة البيانات وخادم الربط",
+                            text = "فحص سلامة قاعدة البيانات واتصال Firebase",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )

@@ -90,7 +90,8 @@ class FirebaseDeviceAccountsRepository {
             "deviceName" to deviceName,
             "approved" to true,
             "approvedBy" to owner.uid,
-            "createdAt" to now
+            "createdAt" to now,
+            "expiresAt" to (System.currentTimeMillis() + 10L * 60L * 1000L)
         )
         val updates = hashMapOf<String, Any>(
             "/workspaces/$workspaceId/members/\${candidate.userId}" to member,
@@ -104,6 +105,8 @@ class FirebaseDeviceAccountsRepository {
         val invites = Tasks.await(root.child("deviceLinkInvites").child(user.uid).get())
         for (entry in invites.children) {
             if (entry.child("approved").getValue(Boolean::class.java) != true) continue
+            val expiresAt = entry.child("expiresAt").getValue(Long::class.java) ?: 0L
+            if (expiresAt <= System.currentTimeMillis()) continue
             val workspaceId = entry.child("workspaceId").getValue(String::class.java).orEmpty()
             if (workspaceId.isBlank()) continue
             val member = Tasks.await(root.child("workspaces").child(workspaceId).child("members").child(user.uid).get())

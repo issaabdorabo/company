@@ -1,11 +1,6 @@
 package com.example.ui.components
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,18 +21,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
-import androidx.compose.material.icons.filled.QrCode2
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -58,30 +48,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.LinkedSubDevice
+import com.example.data.cloud.RegisteredFirebaseAccount
 import com.example.data.cloud.WarehousePermission
 import com.example.data.model.Warehouse
 import com.example.ui.theme.DangerRed
-import com.example.ui.theme.InfoBlue
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 import com.example.ui.viewmodel.InventoryViewModel
-import com.example.util.QrPairingHelper
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -92,58 +77,41 @@ fun MultiDeviceControlSection(
     viewModel: InventoryViewModel
 ) {
     val context = LocalContext.current
-
     val isMainDevice by viewModel.isMainDevice.collectAsState()
     val devicePermissions by viewModel.devicePermissions.collectAsState()
-    val workspaceCode by viewModel.workspaceCode.collectAsState()
-    val mainHostUrl by viewModel.mainHostUrl.collectAsState()
     val deviceName by viewModel.deviceName.collectAsState()
     val isSubConnected by viewModel.isSubConnected.collectAsState()
-    val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
+    val isFirebaseReady by viewModel.isCloudSyncEnabled.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val availableWarehouses by viewModel.warehouses.collectAsState()
-    val serverStatus by viewModel.serverStatus.collectAsState()
-    val createdCredentials by viewModel.createdDeviceCredentials.collectAsState()
-    val sessionPairingCredentials by viewModel.sessionPairingCredentials.collectAsState()
     val isPairingInProgress by viewModel.isPairingInProgress.collectAsState()
     val pairingError by viewModel.pairingError.collectAsState()
     val isSyncingNow by viewModel.isSyncingNow.collectAsState()
     val lastSyncAt by viewModel.lastSyncAt.collectAsState()
     val lastSyncError by viewModel.lastSyncError.collectAsState()
-    val pairingLockedUntil by viewModel.pairingLockedUntil.collectAsState()
+    val firebaseEmail by viewModel.firebaseSignedInEmail.collectAsState()
+    val firebaseAuthBusy by viewModel.firebaseAuthBusy.collectAsState()
+    val firebaseAccounts by viewModel.firebaseAccounts.collectAsState()
 
     var showCreateSubDialog by remember { mutableStateOf(false) }
-    var showQrScanner by remember { mutableStateOf(false) }
     var deviceToKick by remember { mutableStateOf<LinkedSubDevice?>(null) }
     var showUnlinkConfirmDialog by remember { mutableStateOf(false) }
+    var accountToApprove by remember { mutableStateOf<RegisteredFirebaseAccount?>(null) }
 
-    // Sub-device pairing inputs
-    var hostInput by remember(mainHostUrl) { mutableStateOf(mainHostUrl.removePrefix("http://")) }
-    var codeInput by remember { mutableStateOf("") }
-    var passwordInput by remember { mutableStateOf("") }
-
-    // Cooldown countdown ticker
-    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(pairingLockedUntil) {
-        while (pairingLockedUntil > System.currentTimeMillis()) {
-            nowMillis = System.currentTimeMillis()
-            delay(1000L)
+    LaunchedEffect(isMainDevice, firebaseEmail, firebaseAuthBusy) {
+        if (isMainDevice && firebaseEmail.isNotBlank() && !firebaseAuthBusy) {
+            while (true) {
+                viewModel.refreshFirebaseAccounts()
+                delay(15_000L)
+            }
         }
-        nowMillis = System.currentTimeMillis()
     }
-    val remainingLockSeconds = ((pairingLockedUntil - nowMillis) / 1000L).coerceAtLeast(0L)
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("multi_device_control_card"),
+        modifier = Modifier.fillMaxWidth().testTag("multi_device_control_card"),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Header
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = CircleShape,
@@ -151,493 +119,322 @@ fun MultiDeviceControlSection(
                     modifier = Modifier.size(38.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Devices,
-                            contentDescription = "إدارة تعدد الأجهزة",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Icon(Icons.Default.Devices, contentDescription = "إدارة الأجهزة",
+                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     }
                 }
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
+                    Text("ربط الأجهزة عبر Firebase", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        text = "ربط الأجهزة والمزامنة المباشرة (رئيسي ↔ فرعي)",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "ربط سحابي عبر الإنترنت والباركود؛ لا يحتاج الجهازان إلى شبكة واحدة أو نقطة اتصال",
+                        "تسجيل الدخول بالبريد الإلكتروني ثم اعتماد الجهاز الفرعي من الجهاز الرئيسي. يعمل عبر الإنترنت حتى مع اختلاف الشبكات.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            // Role Switcher
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (isMainDevice) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     border = if (isMainDevice) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(enabled = !isSubConnected) {
-                            if (!isMainDevice && !isSubConnected) viewModel.switchToMainDeviceMode()
-                        }
-                        .testTag("mode_main_device_btn")
+                    modifier = Modifier.weight(1f).clickable(enabled = !isSubConnected) {
+                        if (!isMainDevice && !isSubConnected) viewModel.switchToMainDeviceMode()
+                    }.testTag("mode_main_device_btn")
                 ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = if (isSubConnected) "🔒 الجهاز الرئيسي (مقفل أثناء الارتباط)" else "👑 جهاز رئيسي",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = if (isMainDevice) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "كامل الصلاحيات والإدارة",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (isSubConnected) "🔒 جهاز فرعي مرتبط" else "👑 الجهاز الرئيسي",
+                            fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                            color = if (isMainDevice) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                        Text("الإدارة والصلاحيات", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (!isMainDevice) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     border = if (!isMainDevice) BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary) else null,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(enabled = !isMainDevice || linkedSubDevices.isEmpty()) {
-                            if (isMainDevice && linkedSubDevices.isEmpty()) viewModel.switchToSubDeviceDraftMode()
-                        }
-                        .testTag("mode_sub_device_btn")
+                    modifier = Modifier.weight(1f).clickable(enabled = !isMainDevice || linkedSubDevices.isEmpty()) {
+                        if (isMainDevice && linkedSubDevices.isEmpty()) viewModel.switchToSubDeviceDraftMode()
+                    }.testTag("mode_sub_device_btn")
                 ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "🔗 جهاز فرعي",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = if (!isMainDevice) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "يتبع الجهاز الرئيسي بصلاحيات",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("🔗 جهاز فرعي", fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                            color = if (!isMainDevice) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface)
+                        Text("يعمل بصلاحيات المالك", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
 
             if (isMainDevice) {
-                // MAIN DEVICE CONTROLS — cloud pairing only; no LAN/IP/hotspot instructions.
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = if (isCloudSyncEnabled) SuccessGreen.copy(alpha = 0.08f)
-                    else WarningOrange.copy(alpha = 0.1f),
+                    color = if (firebaseEmail.isNotBlank() && isFirebaseReady) SuccessGreen.copy(alpha = 0.08f) else WarningOrange.copy(alpha = 0.1f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = if (isCloudSyncEnabled) "الربط السحابي جاهز" else "يلزم تسجيل الجهاز الرئيسي في التعاون السحابي",
+                            if (firebaseEmail.isNotBlank() && isFirebaseReady) "حساب Firebase الرئيسي متصل"
+                            else "سجّل الدخول بحساب المستخدم الرئيسي",
                             fontWeight = FontWeight.Bold,
-                            color = if (isCloudSyncEnabled) SuccessGreen else WarningOrange
+                            color = if (firebaseEmail.isNotBlank() && isFirebaseReady) SuccessGreen else WarningOrange
                         )
-                        Text(
-                            text = if (isCloudSyncEnabled)
-                                "أنشئ باركوداً لكل جهاز فرعي. امسحه من الجهاز الآخر حتى لو كان على بيانات الهاتف أو شبكة Wi-Fi مختلفة. لا تستخدم عنوان IP أو نقطة اتصال."
-                            else
-                                "لا يتم إنشاء روابط محلية أو استخدام نقطة اتصال. افتح شاشة التعاون السحابي وسجّل حساب الجهاز الرئيسي أولاً، ثم ارجع لإنشاء باركود الإنترنت.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (firebaseEmail.isNotBlank()) {
+                            Text(firebaseEmail, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        } else {
+                            Text("يستخدم هذا الحساب لاعتماد حسابات الأجهزة الفرعية والتحكم في صلاحياتها.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Button(
+                            onClick = { viewModel.signInForDeviceLink(context) },
+                            enabled = !firebaseAuthBusy,
+                            modifier = Modifier.fillMaxWidth().testTag("firebase_device_signin_btn")
+                        ) {
+                            if (firebaseAuthBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (firebaseEmail.isBlank()) "تسجيل الدخول عبر Google / Firebase" else "تحديث جلسة Firebase")
+                        }
                     }
                 }
 
                 Button(
                     onClick = { showCreateSubDialog = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("add_sub_device_btn"),
-                    enabled = isCloudSyncEnabled,
+                    enabled = firebaseEmail.isNotBlank() && isFirebaseReady && !firebaseAuthBusy,
+                    modifier = Modifier.fillMaxWidth().testTag("add_sub_device_btn"),
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("إضافة جهاز فرعي وإنشاء باركود عبر الإنترنت")
+                    Spacer(Modifier.width(6.dp))
+                    Text("إضافة جهاز فرعي وتحديد صلاحياته")
                 }
 
-                // Linked Sub-Devices List
                 HorizontalDivider()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("حسابات Firebase التي سجلت الدخول", style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { viewModel.refreshFirebaseAccounts() },
+                        enabled = firebaseEmail.isNotBlank() && !firebaseAuthBusy) {
+                        Icon(Icons.Default.Refresh, contentDescription = "تحديث قائمة الحسابات")
+                    }
+                }
                 Text(
-                    text = "الأجهزة الفرعية المسجلة (${linkedSubDevices.size})",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
+                    "سجّل المستخدم الفرعي الدخول من جهازه أولاً. سيظهر بريده هنا، ثم اختر الحساب وحدد الجهاز الذي سيستخدمه.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-
-                if (linkedSubDevices.isEmpty()) {
+                if (firebaseAccounts.isEmpty()) {
                     Text(
-                        text = "لم يتم إنشاء أجهزة فرعية بعد. اضغط على الزر أعلاه لإنشاء باركود ربط عبر الإنترنت.",
+                        if (firebaseEmail.isBlank()) "يجب تسجيل دخول المستخدم الرئيسي أولاً."
+                        else "لا توجد حسابات أخرى مسجلة حالياً. اطلب من المستخدم الفرعي تسجيل الدخول بحسابه على جهازه.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
+                    firebaseAccounts.forEach { account ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(account.displayName.ifBlank { "مستخدم Firebase" }, fontWeight = FontWeight.Bold)
+                                    Text(account.email, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                OutlinedButton(
+                                    onClick = { accountToApprove = account },
+                                    enabled = !firebaseAuthBusy && linkedSubDevices.any {
+                                        !it.isKicked && !it.wasUnlinked && !it.isClaimed
+                                    },
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                                ) { Text("اعتماد", fontSize = 12.sp) }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+                Text("الأجهزة الفرعية (${linkedSubDevices.size})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                if (linkedSubDevices.isEmpty()) {
+                    Text("أنشئ جهازاً فرعياً أولاً، ثم امنح صلاحيات المخازن لحسابه.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
                     linkedSubDevices.forEach { slot ->
                         SubDeviceManagementCard(
                             slot = slot,
-                            hasQrAvailable = !slot.isClaimed && !slot.isKicked && !slot.wasUnlinked &&
-                                (sessionPairingCredentials.containsKey(slot.id) || isCloudSyncEnabled),
-                            onShowQr = { viewModel.showSessionCredentialsQr(slot.id) },
                             warehouses = availableWarehouses,
                             onUpdatePermissions = { add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog ->
-                                viewModel.updateSubDevicePermissions(slot.id, add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog)
+                                viewModel.updateSubDevicePermissions(slot.id, add, inward, disburse, editLegacy, backup,
+                                    allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply,
+                                    deleteSupply, editCatalog)
                             },
                             onKick = { deviceToKick = slot },
                             onReactivate = { viewModel.reactivateSubDevice(slot.id) }
                         )
                     }
                 }
-
             } else {
-                // SUB-DEVICE MODE
                 if (!isSubConnected) {
-                    Text(
-                        text = "للربط عبر الإنترنت: أضف حساب هذا الجهاز إلى مساحة التعاون أولاً، ثم امسح رمز QR الذي أنشأه الجهاز الرئيسي. لا يلزم أن يكون الجهازان على شبكة Wi-Fi واحدة.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Medium
-                    )
-                    // Quick Camera QR Scan Button
-                    Button(
-                        onClick = { showQrScanner = true },
-                        enabled = !isPairingInProgress && remainingLockSeconds == 0L,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("scan_pairing_qr_btn"),
-                        shape = RoundedCornerShape(12.dp)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("مسح باركود الربط بالكاميرا (ربط تلقائي فوري)", fontWeight = FontWeight.Bold)
-                    }
-
-                    if (!isCloudSyncEnabled) {
-                        Text(
-                            text = "سجّل دخول حساب الجهاز الفرعي في شاشة التعاون السحابي أولاً. لا يمكن الربط بعنوان IP أو عبر نقطة اتصال.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = WarningOrange
-                        )
-                    }
-                    if (remainingLockSeconds > 0L) {
-                        Surface(
-                            color = DangerRed.copy(alpha = 0.1f),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("ربط هذا الجهاز بحساب Firebase", fontWeight = FontWeight.Bold)
                             Text(
-                                text = "محاولات التحقق مقفلة مؤقتاً لمدة $remainingLockSeconds ثانية.",
-                                color = DangerRed,
+                                "سجّل الدخول بالبريد الإلكتروني الذي سيعتمده المستخدم الرئيسي. لا يحتاج الجهازان إلى شبكة Wi-Fi واحدة.",
                                 style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(10.dp)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        }
-                    } else if (!pairingError.isNullOrBlank()) {
-                        Surface(
-                            color = DangerRed.copy(alpha = 0.1f),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = pairingError!!,
-                                color = DangerRed,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { viewModel.switchToMainDeviceMode() },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("cancel_sub_mode_btn"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("إلغاء / رئيسي", fontSize = 12.sp)
+                            if (firebaseEmail.isNotBlank()) {
+                                Text("الحساب الحالي: $firebaseEmail", fontWeight = FontWeight.SemiBold)
+                                OutlinedButton(
+                                    onClick = { viewModel.checkApprovedFirebaseInvite() },
+                                    enabled = !isPairingInProgress && !firebaseAuthBusy,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    if (isPairingInProgress) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    else Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("التحقق من اعتماد الحساب")
+                                }
+                                Text("سيكتمل الربط تلقائياً بعد اعتماد هذا البريد من الجهاز الرئيسي.",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            } else {
+                                Button(
+                                    onClick = { viewModel.signInForDeviceLink(context) },
+                                    enabled = !firebaseAuthBusy,
+                                    modifier = Modifier.fillMaxWidth().testTag("firebase_device_signin_btn")
+                                ) {
+                                    if (firebaseAuthBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    else Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("تسجيل الدخول بحساب Google")
+                                }
+                            }
+                            pairingError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                         }
                     }
                 } else {
-                    // CONNECTED SUB-DEVICE STATUS
-                    val timeFmt = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
-                    val lastSyncLabel = if (lastSyncAt > 0L) timeFmt.format(Date(lastSyncAt)) else "الآن"
-
+                    val lastSyncLabel = if (lastSyncAt > 0L) {
+                        SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date(lastSyncAt))
+                    } else "الآن"
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = SuccessGreen.copy(alpha = 0.09f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = SuccessGreen,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "مرتبط كجهاز فرعي (${deviceName.ifBlank { "جهاز فرعي" }})",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = SuccessGreen
-                                )
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SuccessGreen)
+                                Spacer(Modifier.width(8.dp))
+                                Text("الجهاز مرتبط بالجهاز الرئيسي عبر Firebase", fontWeight = FontWeight.Bold, color = SuccessGreen)
                             }
-                            Text(
-                                text = "الجهاز الرئيسي: ${mainHostUrl.removePrefix("http://")} • رمز القاعدة: $workspaceCode",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "آخر مزامنة: $lastSyncLabel",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            if (!lastSyncError.isNullOrBlank()) {
-                                Text(
-                                    text = lastSyncError!!,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = WarningOrange
-                                )
-                            }
+                            Text("الحساب: $firebaseEmail", style = MaterialTheme.typography.bodySmall)
+                            Text("اسم الجهاز: $deviceName • آخر مزامنة: $lastSyncLabel", style = MaterialTheme.typography.bodySmall)
                         }
                     }
-
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "تنبيه: هذا الجهاز فرعي. صلاحيات الأصناف والمخازن لا تمنحه حق إنشاء أجهزة فرعية أو إدارة روابط الأجهزة؛ هذه الإدارة حصرية للجهاز الرئيسي.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(10.dp)
-                        )
+                    Text("الصلاحيات الممنوحة", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        PermissionBadge("الاطلاع على المخازن", devicePermissions.canViewAllWarehouses || devicePermissions.warehousePermissions.any { it.canView })
+                        PermissionBadge("إضافة أصناف ومخازن", devicePermissions.canAddItems)
+                        PermissionBadge("تسجيل الوارد", devicePermissions.canInward || devicePermissions.warehousePermissions.any { it.canView && it.canInward })
+                        PermissionBadge("صرف المخزون", devicePermissions.canDisburse || devicePermissions.warehousePermissions.any { it.canView && it.canDisburse })
+                        PermissionBadge("التحويل المخزني", devicePermissions.warehousePermissions.any { it.canView && it.canTransfer })
+                        PermissionBadge("تعديل الأرصدة", devicePermissions.warehousePermissions.any { it.canView && it.canAdjust })
+                        PermissionBadge("تعديل بيانات المخزون", devicePermissions.canEditInventory || devicePermissions.warehousePermissions.any { it.canView && it.canEditInventory })
+                        PermissionBadge("حذف الأصناف", devicePermissions.canDeleteItem || devicePermissions.warehousePermissions.any { it.canView && it.canDeleteItem })
+                        PermissionBadge("تقارير المخازن", devicePermissions.warehousePermissions.any { it.canView && it.canReports })
+                        PermissionBadge("تعديل أوامر الصرف", devicePermissions.canEditIssueVoucher)
+                        PermissionBadge("حذف أوامر الصرف", devicePermissions.canDeleteIssueVoucher)
+                        PermissionBadge("تعديل أوامر التوريد", devicePermissions.canEditSupplyVoucher)
+                        PermissionBadge("حذف أوامر التوريد", devicePermissions.canDeleteSupplyVoucher)
                     }
-
-                    // Granted permissions summary
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "صلاحياتك المفعلة حالياً من الجهاز الرئيسي:",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            // Use stable Column layout primitives here. FlowRow was compiled
-                            // against a newer Foundation ABI than the one packaged in the APK.
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                PermissionBadge(
-                                    "الاطلاع على المخازن",
-                                    devicePermissions.canViewAllWarehouses ||
-                                        devicePermissions.warehousePermissions.any { it.canView }
-                                )
-                                PermissionBadge("إضافة أصناف ومخازن", devicePermissions.canAddItems)
-                                PermissionBadge(
-                                    "تسجيل الوارد",
-                                    devicePermissions.canInward ||
-                                        devicePermissions.warehousePermissions.any { it.canView && it.canInward }
-                                )
-                                PermissionBadge(
-                                    "صرف المخزون",
-                                    devicePermissions.canDisburse ||
-                                        devicePermissions.warehousePermissions.any { it.canView && it.canDisburse }
-                                )
-                                PermissionBadge(
-                                    "التحويل المخزني",
-                                    devicePermissions.warehousePermissions.any { it.canView && it.canTransfer }
-                                )
-                                PermissionBadge(
-                                    "تعديل الأرصدة المخزنية",
-                                    devicePermissions.warehousePermissions.any { it.canView && it.canAdjust }
-                                )
-                                PermissionBadge(
-                                    "تعديل بيانات المخزون",
-                                    devicePermissions.canEditInventory ||
-                                        devicePermissions.warehousePermissions.any { it.canView && it.canEditInventory }
-                                )
-                                PermissionBadge("تعديل الأصناف داخل الدليل", devicePermissions.canEditCatalogItems)
-                                PermissionBadge(
-                                    "حذف الأصناف",
-                                    devicePermissions.canDeleteItem ||
-                                        devicePermissions.warehousePermissions.any { it.canView && it.canDeleteItem }
-                                )
-                                PermissionBadge("تعديل أوامر الصرف", devicePermissions.canEditIssueVoucher)
-                                PermissionBadge("حذف أوامر الصرف", devicePermissions.canDeleteIssueVoucher)
-                                PermissionBadge("تعديل أوامر التوريد", devicePermissions.canEditSupplyVoucher)
-                                PermissionBadge("حذف أوامر التوريد", devicePermissions.canDeleteSupplyVoucher)
-                                PermissionBadge(
-                                    "تقارير المخازن",
-                                    devicePermissions.warehousePermissions.any { it.canView && it.canReports }
-                                )
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = { viewModel.syncNow() },
-                            enabled = !isSyncingNow,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("sync_now_btn"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            if (isSyncingNow) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.White
-                                )
-                            } else {
-                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                            }
-                            Spacer(modifier = Modifier.width(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = { viewModel.syncNow() }, enabled = !isSyncingNow,
+                            modifier = Modifier.weight(1f).testTag("sync_now_btn"), shape = RoundedCornerShape(10.dp)) {
+                            if (isSyncingNow) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                            else Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
                             Text("مزامنة الآن")
                         }
-
-                        OutlinedButton(
-                            onClick = { showUnlinkConfirmDialog = true },
+                        OutlinedButton(onClick = { showUnlinkConfirmDialog = true },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = DangerRed),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("unlink_device_btn"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
+                            modifier = Modifier.weight(1f).testTag("unlink_device_btn"), shape = RoundedCornerShape(10.dp)) {
                             Icon(Icons.Default.LinkOff, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(Modifier.width(6.dp))
                             Text("فك الارتباط")
                         }
                     }
+                    lastSyncError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 }
             }
         }
     }
 
-    // Dialog: Create new Sub-Device Slot
     if (showCreateSubDialog) {
         CreateSubDeviceDialog(
             warehouses = availableWarehouses,
             existingDeviceNames = linkedSubDevices.map { it.deviceName },
             onDismiss = { showCreateSubDialog = false },
             onCreate = { name, canAdd, canInward, canDisburse, legacyEdit, canBackup, allWarehouses, grants, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog ->
-                viewModel.createSubDeviceSlot(name, canAdd, canInward, canDisburse, legacyEdit, canBackup, allWarehouses, grants, false, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog)
+                viewModel.createSubDeviceSlot(name, canAdd, canInward, canDisburse, legacyEdit, canBackup, allWarehouses,
+                    grants, false, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog)
                 showCreateSubDialog = false
             }
         )
     }
 
-    // Dialog: Show Generated Per-Device Credentials
-    createdCredentials?.let { creds ->
-        CreatedCredentialsDialog(
-            credentials = creds,
-            onCopyAll = {
-                val text = if (
-                    creds.cloudWorkspaceId.isNotBlank() &&
-                    creds.mainCloudDeviceId.isNotBlank() &&
-                    creds.deviceSlotId.isNotBlank() &&
-                    creds.sessionToken.isNotBlank()
-                ) {
-                    "ربط الجهاز الفرعي (${creds.deviceName}) يتم عبر QR والإنترنت باستخدام Supabase. لا يحتاج الجهازان إلى شبكة Wi-Fi واحدة أو عنوان IP أو نقطة اتصال."
-                } else {
-                    "تعذر إنشاء بيانات ربط سحابية صالحة. سجّل دخول الجهاز الرئيسي في مساحة التعاون ثم أعد إنشاء الباركود."
+    accountToApprove?.let { account ->
+        val availableSlots = linkedSubDevices.filter { !it.isKicked && !it.wasUnlinked && !it.isClaimed }
+        AlertDialog(
+            onDismissRequest = { accountToApprove = null },
+            title = { Text("اعتماد حساب ${account.email}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("اختر الجهاز الفرعي الذي سيُربط بهذا الحساب. ستُطبّق صلاحيات المخازن المحفوظة للجهاز المختار.")
+                    if (availableSlots.isEmpty()) {
+                        Text("لا توجد أجهزة فرعية جاهزة. أنشئ جهازاً فرعياً أو أعد تفعيل جهاز أولاً.",
+                            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    availableSlots.forEach { slot ->
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.approveFirebaseAccount(account, slot.id)
+                                accountToApprove = null
+                            },
+                            enabled = !firebaseAuthBusy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(slot.deviceName) }
+                    }
                 }
-                copyToClipboard(context, text)
-                Toast.makeText(context, "تم نسخ كامل بيانات الربط", Toast.LENGTH_SHORT).show()
             },
-            onDismiss = { viewModel.dismissCreatedDeviceCredentials() }
+            confirmButton = { TextButton(onClick = { accountToApprove = null }) { Text("إغلاق") } }
         )
     }
 
-    // Confirm Kick Sub-Device
     deviceToKick?.let { target ->
         SimpleConfirmDialog(
             title = "طرد الجهاز الفرعي وإيقافه",
-            message = "سيتم إبطال جلسة الجهاز فوراً. إذا كان متصلاً فسيستلم أمر المسح في دورة المزامنة التالية وتُحذف بياناته المحلية، مع الاحتفاظ بكل بياناته وسجلاته على الجهاز الرئيسي لإعادتها عند إعادة الربط. إذا كان غير متصل فسيُمسح عند أول اتصال لاحق.",
+            message = "سيتم إبطال جلسة الجهاز. عند وصول أمر الإيقاف سيُمسح محتواه المحلي، مع الاحتفاظ ببياناته وسجل عملياته على الجهاز الرئيسي.",
             confirmButtonText = "نعم، اطرد المستخدم",
             isDestructive = true,
-            onConfirm = {
-                viewModel.kickSubDevice(target.id)
-                deviceToKick = null
-            },
+            onConfirm = { viewModel.kickSubDevice(target.id); deviceToKick = null },
             onDismiss = { deviceToKick = null }
         )
     }
-
-    // Confirm Unlink Sub-Device
     if (showUnlinkConfirmDialog) {
         SimpleConfirmDialog(
             title = "فك الارتباط بالجهاز الرئيسي",
-            message = "هل تريد فك ارتباط هذا الجهاز الفرعي والعودة إلى الوضع الرئيسي المستقل؟",
+            message = "سيتم فك ارتباط هذا الجهاز ومسح بياناته المحلية وسجل عملياته. ستبقى بيانات الجهاز الرئيسي كما هي.",
             confirmButtonText = "نعم، فك الارتباط",
             isDestructive = true,
-            onConfirm = {
-                viewModel.unlinkSubDevice()
-                showUnlinkConfirmDialog = false
-            },
+            onConfirm = { viewModel.unlinkSubDevice(); showUnlinkConfirmDialog = false },
             onDismiss = { showUnlinkConfirmDialog = false }
-        )
-    }
-
-    // QR Scanner Dialog for Sub-Device
-    if (showQrScanner) {
-        QrScannerDialog(
-            onQrScanned = { payload ->
-                showQrScanner = false
-                if (payload.isCloudPairing) {
-                    Toast.makeText(context, "تمت قراءة رمز الربط السحابي، جاري الاتصال عبر الإنترنت...", Toast.LENGTH_SHORT).show()
-                    viewModel.pairWithCloudMainDevice(payload)
-                } else {
-                    Toast.makeText(
-                        context,
-                        "هذا باركود ربط محلي قديم. الربط الآن عبر الإنترنت فقط؛ أنشئ باركوداً سحابياً جديداً من الجهاز الرئيسي.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            },
-            onInvalidQrDetected = {
-                Toast.makeText(context, "هذا الباركود لا يخص ربط مخزني الذكي", Toast.LENGTH_SHORT).show()
-            },
-            onDismiss = { showQrScanner = false }
         )
     }
 }
@@ -664,8 +461,6 @@ private fun PermissionBadge(label: String, granted: Boolean) {
 private fun SubDeviceManagementCard(
     slot: LinkedSubDevice,
     warehouses: List<Warehouse>,
-    hasQrAvailable: Boolean,
-    onShowQr: () -> Unit,
     onUpdatePermissions: (Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, List<WarehousePermission>, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onKick: () -> Unit,
     onReactivate: () -> Unit
@@ -807,18 +602,6 @@ private fun SubDeviceManagementCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (hasQrAvailable) {
-                    OutlinedButton(
-                        onClick = onShowQr,
-                        modifier = Modifier.weight(1f).testTag("show_device_qr_btn_${slot.id}"),
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Default.QrCode2, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("رمز الربط", fontSize = 12.sp)
-                    }
-                }
                 if (!slot.isKicked && !slot.wasUnlinked) {
                     OutlinedButton(
                         onClick = onKick,
@@ -865,7 +648,7 @@ private fun SubDeviceManagementCard(
                 Text("أوامر التوريد", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 PermissionSwitchRow("تعديل أمر التوريد", editSupply) { editSupply = it; publish() }
                 PermissionSwitchRow("حذف أمر التوريد", deleteSupply) { deleteSupply = it; publish() }
-                PermissionSwitchRow("السماح بالنسخ الاحتياطي والتصدير المحلي والسحابي وJSON", canBackup) { canBackup = it; publish() }
+                PermissionSwitchRow("السماح بالنسخ الاحتياطي والتصدير المحلي وعبر Google Drive وJSON", canBackup) { canBackup = it; publish() }
                 WarehousePermissionsEditor(
                     warehouses = warehouses,
                     allWarehouses = canViewAll,
@@ -992,159 +775,16 @@ private fun CreateSubDeviceDialog(
                 Text("صلاحيات أوامر التوريد", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                 PermissionSwitchRow("تعديل أمر التوريد", canEditSupply) { canEditSupply = it }
                 PermissionSwitchRow("حذف أمر التوريد", canDeleteSupply) { canDeleteSupply = it }
-                PermissionSwitchRow("النسخ الاحتياطي المحلي والسحابي وتصدير JSON", canBackup) { canBackup = it }
+                PermissionSwitchRow("النسخ الاحتياطي عبر Google Drive وتصدير JSON", canBackup) { canBackup = it }
                 WarehousePermissionsEditor(warehouses, allWarehouses, grants, { allWarehouses = it }, { grants = it })
             }
         },
         confirmButton = {
             Button(onClick = { onCreate(name, canAdd, canInward, canDisburse, canEditGeneral, canBackup, allWarehouses, grants, canDeleteItem, canEditIssue, canDeleteIssue, canEditSupply, canDeleteSupply, canEditCatalogItems) }, enabled = name.trim().isNotBlank() && !existingDeviceNames.any { it.trim().equals(name.trim(), ignoreCase = true) }, modifier = Modifier.testTag("confirm_create_sub_device_btn")) {
-                Text("إنشاء كلمة المرور")
+                Text("حفظ الجهاز الفرعي")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
     )
 }
 
-@Composable
-private fun CreatedCredentialsDialog(
-    credentials: CreatedDeviceCredentials,
-    onCopyAll: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val qrBitmap = remember(credentials) {
-        if (
-            credentials.cloudWorkspaceId.isBlank() ||
-            credentials.mainCloudDeviceId.isBlank() ||
-            credentials.deviceSlotId.isBlank() ||
-            credentials.sessionToken.isBlank()
-        ) {
-            null
-        } else {
-            val payload = QrPairingHelper.encodeCloudPairingPayload(
-                workspaceId = credentials.cloudWorkspaceId,
-                mainDeviceId = credentials.mainCloudDeviceId,
-                deviceSlotId = credentials.deviceSlotId,
-                sessionToken = credentials.sessionToken
-            )
-            QrPairingHelper.generateQrBitmap(payload, sizePx = 520)
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = Icons.Default.VpnKey,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
-            )
-        },
-        title = {
-            Text(
-                text = "باركود وبيانات ربط (${credentials.deviceName})",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                    modifier = Modifier.padding(vertical = 2.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        if (qrBitmap != null) {
-                            Image(
-                                bitmap = qrBitmap.asImageBitmap(),
-                                contentDescription = "باركود ربط الجهاز الفرعي عبر الإنترنت",
-                                modifier = Modifier
-                                    .size(190.dp)
-                                    .testTag("pairing_qr_code_image")
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "امسح باركود الإنترنت بكاميرا الجهاز الفرعي",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFF0F172A),
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center
-                            )
-                        } else {
-                            Text(
-                                text = "لا يمكن إنشاء باركود محلي أو عبر نقطة اتصال. سجّل دخول الجهاز الرئيسي في التعاون السحابي أولاً.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = WarningOrange,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-                if (credentials.cloudWorkspaceId.isNotBlank()) {
-                    CredentialLine("طريقة الربط", "سحابي عبر الإنترنت — لا يحتاج إلى عنوان IP أو شبكة Wi-Fi مشتركة")
-                    CredentialLine("مساحة التعاون", credentials.cloudWorkspaceId.take(8))
-                    Text(
-                        text = "تأكد من إضافة حساب Google للجهاز الفرعي إلى مساحة التعاون، ثم امسح هذا الرمز من الجهاز الفرعي. يحتوي الرمز على مفتاح ربط خاص بهذا الجهاز ولا تشاركه مع أي شخص آخر.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = WarningOrange,
-                        textAlign = TextAlign.Center
-                    )
-                } else {
-                    Text(
-                        text = "بيانات الربط السحابي غير مكتملة. لن يتم عرض عنوان IP أو إنشاء رمز يعتمد على شبكة محلية.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = WarningOrange,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onCopyAll,
-                enabled = credentials.cloudWorkspaceId.isNotBlank() &&
-                    credentials.mainCloudDeviceId.isNotBlank() &&
-                    credentials.deviceSlotId.isNotBlank() &&
-                    credentials.sessionToken.isNotBlank(),
-                modifier = Modifier.testTag("copy_created_credentials_btn")
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("نسخ البيانات")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("إغلاق") }
-        }
-    )
-}
-
-@Composable
-private fun CredentialLine(label: String, value: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Text(text = label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    clipboard?.setPrimaryClip(ClipData.newPlainText("SmartInventoryPairing", text))
-}

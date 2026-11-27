@@ -273,9 +273,8 @@ private data class SendMessageParams(
 )
 
 /**
- * Authenticated cloud collaboration API. All privileged writes go through SECURITY DEFINER
- * RPCs that validate auth.uid(), workspace membership, warehouse permissions and device identity.
- * Collaboration identity, metadata, pairing and chat are stored in Firebase Realtime Database.
+ * Authenticated Firebase device-sync transport. Firebase Realtime Database stores account identity,
+ * pairing metadata and encrypted device events. Inventory records remain local and backups use Google Drive.
  */
 class CloudCollaborationRepository {
 
@@ -527,7 +526,7 @@ class CloudCollaborationRepository {
         val user = FirebaseAuthClient.auth.currentUser ?: error("يجب تسجيل الدخول بحساب Google")
         val cleanName = name.trim()
         require(cleanName.length in 2..100) { "اسم مساحة العمل يجب أن يكون بين حرفين و100 حرف" }
-        require(listMyWorkspaces().isEmpty()) { "WORKSPACE_ALREADY_EXISTS_INVITE_REQUIRED" }
+        require(listMyWorkspaces().none { it.ownerUserId == user.uid }) { "WORKSPACE_ALREADY_EXISTS_INVITE_REQUIRED" }
         val ref = firebaseRoot.child("workspaces").push()
         val id = ref.key ?: UUID.randomUUID().toString()
         val now = System.currentTimeMillis()

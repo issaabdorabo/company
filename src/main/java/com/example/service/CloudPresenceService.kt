@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Keeps the process and application-scoped encrypted Realtime coordinator alive after
- * the activity is swiped away. Inventory rows are never uploaded to persistent Supabase tables.
+ * the activity is swiped away. Identity and presence use Firebase; stock rows remain local and Google Drive is the backup source.
  */
 class CloudPresenceService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -68,8 +68,8 @@ class CloudPresenceService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "اتصال التعاون السحابي", NotificationManager.IMPORTANCE_LOW).apply {
-                    description = "يحافظ على ظهور الجهاز متصلاً أثناء عمل التطبيق في الخلفية"
+                NotificationChannel(CHANNEL_ID, "اتصال Firebase", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "يحافظ على ظهور الجهاز متصلاً بخدمة Firebase أثناء عمل التطبيق في الخلفية"
                     setShowBadge(false)
                 }
             )
@@ -80,7 +80,7 @@ class CloudPresenceService : Service() {
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("مخزني الذكي")
-            .setContentText("المحافظة على اتصال التعاون السحابي")
+            .setContentText("المحافظة على اتصال Firebase")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
