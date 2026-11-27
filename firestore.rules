@@ -65,6 +65,11 @@ service cloud.firestore {
         && request.auth.token.email.lower() == email;
       allow create, update: if signedIn()
         && request.resource.data.email == email
+        && request.resource.data.active == true
+        && request.resource.data.role in ['SUBUSER']
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.keys().hasOnly(['email', 'workspaceId', 'role', 'active', 'displayName', 'createdAt', 'expiresAt', 'createdBy'])
         && isOwner(request.resource.data.workspaceId);
       allow delete: if signedIn()
         && (isOwner(resource.data.workspaceId)
@@ -87,9 +92,15 @@ service cloud.firestore {
             && memberId == uid()
             && request.resource.data.userId == uid()
             && request.auth.token.email != null
+            && request.resource.data.userId == uid()
             && request.resource.data.email == request.auth.token.email
+            && request.resource.data.active == true
+            && request.resource.data.keys().hasOnly(['userId', 'email', 'displayName', 'role', 'active', 'createdAt'])
             && exists(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower()))
-            && get(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower())).data.workspaceId == workspaceId);
+            && get(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower())).data.workspaceId == workspaceId
+            && get(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower())).data.active == true
+            && get(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower())).data.expiresAt > request.time
+            && request.resource.data.role == get(/databases/$(database)/documents/emailInvites/$(request.auth.token.email.lower())).data.role);
         allow update, delete: if isOwner(workspaceId);
       }
 
@@ -177,6 +188,42 @@ service cloud.firestore {
         allow delete: if isOwner(workspaceId)
           || (ownsDevice(workspaceId, resource.data.toDeviceId));
       }
+    }
+
+    // One-time pairing credentials are scoped to a pre-authorized email and expire.
+    // Store only a cryptographic hash of the short code, never the raw code.
+    match /pairingTokens/{tokenId} {
+      function tokenOwner() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/workspaces/$(resource.data.workspaceId))
+          && get(/databases/$(database)/documents/workspaces/$(resource.data.workspaceId)).data.ownerUserId == uid();
+      }
+
+      function invitedRecipient() {
+        return signedIn()
+          && request.auth.token.email != null
+          && resource.data.targetEmail == request.auth.token.email.lower();
+      }
+
+      allow create: if signedIn()
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.codeHash is string
+        && request.resource.data.targetEmail is string
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.consumedAt == null
+        && request.resource.data.keys().hasOnly(['workspaceId', 'createdBy', 'targetEmail', 'codeHash', 'expiresAt', 'createdAt', 'consumedAt', 'consumedBy'])
+        && isOwner(request.resource.data.workspaceId);
+      allow read: if tokenOwner()
+        || (invitedRecipient() && resource.data.expiresAt > request.time && resource.data.consumedAt == null);
+      allow update: if tokenOwner()
+        || (invitedRecipient()
+          && resource.data.expiresAt > request.time
+          && resource.data.consumedAt == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['consumedAt', 'consumedBy'])
+          && request.resource.data.consumedAt == request.time
+          && request.resource.data.consumedBy == uid());
+      allow delete: if tokenOwner();
     }
 
     // Deny every collection not explicitly described above.
