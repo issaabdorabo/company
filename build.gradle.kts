@@ -19,8 +19,6 @@ android {
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
-    buildConfigField("String", "SUPABASE_URL", "\"https://qwnflmkpmomacznvzodx.supabase.co\"")
-    buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_WSBcbDikUzCNnO_nlW3OrA_y8n57mZ\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -87,17 +85,10 @@ secrets {
 dependencies {
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.auth)
-  implementation(libs.firebase.firestore)
   implementation(libs.firebase.database)
   implementation(libs.firebase.messaging)
   implementation(libs.firebase.storage)
 
-  implementation(platform(libs.supabase.bom))
-  implementation(libs.supabase.auth)
-  implementation(libs.supabase.postgrest)
-  implementation(libs.supabase.realtime)
-  implementation(libs.supabase.storage)
-  implementation(libs.ktor.client.android)
   implementation(platform(libs.androidx.compose.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
