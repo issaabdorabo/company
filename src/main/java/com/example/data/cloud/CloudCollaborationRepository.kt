@@ -6,22 +6,11 @@ import com.google.android.gms.tasks.Tasks
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 
-import io.github.jan.supabase.auth.auth
 import com.example.data.sync.LocalSyncJson
 import com.example.data.model.Warehouse
 import com.example.data.cloud.CloudEntityRecord
 import com.example.data.cloud.CloudEntityUpsert
 import org.json.JSONObject
-import io.github.jan.supabase.postgrest.postgrest
-import io.github.jan.supabase.realtime.PostgresAction
-import io.github.jan.supabase.realtime.broadcast
-import io.github.jan.supabase.realtime.broadcastFlow
-import io.github.jan.supabase.realtime.postgresChangeFlow
-import io.github.jan.supabase.realtime.channel
-import io.github.jan.supabase.realtime.realtime
-import io.github.jan.supabase.storage.storage
-import io.ktor.http.ContentType
-import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -53,7 +42,6 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.Cipher
 import java.security.SecureRandom
 import java.security.MessageDigest
-import kotlin.time.Duration.Companion.hours
 
 @Serializable
 data class CloudWorkspace(
@@ -289,7 +277,6 @@ private data class SendMessageParams(
  * The Android application only contains the Supabase publishable key.
  */
 class CloudCollaborationRepository {
-    private val client get() = SupabaseAuthClient.client
 
     private val firebaseRoot get() = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
 
@@ -501,77 +488,6 @@ class CloudCollaborationRepository {
 
     fun currentUserEmailOrNull(): String? = FirebaseAuthClient.currentUserEmailOrNull()
 
-    private suspend fun runFirebaseMirror(label: String, action: suspend () -> Unit) {
-        try {
-            action()
-        } catch (failure: Exception) {
-            // Firebase rules are deployed separately from the Android APK. Until the
-            // project rules are published, keep the existing Supabase workflow usable.
-            Log.w("CloudCollaboration", "Firebase mirror unavailable ($label)", failure)
-        }
-    }
-
-    private suspend fun mirrorFirebaseWorkspaceAccess(workspace: CloudWorkspace) = runFirebaseMirror("workspace access") { withContext(Dispatchers.IO) {
-        val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
-        val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
-        Tasks.await(root.child("users").child(firebaseUser.uid).updateChildren(mapOf(
-            "supabaseUserId" to (currentUserIdOrNull() ?: ""),
-            "email" to (firebaseUser.email ?: "").trim().lowercase()
-        )))
-        val workspaceRef = root.child("workspaces").child(workspace.id)
-        val workspaceSnapshot = Tasks.await(workspaceRef.get())
-        val isSupabaseOwner = workspace.ownerUserId == currentUserIdOrNull()
-        val isFirebaseWorkspaceOwner =
-            workspaceSnapshot.child("ownerUserId").getValue(String::class.java) == firebaseUser.uid
-
-        if (!workspaceSnapshot.exists() && isSupabaseOwner) {
-            Tasks.await(workspaceRef.updateChildren(mapOf(
-                "name" to workspace.name,
-                "ownerUserId" to firebaseUser.uid,
-                "createdAt" to ServerValue.TIMESTAMP
-            )))
-        } else if (!workspaceSnapshot.exists()) {
-            return@withContext
-        }
-
-        val memberRef = workspaceRef.child("members").child(firebaseUser.uid)
-        val memberSnapshot = Tasks.await(memberRef.get())
-        if (memberSnapshot.exists()) return@withContext
-
-        if (isSupabaseOwner || isFirebaseWorkspaceOwner) {
-            Tasks.await(memberRef.updateChildren(mapOf(
-                "userId" to firebaseUser.uid,
-                "email" to (firebaseUser.email ?: "").trim().lowercase(),
-                "displayName" to (firebaseUser.displayName ?: ""),
-                "role" to "OWNER",
-                "active" to true,
-                "createdAt" to ServerValue.TIMESTAMP
-            )))
-            return@withContext
-        }
-
-        val email = firebaseUser.email?.trim()?.lowercase().orEmpty()
-        if (email.isBlank()) return@withContext
-        val inviteKey = firebaseInviteKey(email)
-        val invite = Tasks.await(root.child("emailInvites").child(inviteKey).get())
-        val expiresAt = invite.child("expiresAt").getValue(Long::class.java) ?: return@withContext
-        if (invite.child("active").getValue(Boolean::class.java) != true ||
-            invite.child("workspaceId").getValue(String::class.java) != workspace.id ||
-            expiresAt <= System.currentTimeMillis() ||
-            invite.child("role").getValue(String::class.java) != "SUBUSER") return@withContext
-
-        Tasks.await(memberRef.updateChildren(mapOf(
-            "userId" to firebaseUser.uid,
-            "email" to email,
-            "displayName" to invite.child("displayName").getValue(String::class.java).orEmpty()
-                .ifBlank { firebaseUser.displayName.orEmpty() },
-            "role" to "SUBUSER",
-            "active" to true,
-            "inviteKey" to inviteKey,
-            "createdAt" to ServerValue.TIMESTAMP
-        )))
-    } }
-
     suspend fun listMyWorkspaces(): List<CloudWorkspace> = withContext(Dispatchers.IO) {
         val user = FirebaseAuthClient.auth.currentUser ?: error("يجب ربط حساب Google أولاً")
         val email = user.email?.trim()?.lowercase().orEmpty()
@@ -662,18 +578,8 @@ class CloudCollaborationRepository {
         }.filterNot { it.isRevoked }.sortedBy { it.deviceName.lowercase() }
     }
 
-    suspend fun replaceCloudWorkspaceSnapshot(
-        workspaceId: String,
-        deviceId: String,
-        records: JsonArray
-    ): Int = client.postgrest.rpc(
-        "replace_cloud_workspace_snapshot",
-        buildJsonObject {
-            put("p_workspace", JsonPrimitive(workspaceId))
-            put("p_device", JsonPrimitive(deviceId))
-            put("p_records", records)
-        }
-    ).decodeAs<Int>()
+    // Inventory records remain local on each device; Google Drive is the only full backup.
+    suspend fun replaceCloudWorkspaceSnapshot(workspaceId: String, deviceId: String, records: JsonArray): Int = 0
 
     suspend fun heartbeat(deviceId: String, appState: String = "FOREGROUND", workspaceId: String? = null) = withContext(Dispatchers.IO) {
         val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
@@ -711,41 +617,12 @@ class CloudCollaborationRepository {
     suspend fun ensureCloudWarehouse(workspaceId: String, warehouse: Warehouse): String =
         ensureCloudWarehouse(workspaceId, warehouse.id, warehouse.name)
 
-    suspend fun seedWorkspaceSnapshot(
-        workspaceId: String,
-        deviceId: String,
-        records: JsonArray
-    ): Int = client.postgrest.rpc(
-        "seed_cloud_workspace_snapshot",
-        buildJsonObject {
-            put("p_workspace", JsonPrimitive(workspaceId))
-            put("p_device", JsonPrimitive(deviceId))
-            put("p_records", records)
-        }
-    ).decodeAs<Int>()
+    suspend fun seedWorkspaceSnapshot(workspaceId: String, deviceId: String, records: JsonArray): Int = 0
 
     suspend fun pushCloudSnapshot(
-        workspaceId: String,
-        deviceId: String,
-        clientOperationId: String,
-        operationType: String,
-        warehouseIds: Set<String>,
-        title: String,
-        details: String,
-        records: JsonArray
-    ): String = client.postgrest.rpc(
-        "push_cloud_entity_snapshot",
-        buildJsonObject {
-            put("p_workspace", JsonPrimitive(workspaceId))
-            put("p_device", JsonPrimitive(deviceId))
-            put("p_client_operation_id", JsonPrimitive(clientOperationId))
-            put("p_operation_type", JsonPrimitive(operationType))
-            put("p_warehouse_ids", buildJsonArray { warehouseIds.forEach { add(JsonPrimitive(it)) } })
-            put("p_title", JsonPrimitive(title))
-            put("p_details", JsonPrimitive(details))
-            put("p_records", records)
-        }
-    ).decodeAs<String>()
+        workspaceId: String, deviceId: String, clientOperationId: String,
+        operationType: String, warehouseIds: Set<String>, title: String, details: String, records: JsonArray
+    ): String = clientOperationId
 
     suspend fun checkCloudWarehouseAccess(
         workspaceId: String, deviceId: String, operationType: String, warehouseIds: Set<String>
@@ -779,28 +656,8 @@ class CloudCollaborationRepository {
     suspend fun fetchCloudEntitySnapshot(workspaceId: String): List<CloudEntityRecord> =
         fetchCloudEntitySnapshotVersioned(workspaceId).records
 
-    suspend fun fetchCloudEntitySnapshotVersioned(workspaceId: String): CloudEntitySnapshot {
-        val rows = client.postgrest["cloud_entity_records"].select {
-            filter {
-            eq("workspace_id", workspaceId)
-        
-            }
-        }.decodeList<CloudEntityRecordDto>()
-        val signature = rows.maxOfOrNull { it.updatedAt }.orEmpty()
-        val records = rows.sortedByDescending { it.updatedAt }
-            .distinctBy { it.documentId }
-            .map { row ->
-                CloudEntityRecord(
-                    id = row.documentId,
-                    workspaceId = row.workspaceId,
-                    entityType = row.entityType,
-                    localId = row.localId,
-                    payload = LocalSyncJson.jsonObjectToMap(JSONObject(row.payload.toString())),
-                    isDeleted = row.isDeleted
-                )
-            }
-        return CloudEntitySnapshot(records, signature)
-    }
+    suspend fun fetchCloudEntitySnapshotVersioned(workspaceId: String): CloudEntitySnapshot =
+        CloudEntitySnapshot(emptyList(), "")
 
     fun encodeCloudEntityRecords(
         entities: List<CloudEntityUpsert>,
@@ -933,50 +790,6 @@ class CloudCollaborationRepository {
      * Transitional Firebase mirror for the collaboration metadata being moved off Supabase.
      * Inventory rows and operation payloads are deliberately excluded.
      */
-    private suspend fun mirrorFirebaseWarehouses(
-        workspaceId: String,
-        warehouses: List<CloudWarehouse>
-    ) = runFirebaseMirror("warehouse metadata") { withContext(Dispatchers.IO) {
-        val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
-        val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
-        val workspace = root.child("workspaces").child(workspaceId)
-        val membership = Tasks.await(workspace.child("members").child(firebaseUser.uid).get())
-        val isOwner = Tasks.await(workspace.child("ownerUserId").get())
-            .getValue(String::class.java) == firebaseUser.uid
-        if (!isOwner && membership.child("active").getValue(Boolean::class.java) != true) {
-            return@withContext
-        }
-        warehouses.forEach { warehouse ->
-            Tasks.await(workspace.child("warehouses").child(warehouse.id).updateChildren(mapOf(
-                "warehouseId" to warehouse.id,
-                "workspaceId" to workspaceId,
-                "localId" to (warehouse.localId ?: -1L),
-                "name" to warehouse.name,
-                "updatedAt" to ServerValue.TIMESTAMP
-            )))
-        }
-    } }
-
-    private suspend fun mirrorFirebaseWarehousePermission(
-        workspaceId: String,
-        warehouseId: String,
-        userId: String,
-        permissions: JsonObject
-    ) = runFirebaseMirror("warehouse permission") { withContext(Dispatchers.IO) {
-        val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
-        val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
-        val workspace = root.child("workspaces").child(workspaceId)
-        val ownerId = Tasks.await(workspace.child("ownerUserId").get()).getValue(String::class.java)
-        if (ownerId != firebaseUser.uid) return@withContext
-        Tasks.await(workspace.child("warehouseMemberships").child(warehouseId)
-            .child(userId).updateChildren(mapOf(
-                "warehouseId" to warehouseId,
-                "userId" to userId,
-                "permissionsJson" to permissions.toString(),
-                "updatedAt" to ServerValue.TIMESTAMP
-            )))
-    } }
-
     suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> {
         val snap = readFirebase(firebaseRoot.child("workspaces").child(workspaceId).child("warehouses"))
         return snap.children.mapNotNull { w ->
