@@ -43,7 +43,7 @@ zxingCore = "3.5.3"
 supabase = "3.3.0"
 ktor = "3.2.3"
 googleServices = "4.6.0"
-firebaseBom = "35.2.0"
+firebaseBom = "34.17.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
