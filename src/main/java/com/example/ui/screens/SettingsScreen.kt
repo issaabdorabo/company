@@ -464,10 +464,7 @@ fun SettingsScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
-                            Surface(
-                                shape = CircleShape,
-                                color = if (isFirebaseAuthenticated) InfoBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
-                            ) {
+{
                                 Text(
                                     if (isFirebaseAuthenticated) "Firebase Authentication" else "Firebase غير مرتبط",
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
