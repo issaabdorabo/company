@@ -591,13 +591,16 @@ class CloudCollaborationRepository {
                         "createdAt" to ServerValue.TIMESTAMP
                     )))
                 }
+                Tasks.await(root.child("userWorkspaces").child(user.uid).child(workspaceId).setValue(true))
             }
         }
-        val workspaces = Tasks.await(root.child("workspaces").get())
-        workspaces.children.mapNotNull { ws ->
+        val index = Tasks.await(root.child("userWorkspaces").child(user.uid).get())
+        index.children.mapNotNull { entry ->
+            val workspaceId = entry.key ?: return@mapNotNull null
+            val ws = Tasks.await(root.child("workspaces").child(workspaceId).get())
             val isOwner = ws.textValue("ownerUserId") == user.uid
             val isMember = ws.child("members").child(user.uid).boolValue("active")
-            if (isOwner || isMember) ws.asCloudWorkspace() else null
+            if (ws.exists() && (isOwner || isMember)) ws.asCloudWorkspace() else null
         }
     }
 
@@ -621,6 +624,7 @@ class CloudCollaborationRepository {
             "devices" to emptyMap<String, Any>(), "warehouses" to emptyMap<String, Any>(),
             "warehouseMemberships" to emptyMap<String, Any>(), "conversations" to emptyMap<String, Any>()
         )))
+        Tasks.await(firebaseRoot.child("userWorkspaces").child(user.uid).child(id).setValue(true))
         CloudWorkspace(id, cleanName, user.uid, now.toString())
     }
 
@@ -982,13 +986,13 @@ class CloudCollaborationRepository {
     }
 
     suspend fun listWarehouseMemberships(warehouseId: String): List<CloudWarehouseMembership> {
-        val workspaces = readFirebase(firebaseRoot.child("workspaces"))
-        for (workspace in workspaces.children) {
-            val grants = workspace.child("warehouseMemberships").child(warehouseId)
+        for (workspace in listMyWorkspaces()) {
+            val grants = readFirebase(firebaseRoot.child("workspaces").child(workspace.id)
+                .child("warehouseMemberships").child(warehouseId))
             if (!grants.exists()) continue
-            return grants.children.mapNotNull { g ->
-                val uid = g.key ?: return@mapNotNull null
-                val raw = g.textValue("permissionsJson")
+            return grants.children.mapNotNull { grant ->
+                val uid = grant.key ?: return@mapNotNull null
+                val raw = grant.textValue("permissionsJson")
                 val permissions = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: JsonObject(emptyMap())
                 CloudWarehouseMembership(warehouseId, uid, permissions)
             }
@@ -1064,15 +1068,16 @@ class CloudCollaborationRepository {
     suspend fun listMessages(conversationId: String): List<CloudMessage> = withContext(Dispatchers.IO) {
         val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
         val root = firebaseRoot
-        val workspaces = Tasks.await(root.child("workspaces").get())
+        val workspaces = listMyWorkspaces()
         val hidden = Tasks.await(root.child("users").child(uid).child("hiddenMessages").get())
             .children.mapNotNull { it.key }.toSet()
         val messages = mutableListOf<CloudMessage>()
-        for (workspace in workspaces.children) {
-            val conv = workspace.child("conversations").child(conversationId)
+        for (workspace in workspaces) {
+            val workspaceSnap = Tasks.await(root.child("workspaces").child(workspace.id).get())
+            val conv = workspaceSnap.child("conversations").child(conversationId)
             if (!conv.exists()) continue
             require(conv.child("participants").child(uid).getValue(Boolean::class.java) == true ||
-                workspace.textValue("ownerUserId") == uid) { "هذه المحادثة غير متاحة لهذا الحساب" }
+                workspace.ownerUserId == uid) { "هذه المحادثة غير متاحة لهذا الحساب" }
             for (m in conv.child("messages").children) {
                 val id = m.key ?: continue
                 if (id in hidden) continue
@@ -1108,13 +1113,14 @@ class CloudCollaborationRepository {
         val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
         val clean = body.trim()
         require(clean.isNotBlank() && clean.length <= 10_000) { "الرسالة فارغة أو أطول من الحد المسموح" }
-        val workspaces = Tasks.await(firebaseRoot.child("workspaces").get())
-        for (ws in workspaces.children) {
-            val conv = ws.child("conversations").child(conversationId)
+        val workspaces = listMyWorkspaces()
+        for (ws in workspaces) {
+            val wsSnap = Tasks.await(firebaseRoot.child("workspaces").child(ws.id).get())
+            val conv = wsSnap.child("conversations").child(conversationId)
             if (!conv.exists()) continue
             require(conv.child("participants").child(uid).getValue(Boolean::class.java) == true ||
-                ws.textValue("ownerUserId") == uid) { "هذه المحادثة غير متاحة" }
-            val ref = firebaseRoot.child("workspaces").child(ws.key!!).child("conversations")
+                ws.ownerUserId == uid) { "هذه المحادثة غير متاحة" }
+            val ref = firebaseRoot.child("workspaces").child(ws.id).child("conversations")
                 .child(conversationId).child("messages").push()
             val id = ref.key ?: UUID.randomUUID().toString()
             val now = System.currentTimeMillis().toString()
@@ -1139,13 +1145,15 @@ class CloudCollaborationRepository {
         val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
         val clean = body.trim()
         require(clean.isNotBlank() && clean.length <= 10_000) { "نص الرسالة غير صالح" }
-        val workspaces = Tasks.await(firebaseRoot.child("workspaces").get())
-        for (ws in workspaces.children) for (conv in ws.child("conversations").children) {
+        val workspaces = listMyWorkspaces()
+        for (ws in workspaces) {
+          val wsSnap = Tasks.await(firebaseRoot.child("workspaces").child(ws.id).get())
+          for (conv in wsSnap.child("conversations").children) {
             val m = conv.child("messages").child(messageId)
             if (!m.exists()) continue
             require(m.textValue("senderUserId") == uid) { "يمكن لمُرسل الرسالة تعديلها فقط" }
             val now = System.currentTimeMillis().toString()
-            val ref = firebaseRoot.child("workspaces").child(ws.key!!).child("conversations")
+            val ref = firebaseRoot.child("workspaces").child(ws.id).child("conversations")
                 .child(conv.key!!).child("messages").child(messageId)
             Tasks.await(ref.updateChildren(mapOf("body" to clean, "editedAt" to now)))
             return@withContext CloudMessage(messageId, conv.key!!, uid, m.textValue("clientMessageId"),
@@ -1161,12 +1169,13 @@ class CloudCollaborationRepository {
         for (ws in workspaces.children) for (conv in ws.child("conversations").children) {
             val m = conv.child("messages").child(messageId)
             if (!m.exists()) continue
-            require(m.textValue("senderUserId") == uid || ws.textValue("ownerUserId") == uid) { "لا تملك صلاحية حذف هذه الرسالة" }
+            require(m.textValue("senderUserId") == uid || ws.ownerUserId == uid) { "لا تملك صلاحية حذف هذه الرسالة" }
             val path = m.textValue("attachmentPath")
             Tasks.await(firebaseRoot.child("workspaces").child(ws.key!!).child("conversations")
                 .child(conv.key!!).child("messages").child(messageId).removeValue())
             if (path.isNotBlank()) runCatching { Tasks.await(FirebaseStorage.getInstance().reference.child(path).delete()) }
             return@withContext
+          }
         }
         error("الرسالة غير موجودة")
     }
