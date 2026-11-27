@@ -117,7 +117,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
                     return@launch
                 }
 
-                // Clear an old sign-in warning once the current Supabase session is valid.
+                // Clear the sign-in warning once the current Firebase session is valid.
                 _notice.value = null
                 val available = repository.listMyWorkspaces()
                 _workspaces.value = available
@@ -336,7 +336,7 @@ class CloudCollaborationViewModel(application: Application) : AndroidViewModel(a
         val userId = repository.currentUserIdOrNull()
             ?: error("انتهت جلسة حساب Google، أعد تسجيل الدخول")
 
-        // Supabase stores only warehouse identity needed to scope collaboration permissions.
+        // Firebase stores only warehouse identity needed to scope collaboration permissions.
         // Inventory records and operation history stay in the local Room database.
         if (workspace.ownerUserId == userId) {
             localInventoryRepository.allWarehouses.first().forEach { warehouse ->
