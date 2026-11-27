@@ -14,7 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Firebase identity for cloud collaboration.
+ * Firebase identity for account-based device linking and secure realtime sync.
  *
  * This identity is intentionally separate from GoogleOAuthHelper, which continues
  * to authorize Google Drive backup/restore and must not be signed out as a side effect.

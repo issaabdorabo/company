@@ -84,6 +84,20 @@
           }
         }
       }
+    },
+    "registeredAccounts": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "deviceLinkInvites": {
+      "$candidateUid": {
+        "$workspaceId": {
+          ".read": "auth != null && auth.uid === $candidateUid",
+          ".write": "auth != null && (auth.uid === $candidateUid || root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid)"
+        }
+      }
     }
   }
 }

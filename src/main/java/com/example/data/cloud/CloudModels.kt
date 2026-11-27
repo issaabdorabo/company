@@ -177,3 +177,21 @@ data class CloudEntityUpsert(
     val payload: Map<String, Any?>,
     val isDeleted: Boolean = false
 )
+
+
+/** An app user who has authenticated with Firebase on at least one device. */
+data class RegisteredFirebaseAccount(
+    val userId: String,
+    val email: String,
+    val displayName: String = "",
+    val lastSeenAt: Long = 0L
+)
+
+/** One-time Firebase approval sent by the main device to a selected sub-user account. */
+data class FirebaseDeviceLinkInvite(
+    val cloudWorkspaceId: String,
+    val mainCloudDeviceId: String,
+    val deviceSlotId: String,
+    val sessionToken: String,
+    val deviceName: String
+)
