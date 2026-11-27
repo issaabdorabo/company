@@ -548,11 +548,11 @@ class CloudCollaborationRepository {
             }
         }.decodeList<CloudWorkspaceMember>()
 
-        return memberships.mapNotNull { member ->
-            runCatching {
-                getWorkspace(member.workspaceId).also { mirrorFirebaseWorkspaceAccess(it) }
-            }.getOrNull()
+        val workspaces = memberships.mapNotNull { member ->
+            runCatching { getWorkspace(member.workspaceId) }.getOrNull()
         }.distinctBy { it.id }
+        workspaces.forEach { mirrorFirebaseWorkspaceAccess(it) }
+        return workspaces
     }
 
     suspend fun canCreateFirstWorkspace(): Boolean =
@@ -565,7 +565,9 @@ class CloudCollaborationRepository {
             "create_workspace",
             buildJsonObject { put("p_name", JsonPrimitive(cleanName)) }
         ).decodeAs<String>()
-        return getWorkspace(workspaceId)
+        val workspace = getWorkspace(workspaceId)
+        mirrorFirebaseWorkspaceAccess(workspace)
+        return workspace
     }
 
     suspend fun getWorkspace(workspaceId: String): CloudWorkspace =
@@ -574,7 +576,7 @@ class CloudCollaborationRepository {
             eq("id", workspaceId)
         
             }
-        }.decodeSingle<CloudWorkspace>().also { mirrorFirebaseWorkspaceAccess(it) }
+        }.decodeSingle<CloudWorkspace>()
 
     suspend fun registerDevice(
         workspaceId: String,
@@ -627,7 +629,11 @@ class CloudCollaborationRepository {
         }
     ).decodeAs<Int>()
 
-    suspend fun heartbeat(deviceId: String, appState: String = "FOREGROUND") {
+    suspend fun heartbeat(
+        deviceId: String,
+        appState: String = "FOREGROUND",
+        workspaceId: String? = null
+    ) {
         client.postgrest.rpc(
             "heartbeat_device",
             buildJsonObject {
@@ -640,8 +646,9 @@ class CloudCollaborationRepository {
             val preferences = FirebaseFirestore.getInstance()
             // workspaceId is obtained from the registered device record in Supabase;
             // the app-scoped preference is the same active workspace used by the service.
-            val workspaceId = deviceWorkspaceId(deviceId)
-            val deviceRef = preferences.collection("workspaces").document(workspaceId)
+            val activeWorkspaceId = workspaceId?.takeIf { it.isNotBlank() }
+                ?: deviceWorkspaceId(deviceId)
+            val deviceRef = preferences.collection("workspaces").document(activeWorkspaceId)
                 .collection("devices").document(deviceId)
             Tasks.await(deviceRef.update(
                 mapOf(
@@ -870,6 +877,7 @@ class CloudCollaborationRepository {
         displayName: String = ""
     ): String {
         require(email.trim().contains("@")) { "أدخل بريداً إلكترونياً صحيحاً" }
+        require(role == "SUBUSER") { "دور الدعوة غير مدعوم" }
         val memberId = client.postgrest.rpc(
             "add_workspace_member_by_email",
             buildJsonObject {
@@ -880,7 +888,6 @@ class CloudCollaborationRepository {
             }
         ).decodeAs<String>()
 
-        require(role == "SUBUSER") { "دور الدعوة غير مدعوم" }
         withContext(Dispatchers.IO) {
             val owner = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
             val normalizedEmail = email.trim().lowercase()

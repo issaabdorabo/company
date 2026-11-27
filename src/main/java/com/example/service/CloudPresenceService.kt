@@ -52,7 +52,7 @@ class CloudPresenceService : Service() {
                             stopSelf()
                             break
                         }
-                        repository.heartbeat(deviceId, appState = "BACKGROUND")
+                        repository.heartbeat(deviceId, appState = "BACKGROUND", workspaceId = workspaceId)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
