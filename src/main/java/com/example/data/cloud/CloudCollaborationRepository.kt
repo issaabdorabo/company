@@ -591,13 +591,16 @@ class CloudCollaborationRepository {
     }
 
     private suspend fun deviceWorkspaceId(deviceId: String): String {
-        val workspaces = readFirebase(firebaseRoot.child("workspaces"))
-        return workspaces.children.firstOrNull { it.child("devices").child(deviceId).exists() }?.key
-            ?: error("تعذر تحديد مساحة عمل الجهاز")
+        for (workspace in listMyWorkspaces()) {
+            if (readFirebase(firebaseRoot.child("workspaces").child(workspace.id).child("devices").child(deviceId)).exists()) {
+                return workspace.id
+            }
+        }
+        error("تعذر تحديد مساحة عمل الجهاز")
     }
 
     /**
-     * Supabase stores only the warehouse identity needed to scope memberships and chat.
+     * Firebase stores only collaboration identities, permissions and chat metadata.
      * Operational details, stock and vouchers remain in the local Room database.
      */
     suspend fun ensureCloudWarehouse(workspaceId: String, localId: Long, name: String): String = withContext(Dispatchers.IO) {
@@ -981,17 +984,17 @@ class CloudCollaborationRepository {
         val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
         val workspaces = listMyWorkspaces()
         for (ws in workspaces) {
-          val wsSnap = Tasks.await(firebaseRoot.child("workspaces").child(ws.id).get())
-          for (conv in wsSnap.child("conversations").children) {
-            val m = conv.child("messages").child(messageId)
-            if (!m.exists()) continue
-            require(m.textValue("senderUserId") == uid || ws.ownerUserId == uid) { "لا تملك صلاحية حذف هذه الرسالة" }
-            val path = m.textValue("attachmentPath")
-            Tasks.await(firebaseRoot.child("workspaces").child(ws.id).child("conversations")
-                .child(conv.key!!).child("messages").child(messageId).removeValue())
-            if (path.isNotBlank()) runCatching { Tasks.await(FirebaseStorage.getInstance().reference.child(path).delete()) }
-            return@withContext
-          }
+            val wsSnap = Tasks.await(firebaseRoot.child("workspaces").child(ws.id).get())
+            for (conv in wsSnap.child("conversations").children) {
+                val m = conv.child("messages").child(messageId)
+                if (!m.exists()) continue
+                require(m.textValue("senderUserId") == uid || ws.ownerUserId == uid) { "لا تملك صلاحية حذف هذه الرسالة" }
+                val path = m.textValue("attachmentPath")
+                Tasks.await(firebaseRoot.child("workspaces").child(ws.id).child("conversations")
+                    .child(conv.key!!).child("messages").child(messageId).removeValue())
+                if (path.isNotBlank()) runCatching { Tasks.await(FirebaseStorage.getInstance().reference.child(path).delete()) }
+                return@withContext
+            }
         }
         error("الرسالة غير موجودة")
     }
