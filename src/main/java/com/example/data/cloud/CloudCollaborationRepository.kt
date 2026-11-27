@@ -1,6 +1,11 @@
 package com.example.data.cloud
 
 import android.util.Base64
+import com.google.android.gms.tasks.Tasks
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 
 import io.github.jan.supabase.auth.auth
 import com.example.data.sync.LocalSyncJson
@@ -28,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -478,6 +484,60 @@ class CloudCollaborationRepository {
     fun currentUserEmailOrNull(): String? =
         client.auth.currentSessionOrNull()?.user?.email
 
+    private suspend fun mirrorFirebaseWorkspaceAccess(workspace: CloudWorkspace) = withContext(Dispatchers.IO) {
+        val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
+        val db = FirebaseFirestore.getInstance()
+        val workspaceRef = db.collection("workspaces").document(workspace.id)
+        var workspaceSnapshot = Tasks.await(workspaceRef.get())
+        val isSupabaseOwner = workspace.ownerUserId == currentUserIdOrNull()
+
+        // The Supabase UUID and Firebase UID are different identities. Firestore always
+        // uses the Firebase UID for document ownership and member/device IDs.
+        if (!workspaceSnapshot.exists() && isSupabaseOwner) {
+            Tasks.await(workspaceRef.set(mapOf(
+                "name" to workspace.name,
+                "ownerUserId" to firebaseUser.uid,
+                "createdAt" to FieldValue.serverTimestamp()
+            )))
+            workspaceSnapshot = Tasks.await(workspaceRef.get())
+        }
+        if (!workspaceSnapshot.exists()) return@withContext
+
+        val memberRef = workspaceRef.collection("members").document(firebaseUser.uid)
+        val memberSnapshot = Tasks.await(memberRef.get())
+        if (memberSnapshot.exists()) return@withContext
+
+        if (isSupabaseOwner) {
+            Tasks.await(memberRef.set(mapOf(
+                "userId" to firebaseUser.uid,
+                "email" to (firebaseUser.email ?: "").trim().lowercase(),
+                "displayName" to (firebaseUser.displayName ?: ""),
+                "role" to "OWNER",
+                "active" to true,
+                "createdAt" to FieldValue.serverTimestamp()
+            )))
+            return@withContext
+        }
+
+        val email = firebaseUser.email?.trim()?.lowercase().orEmpty()
+        if (email.isBlank()) return@withContext
+        val inviteSnapshot = Tasks.await(db.collection("emailInvites").document(email).get())
+        val invite = inviteSnapshot.data ?: return@withContext
+        val expiresAt = invite["expiresAt"] as? Timestamp ?: return@withContext
+        if (invite["active"] != true || invite["workspaceId"] != workspace.id ||
+            expiresAt <= Timestamp.now() || invite["role"] != "SUBUSER") return@withContext
+
+        Tasks.await(memberRef.set(mapOf(
+            "userId" to firebaseUser.uid,
+            "email" to email,
+            "displayName" to (invite["displayName"] as? String).orEmpty()
+                .ifBlank { firebaseUser.displayName.orEmpty() },
+            "role" to "SUBUSER",
+            "active" to true,
+            "createdAt" to FieldValue.serverTimestamp()
+        )))
+    }
+
     suspend fun listMyWorkspaces(): List<CloudWorkspace> {
         val userId = currentUserIdOrNull() ?: error("يجب ربط حساب Google أولاً")
         val memberships = client.postgrest["workspace_members"].select {
@@ -489,7 +549,9 @@ class CloudCollaborationRepository {
         }.decodeList<CloudWorkspaceMember>()
 
         return memberships.mapNotNull { member ->
-            runCatching { getWorkspace(member.workspaceId) }.getOrNull()
+            runCatching {
+                getWorkspace(member.workspaceId).also { mirrorFirebaseWorkspaceAccess(it) }
+            }.getOrNull()
         }.distinctBy { it.id }
     }
 
@@ -512,20 +574,40 @@ class CloudCollaborationRepository {
             eq("id", workspaceId)
         
             }
-        }.decodeSingle<CloudWorkspace>()
+        }.decodeSingle<CloudWorkspace>().also { mirrorFirebaseWorkspaceAccess(it) }
 
     suspend fun registerDevice(
         workspaceId: String,
         deviceName: String,
         stableFingerprint: String
-    ): String = client.postgrest.rpc(
-        "register_cloud_device",
-        buildJsonObject {
-            put("p_workspace", JsonPrimitive(workspaceId))
-            put("p_device_name", JsonPrimitive(deviceName.trim().ifBlank { "جهاز Android" }))
-            put("p_device_fingerprint", JsonPrimitive(stableFingerprint))
+    ): String {
+        val deviceId = client.postgrest.rpc(
+            "register_cloud_device",
+            buildJsonObject {
+                put("p_workspace", JsonPrimitive(workspaceId))
+                put("p_device_name", JsonPrimitive(deviceName.trim().ifBlank { "جهاز Android" }))
+                put("p_device_fingerprint", JsonPrimitive(stableFingerprint))
+            }
+        ).decodeAs<String>()
+
+        withContext(Dispatchers.IO) {
+            val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
+            val device = FirebaseFirestore.getInstance()
+                .collection("workspaces").document(workspaceId)
+                .collection("devices").document(deviceId)
+            Tasks.await(device.set(mapOf(
+                "workspaceId" to workspaceId,
+                "userId" to user.uid,
+                "deviceName" to deviceName.trim().ifBlank { "جهاز Android" },
+                "deviceFingerprint" to stableFingerprint,
+                "isRevoked" to false,
+                "appState" to "FOREGROUND",
+                "lastSeenAt" to FieldValue.serverTimestamp(),
+                "createdAt" to FieldValue.serverTimestamp()
+            ), SetOptions.merge()))
         }
-    ).decodeAs<String>()
+        return deviceId
+    }
 
     suspend fun listWorkspaceDevices(workspaceId: String): List<CloudDevice> =
         client.postgrest["devices"].select {
@@ -553,6 +635,33 @@ class CloudCollaborationRepository {
                 put("p_app_state", JsonPrimitive(appState))
             }
         )
+        withContext(Dispatchers.IO) {
+            val user = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
+            val preferences = FirebaseFirestore.getInstance()
+            // workspaceId is obtained from the registered device record in Supabase;
+            // the app-scoped preference is the same active workspace used by the service.
+            val workspaceId = deviceWorkspaceId(deviceId)
+            val deviceRef = preferences.collection("workspaces").document(workspaceId)
+                .collection("devices").document(deviceId)
+            Tasks.await(deviceRef.update(
+                mapOf(
+                    "userId" to user.uid,
+                    "lastSeenAt" to FieldValue.serverTimestamp(),
+                    "appState" to appState
+                )
+            ))
+            Tasks.await(preferences.collection("users").document(user.uid).set(
+                mapOf("lastSeenAt" to FieldValue.serverTimestamp()),
+                SetOptions.merge()
+            ))
+        }
+    }
+
+    private suspend fun deviceWorkspaceId(deviceId: String): String {
+        val rows = client.postgrest["devices"].select {
+            filter { eq("id", deviceId) }
+        }.decodeList<CloudDevice>()
+        return rows.firstOrNull()?.workspaceId ?: error("تعذر تحديد مساحة عمل الجهاز")
     }
 
     /**
@@ -761,7 +870,7 @@ class CloudCollaborationRepository {
         displayName: String = ""
     ): String {
         require(email.trim().contains("@")) { "أدخل بريداً إلكترونياً صحيحاً" }
-        return client.postgrest.rpc(
+        val memberId = client.postgrest.rpc(
             "add_workspace_member_by_email",
             buildJsonObject {
                 put("p_workspace", JsonPrimitive(workspaceId))
@@ -770,6 +879,25 @@ class CloudCollaborationRepository {
                 put("p_display_name", JsonPrimitive(displayName.trim()))
             }
         ).decodeAs<String>()
+
+        require(role == "SUBUSER") { "دور الدعوة غير مدعوم" }
+        withContext(Dispatchers.IO) {
+            val owner = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
+            val normalizedEmail = email.trim().lowercase()
+            val expiry = Timestamp(java.util.Date(System.currentTimeMillis() + 30L * 24L * 60L * 60L * 1000L))
+            Tasks.await(FirebaseFirestore.getInstance().collection("emailInvites")
+                .document(normalizedEmail).set(mapOf(
+                    "email" to normalizedEmail,
+                    "workspaceId" to workspaceId,
+                    "role" to "SUBUSER",
+                    "active" to true,
+                    "displayName" to displayName.trim(),
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "expiresAt" to expiry,
+                    "createdBy" to owner.uid
+                ), SetOptions.merge()))
+        }
+        return memberId
     }
 
     suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> =

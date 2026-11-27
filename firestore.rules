@@ -106,7 +106,7 @@ service cloud.firestore {
 
       match /devices/{deviceId} {
         allow read: if canAccessWorkspace(workspaceId);
-        allow create: if isActiveMember(workspaceId)
+        allow create: if (isOwner(workspaceId) || isActiveMember(workspaceId))
           && request.resource.data.userId == uid()
           && request.resource.data.isRevoked == false;
         allow update: if isOwner(workspaceId)
