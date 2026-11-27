@@ -146,6 +146,79 @@ fun SettingsScreen(
     }
 
 
+    DisposableEffect(context) {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        fun updateInternetState() {
+            val network = connectivityManager.activeNetwork
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+            internetAvailable = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = updateInternetState()
+            override fun onLost(network: Network) = updateInternetState()
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = updateInternetState()
+        }
+        updateInternetState()
+        connectivityManager.registerDefaultNetworkCallback(callback)
+        onDispose { runCatching { connectivityManager.unregisterNetworkCallback(callback) } }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var notificationsEnabled by remember {
+        mutableStateOf(AppNotificationManager.hasNotificationPermission(context))
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsEnabled = AppNotificationManager.hasNotificationPermission(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        notificationsEnabled = granted || AppNotificationManager.hasNotificationPermission(context)
+    }
+
+    var editUserName by remember(currentUserName) { mutableStateOf(currentUserName) }
+    var editOrgName by remember(currentOrgName) { mutableStateOf(currentOrgName) }
+
+    // Dialog states
+    var showCreateBackupDialog by remember { mutableStateOf(false) }
+    var showCreateCloudBackupDialog by remember { mutableStateOf(false) }
+    var showCloudRestoreSelectorDialog by remember { mutableStateOf(false) }
+    var showRestoreSelectorDialog by remember { mutableStateOf(false) }
+    var pendingCloudAction by remember { mutableStateOf<PendingCloudAction?>(null) }
+    var backupToRestore by remember { mutableStateOf<BackupRecord?>(null) }
+    var backupToDelete by remember { mutableStateOf<BackupRecord?>(null) }
+    var localBackupToRename by remember { mutableStateOf<BackupRecord?>(null) }
+    var cloudBackupToRestore by remember { mutableStateOf<CloudBackupItem?>(null) }
+    var cloudBackupToRename by remember { mutableStateOf<CloudBackupItem?>(null) }
+    var cloudBackupToDelete by remember { mutableStateOf<CloudBackupItem?>(null) }
+    var pendingExternalJsonImport by remember { mutableStateOf<String?>(null) }
+
+    val googleAccountPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val pickedEmail = result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)?.trim().orEmpty()
+            if (pickedEmail.isNotBlank()) {
+                viewModel.linkGoogleDriveAccount(context, pickedEmail)
+            }
+        } else {
+            pendingCloudAction = null
+        }
+    }
+
+    val googleConsentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        viewModel.onGoogleConsentResult(context, result.resultCode == Activity.RESULT_OK)
+    }
+
     LaunchedEffect(pendingConsentRequest) {
         val req = pendingConsentRequest ?: return@LaunchedEffect
         runCatching {
