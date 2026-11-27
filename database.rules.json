@@ -29,6 +29,20 @@
             ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true)",
             ".write": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true) && newData.child('userId').val() === auth.uid"
           }
+        },
+        "warehouses": {
+          "$warehouseId": {
+            ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true)",
+            ".write": "auth != null && root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid"
+          }
+        },
+        "warehouseMemberships": {
+          "$warehouseId": {
+            "$memberUid": {
+              ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || $memberUid === auth.uid)",
+              ".write": "auth != null && root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid"
+            }
+          }
         }
       }
     }

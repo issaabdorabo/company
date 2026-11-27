@@ -922,21 +922,74 @@ class CloudCollaborationRepository {
         return memberId
     }
 
-    suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> =
-        client.postgrest["warehouses"].select {
-            filter {
-            eq("workspace_id", workspaceId)
-        
-            }
-        }.decodeList<CloudWarehouse>()
+    /**
+     * Transitional Firebase mirror for the collaboration metadata being moved off Supabase.
+     * Inventory rows and operation payloads are deliberately excluded.
+     */
+    private suspend fun mirrorFirebaseWarehouses(
+        workspaceId: String,
+        warehouses: List<CloudWarehouse>
+    ) = runFirebaseMirror("warehouse metadata") { withContext(Dispatchers.IO) {
+        val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
+        val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+        val workspace = root.child("workspaces").child(workspaceId)
+        val membership = Tasks.await(workspace.child("members").child(firebaseUser.uid).get())
+        val isOwner = Tasks.await(workspace.child("ownerUserId").get())
+            .getValue(String::class.java) == firebaseUser.uid
+        if (!isOwner && membership.child("active").getValue(Boolean::class.java) != true) {
+            return@withContext
+        }
+        warehouses.forEach { warehouse ->
+            Tasks.await(workspace.child("warehouses").child(warehouse.id).updateChildren(mapOf(
+                "warehouseId" to warehouse.id,
+                "workspaceId" to workspaceId,
+                "localId" to (warehouse.localId ?: -1L),
+                "name" to warehouse.name,
+                "updatedAt" to ServerValue.TIMESTAMP
+            )))
+        }
+    } }
 
-    suspend fun listWarehouseMemberships(warehouseId: String): List<CloudWarehouseMembership> =
-        client.postgrest["warehouse_memberships"].select {
-            filter {
-            eq("warehouse_id", warehouseId)
-        
-            }
+    private suspend fun mirrorFirebaseCurrentUserPermissions(
+        warehouseId: String,
+        memberships: List<CloudWarehouseMembership>
+    ) = runFirebaseMirror("warehouse permissions") { withContext(Dispatchers.IO) {
+        val firebaseUser = FirebaseAuthClient.auth.currentUser ?: return@withContext
+        val supabaseUserId = currentUserIdOrNull() ?: return@withContext
+        val ownMembership = memberships.firstOrNull { it.userId == supabaseUserId } ?: return@withContext
+        val root = FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
+        val workspaceId = Tasks.await(root.child("workspaces").orderByChild("warehouses/$warehouseId/warehouseId").equalTo(warehouseId).get())
+            .children.firstOrNull()?.key ?: return@withContext
+        val workspace = root.child("workspaces").child(workspaceId)
+        val member = Tasks.await(workspace.child("members").child(firebaseUser.uid).get())
+        if (member.child("active").getValue(Boolean::class.java) != true &&
+            workspace.child("ownerUserId").get().let { Tasks.await(it).getValue(String::class.java) != firebaseUser.uid }) {
+            return@withContext
+        }
+        Tasks.await(workspace.child("warehouseMemberships").child(warehouseId)
+            .child(firebaseUser.uid).updateChildren(mapOf(
+                "warehouseId" to warehouseId,
+                "userId" to firebaseUser.uid,
+                "permissionsJson" to ownMembership.permissions.toString(),
+                "updatedAt" to ServerValue.TIMESTAMP
+            )))
+    } }
+
+    suspend fun listWarehouses(workspaceId: String): List<CloudWarehouse> {
+        val warehouses = client.postgrest["warehouses"].select {
+            filter { eq("workspace_id", workspaceId) }
+        }.decodeList<CloudWarehouse>()
+        mirrorFirebaseWarehouses(workspaceId, warehouses)
+        return warehouses
+    }
+
+    suspend fun listWarehouseMemberships(warehouseId: String): List<CloudWarehouseMembership> {
+        val memberships = client.postgrest["warehouse_memberships"].select {
+            filter { eq("warehouse_id", warehouseId) }
         }.decodeList<CloudWarehouseMembership>()
+        mirrorFirebaseCurrentUserPermissions(warehouseId, memberships)
+        return memberships
+    }
 
     suspend fun setWarehousePermissions(
         workspaceId: String,
@@ -955,6 +1008,12 @@ class CloudCollaborationRepository {
                 put("p_make_dedicated", JsonPrimitive(makeDedicated))
             }
         )
+        if (userId == currentUserIdOrNull()) {
+            mirrorFirebaseCurrentUserPermissions(
+                warehouseId,
+                listOf(CloudWarehouseMembership(warehouseId, userId, permissions))
+            )
+        }
     }
 
     suspend fun listConversations(workspaceId: String, ownerUserId: String): List<CloudConversation> {
