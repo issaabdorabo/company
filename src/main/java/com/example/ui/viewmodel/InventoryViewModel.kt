@@ -54,6 +54,7 @@ import com.example.data.sync.SyncApiException
 import com.example.ui.theme.AppTheme
 import com.example.util.AppNotificationManager
 import com.example.util.SecurityUtils
+import com.example.util.QrPairingHelper
 import com.example.util.QrPairingPayload
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
