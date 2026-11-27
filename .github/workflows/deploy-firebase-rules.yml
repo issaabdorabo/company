@@ -52,4 +52,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes firebase-tools@latest deploy --only database --project mkhzny-c1402 --non-interactive
+          npx --yes firebase-tools@latest deploy --only database,storage --project mkhzny-c1402 --non-interactive
