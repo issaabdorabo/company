@@ -39,10 +39,32 @@
         "warehouseMemberships": {
           "$warehouseId": {
             "$memberUid": {
-              ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || $memberUid === root.child('users').child(auth.uid).child('supabaseUserId').val())",
+              ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true)",
               ".write": "auth != null && root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid"
             }
           }
+        },
+        "conversations": {
+          "$conversationId": {
+            ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || data.child('participants').child(auth.uid).val() === true)",
+            ".write": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true)",
+            "messages": {
+              "$messageId": {
+                ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('conversations').child($conversationId).child('participants').child(auth.uid).val() === true)",
+                ".write": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || (!data.exists() && newData.child('senderUserId').val() === auth.uid && root.child('workspaces').child($workspaceId).child('conversations').child($conversationId).child('participants').child(auth.uid).val() === true) || (data.child('senderUserId').val() === auth.uid && newData.child('senderUserId').val() === auth.uid))"
+              }
+            }
+          }
+        },
+        "notifications": {
+          "$recipientUid": {
+            ".read": "auth != null && (auth.uid === $recipientUid || root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid)",
+            ".write": "auth != null && root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid"
+          }
+        },
+        "operationAudit": {
+          ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true)",
+          ".write": "auth != null && root.child('workspaces').child($workspaceId).child('members').child(auth.uid).child('active').val() === true"
         }
       }
     },
