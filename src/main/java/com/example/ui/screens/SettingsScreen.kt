@@ -131,6 +131,8 @@ fun SettingsScreen(
 
     var internetAvailable by remember { mutableStateOf(false) }
     var firebaseAuthStatus by remember { mutableStateOf("جارٍ التحقق من حساب Firebase…") }
+    var isFirebaseAuthenticated by remember { mutableStateOf(FirebaseAuthClient.currentUserIdOrNull() != null) }
+    var isFirebaseConnecting by remember { mutableStateOf(false) }
 
 
     DisposableEffect(Unit) {
