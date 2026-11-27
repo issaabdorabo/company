@@ -60,10 +60,13 @@ object SupabaseAuthClient {
         )
         val googleCredential = GoogleIdTokenCredential.createFrom(result.credential.data)
 
+        // Keep the existing collaboration session alive during migration, while
+        // establishing the matching Firebase identity from the very same Google token.
         client.auth.signInWith(IDToken) {
             idToken = googleCredential.idToken
             provider = Google
             nonce = rawNonce
         }
+        FirebaseAuthClient.signInWithGoogleIdToken(googleCredential.idToken)
     }
 }

@@ -79,6 +79,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.SupabaseAuthClient
+import com.example.data.cloud.FirebaseAuthClient
+import com.google.firebase.auth.FirebaseAuth
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.status.SessionStatus
 import com.example.data.model.BackupRecord
@@ -134,6 +136,17 @@ fun SettingsScreen(
     var supabaseAuthStatus by remember { mutableStateOf("جارٍ التحقق من حساب Supabase…") }
     var isSupabaseAuthenticated by remember { mutableStateOf(false) }
     var isSupabaseConnecting by remember { mutableStateOf(false) }
+    var isFirebaseAuthenticated by remember {
+        mutableStateOf(FirebaseAuthClient.currentUserIdOrNull() != null)
+    }
+
+    DisposableEffect(Unit) {
+        val listener = FirebaseAuth.AuthStateListener { auth ->
+            isFirebaseAuthenticated = auth.currentUser != null
+        }
+        FirebaseAuthClient.auth.addAuthStateListener(listener)
+        onDispose { FirebaseAuthClient.auth.removeAuthStateListener(listener) }
+    }
 
     LaunchedEffect(Unit) {
         SupabaseAuthClient.client.auth.sessionStatus.collect { status ->
@@ -466,12 +479,24 @@ fun SettingsScreen(
                             }
                             Surface(
                                 shape = CircleShape,
-                                color = if (isSupabaseAuthenticated) SuccessGreen.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
+                                color = if (isFirebaseAuthenticated) SuccessGreen.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
                             ) {
                                 Text(
-                                    if (isSupabaseAuthenticated) "Supabase مرتبط" else "Supabase غير مرتبط",
+                                    if (isFirebaseAuthenticated) "Firebase مرتبط" else "Firebase غير مرتبط",
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = if (isSupabaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (isFirebaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Surface(
+                                shape = CircleShape,
+                                color = if (isSupabaseAuthenticated) InfoBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    if (isSupabaseAuthenticated) "Supabase القديم مرتبط" else "Supabase القديم غير مرتبط",
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    color = if (isSupabaseAuthenticated) InfoBlue else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
