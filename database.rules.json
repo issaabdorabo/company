@@ -21,7 +21,7 @@
         "members": {
           "$memberUid": {
             ".read": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || $memberUid === auth.uid)",
-            ".write": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || ($memberUid === auth.uid && newData.child('userId').val() === auth.uid && newData.child('active').val() === true && root.child('emailInvites').child(newData.child('email').val().replace('.', ',')).child('workspaceId').val() === $workspaceId && root.child('emailInvites').child(newData.child('email').val().replace('.', ',')).child('active').val() === true && root.child('emailInvites').child(newData.child('email').val().replace('.', ',')).child('expiresAt').val() > now))"
+            ".write": "auth != null && (root.child('workspaces').child($workspaceId).child('ownerUserId').val() === auth.uid || ($memberUid === auth.uid && newData.child('userId').val() === auth.uid && newData.child('active').val() === true && root.child('emailInvites').child(newData.child('inviteKey').val()).child('workspaceId').val() === $workspaceId && root.child('emailInvites').child(newData.child('inviteKey').val()).child('active').val() === true && root.child('emailInvites').child(newData.child('inviteKey').val()).child('expiresAt').val() > now))"
           }
         },
         "devices": {

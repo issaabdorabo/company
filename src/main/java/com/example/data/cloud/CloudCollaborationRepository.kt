@@ -294,6 +294,10 @@ class CloudCollaborationRepository {
         const val CHAT_ATTACHMENTS_BUCKET = "chat-attachments"
     }
 
+    private fun firebaseInviteKey(email: String): String =
+        email.trim().lowercase().replace(".", ",").replace("#", "_").replace("$", "_")
+            .replace("[", "_").replace("]", "_").replace("/", "_")
+
     private fun inventoryTopic(workspaceId: String, deviceId: String, transportSecret: String): String {
         require(workspaceId.isNotBlank() && deviceId.isNotBlank() && transportSecret.isNotBlank()) {
             "بيانات قناة التعاون غير مكتملة"
@@ -530,7 +534,7 @@ class CloudCollaborationRepository {
 
         val email = firebaseUser.email?.trim()?.lowercase().orEmpty()
         if (email.isBlank()) return@withContext
-        val inviteKey = email.replace(".", ",")
+        val inviteKey = firebaseInviteKey(email)
         val invite = Tasks.await(root.child("emailInvites").child(inviteKey).get())
         val expiresAt = invite.child("expiresAt").getValue(Long::class.java) ?: return@withContext
         if (invite.child("active").getValue(Boolean::class.java) != true ||
@@ -545,6 +549,7 @@ class CloudCollaborationRepository {
                 .ifBlank { firebaseUser.displayName.orEmpty() },
             "role" to "SUBUSER",
             "active" to true,
+            "inviteKey" to inviteKey,
             "createdAt" to ServerValue.TIMESTAMP
         )))
     } }
@@ -900,7 +905,7 @@ class CloudCollaborationRepository {
         runFirebaseMirror("email invitation") { withContext(Dispatchers.IO) {
             val owner = FirebaseAuthClient.auth.currentUser ?: error("جلسة Firebase غير متاحة")
             val normalizedEmail = email.trim().lowercase()
-            val inviteKey = normalizedEmail.replace(".", ",")
+            val inviteKey = firebaseInviteKey(normalizedEmail)
             val expiry = System.currentTimeMillis() + 30L * 24L * 60L * 60L * 1000L
             Tasks.await(FirebaseDatabase.getInstance(FirebaseAuthClient.databaseUrl).reference
                 .child("emailInvites").child(inviteKey).updateChildren(mapOf(
