@@ -7,9 +7,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
@@ -78,8 +75,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.data.cloud.CloudBackupItem
-import com.example.data.cloud.FirebaseAuthClient
-import com.google.firebase.auth.FirebaseAuth
 import com.example.data.model.BackupRecord
 import com.example.ui.components.CloudBackupRadioPickerDialog
 import com.example.ui.components.CloudSyncAndAuthCard
@@ -128,41 +123,6 @@ fun SettingsScreen(
     val cloudAuthError by viewModel.cloudAuthError.collectAsState()
     val lastCloudBackupAt by viewModel.lastCloudBackupAt.collectAsState()
     val lastCloudBackupName by viewModel.lastCloudBackupName.collectAsState()
-
-    var internetAvailable by remember { mutableStateOf(false) }
-    var firebaseAuthStatus by remember { mutableStateOf("جارٍ التحقق من حساب Firebase…") }
-    var isFirebaseConnecting by remember { mutableStateOf(false) }
-    var isFirebaseAuthenticated by remember {
-        mutableStateOf(FirebaseAuthClient.currentUserIdOrNull() != null)
-    }
-
-    DisposableEffect(Unit) {
-        val listener = FirebaseAuth.AuthStateListener { auth ->
-            isFirebaseAuthenticated = auth.currentUser != null
-            firebaseAuthStatus = auth.currentUser?.email?.let { "الحساب مرتبط: $it" } ?: "لم يتم ربط حساب Firebase بعد"
-        }
-        FirebaseAuthClient.auth.addAuthStateListener(listener)
-        onDispose { FirebaseAuthClient.auth.removeAuthStateListener(listener) }
-    }
-
-
-    DisposableEffect(context) {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        fun updateInternetState() {
-            val network = connectivityManager.activeNetwork
-            val capabilities = connectivityManager.getNetworkCapabilities(network)
-            internetAvailable = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-        }
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = updateInternetState()
-            override fun onLost(network: Network) = updateInternetState()
-            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = updateInternetState()
-        }
-        updateInternetState()
-        connectivityManager.registerDefaultNetworkCallback(callback)
-        onDispose { runCatching { connectivityManager.unregisterNetworkCallback(callback) } }
-    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     var notificationsEnabled by remember {
@@ -382,108 +342,6 @@ fun SettingsScreen(
                         Text("النسخ الاحتياطي والتصدير غير متاح", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
                         Text("لم يمنحك المستخدم الرئيسي صلاحية النسخ الاحتياطي المحلي أو السحابي أو تصدير واستيراد JSON.", style = MaterialTheme.typography.bodySmall)
                     }
-                }
-            }
-        }
-
-        // Single Google sign-in action for the online collaboration identity.
-        item {
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("حساب التعاون عبر الإنترنت", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(
-                        "اربط حساب Google مرة واحدة لتفعيل هوية المستخدم والتعاون عبر الإنترنت. هذا الحساب مستقل عن حساب Google Drive للنسخ الاحتياطي.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(
-                            onClick = {
-                                if (!internetAvailable || isFirebaseConnecting || isFirebaseAuthenticated) return@Button
-                                isFirebaseConnecting = true
-                                coroutineScope.launch {
-                                    try {
-                                        FirebaseAuthClient.signInWithGoogle(context)
-                                    } catch (cancelled: CancellationException) {
-                                        throw cancelled
-                                    } catch (error: Exception) {
-                                        Toast.makeText(
-                                            context,
-                                            "تعذر ربط حساب التعاون: ${error.localizedMessage ?: "خطأ غير معروف"}",
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    } finally {
-                                        isFirebaseConnecting = false
-                                    }
-                                }
-                            },
-                            enabled = internetAvailable && !isFirebaseAuthenticated && !isFirebaseConnecting,
-                            modifier = Modifier.weight(1.2f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text(
-                                when {
-                                    isFirebaseAuthenticated -> "حساب التعاون مرتبط"
-                                    isFirebaseConnecting -> "جارٍ ربط الحساب..."
-                                    else -> "ربط حساب التعاون عبر Google"
-                                },
-                                fontSize = 12.sp
-                            )
-                        }
-                        Column(
-                            modifier = Modifier.weight(0.8f),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = if (internetAvailable) SuccessGreen.copy(alpha = 0.12f) else WarningOrange.copy(alpha = 0.12f)
-                            ) {
-                                Text(
-                                    if (internetAvailable) "الإنترنت متصل" else "الإنترنت غير متصل",
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = if (internetAvailable) SuccessGreen else WarningOrange,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            Surface(
-                                shape = CircleShape,
-                                color = if (isFirebaseAuthenticated) SuccessGreen.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
-                            ) {
-                                Text(
-                                    if (isFirebaseAuthenticated) "Firebase مرتبط" else "Firebase غير مرتبط",
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = if (isFirebaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            Surface(
-                                shape = CircleShape,
-                                color = if (isFirebaseAuthenticated) InfoBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
-                            ) {
-                                Text(
-                                    if (isFirebaseAuthenticated) "Firebase Authentication مرتبط" else "Firebase Authentication غير مرتبط",
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = if (isFirebaseAuthenticated) InfoBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        firebaseAuthStatus,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (isFirebaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }

@@ -88,7 +88,6 @@ import com.example.util.AppNotificationManager
 import com.example.ui.components.DeviceRoleStatusChip
 import com.example.ui.components.KickedDeviceDialog
 import com.example.ui.screens.DashboardScreen
-import com.example.ui.screens.CloudCollaborationScreen
 import com.example.ui.screens.DeviceManagementScreen
 import com.example.ui.screens.AuditLogScreen
 import com.example.ui.screens.ItemsScreen
@@ -104,8 +103,6 @@ import com.example.ui.theme.WarningOrange
 import com.example.ui.viewmodel.InventoryViewModel
 import com.example.ui.viewmodel.DeviceAction
 import com.example.ui.viewmodel.InventoryViewModelFactory
-import com.example.ui.viewmodel.CloudCollaborationViewModel
-import com.example.ui.viewmodel.CloudCollaborationViewModelFactory
 
 enum class AppNavDestination(val titleAr: String, val icon: ImageVector) {
     DASHBOARD("الرئيسية", Icons.Default.Dashboard),
@@ -116,15 +113,11 @@ enum class AppNavDestination(val titleAr: String, val icon: ImageVector) {
     AUDIT_LOG("سجل العمليات", Icons.AutoMirrored.Filled.ReceiptLong),
     SETTINGS("الإعدادات", Icons.Default.Settings),
     DEVICES("الأجهزة", Icons.Default.Devices),
-    CLOUD_COLLABORATION("الحسابات والصلاحيات", Icons.Default.Cloud)
 }
 
 class MainActivity : ComponentActivity() {
     private val viewModel: InventoryViewModel by viewModels {
         InventoryViewModelFactory(application)
-    }
-    private val cloudViewModel: CloudCollaborationViewModel by viewModels {
-        CloudCollaborationViewModelFactory(application)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,7 +128,7 @@ class MainActivity : ComponentActivity() {
             SmartInventoryTheme(theme = currentTheme) {
                 // Ensure RTL layout for Arabic
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                    MainApp(viewModel = viewModel, cloudViewModel = cloudViewModel)
+                    MainApp(viewModel = viewModel)
                 }
             }
         }
@@ -146,8 +139,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainApp(
-    viewModel: InventoryViewModel,
-    cloudViewModel: CloudCollaborationViewModel
+    viewModel: InventoryViewModel
 ) {
     var showSplash by remember { mutableStateOf(true) }
     var currentDestination by remember { mutableStateOf(AppNavDestination.DASHBOARD) }
@@ -526,11 +518,6 @@ fun MainApp(
                                     viewModel = viewModel
                                 )
                                 AppNavDestination.DEVICES -> DeviceManagementScreen(viewModel = viewModel)
-                                AppNavDestination.CLOUD_COLLABORATION -> CloudCollaborationScreen(
-                                    viewModel = cloudViewModel,
-                                    onOpenSettings = { currentDestination = AppNavDestination.SETTINGS },
-                                    onBeforeOpen = { viewModel.flushPendingOperationsBeforeCollaboration() }
-                                )
                             }
                         }
                     }

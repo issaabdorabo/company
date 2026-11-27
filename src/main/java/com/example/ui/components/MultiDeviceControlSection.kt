@@ -307,17 +307,6 @@ fun MultiDeviceControlSection(
                     }
                 }
 
-                OutlinedButton(
-                    onClick = { viewModel.syncLinkedSubDevicesPermissionsToCloud() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("sync_cloud_device_permissions_btn"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(17.dp))
-                    Spacer(Modifier.width(7.dp))
-                    Text("مزامنة صلاحيات الأجهزة مع التعاون السحابي")
-                }
             } else {
                 // SUB-DEVICE MODE
                 if (!isSubConnected) {
