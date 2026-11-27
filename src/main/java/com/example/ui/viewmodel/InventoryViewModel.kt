@@ -964,7 +964,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 warehousePermissions = warehousePermissions,
                 createdAt = now,
                 updatedAt = now,
-                lastSeenAt = 0L
+                lastSeenAt = 0L,
+                pairingExpiresAt = now + 10L * 60L * 1000L
             )
 
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
@@ -995,11 +996,22 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun showSessionCredentialsQr(slotId: String) {
         if (!isMainDevice.value) return
         viewModelScope.launch {
-            val slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
+            var slot = preferences.getLinkedSubDevicesSnapshot().firstOrNull {
                 it.id == slotId && !it.isClaimed && !it.isKicked && !it.wasUnlinked
             } ?: run {
                 _userMessage.emit("رمز ربط هذا الجهاز غير متاح أو تم استخدامه بالفعل.")
                 return@launch
+            }
+            if (slot.pairingExpiresAt <= System.currentTimeMillis()) {
+                slot = slot.copy(
+                    sessionToken = UUID.randomUUID().toString(),
+                    pairingExpiresAt = System.currentTimeMillis() + 10L * 60L * 1000L,
+                    updatedAt = System.currentTimeMillis()
+                )
+                val slots = preferences.getLinkedSubDevicesSnapshot().map {
+                    if (it.id == slotId) slot else it
+                }
+                preferences.saveLinkedSubDevices(slots)
             }
             val workspaceId = preferences.cloudWorkspaceIdFlow.first()
             val mainDeviceId = preferences.cloudDeviceIdFlow.first()
@@ -1007,6 +1019,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _userMessage.emit("تعذر استعادة رمز الربط. افتح التعاون السحابي وتأكد من تسجيل الجهاز الرئيسي.")
                 return@launch
             }
+            require(slot.pairingExpiresAt > System.currentTimeMillis()) { "انتهت صلاحية رمز الربط. أعد إصدار الرمز." }
             val credentials = CreatedDeviceCredentials(
                 deviceSlotId = slot.id,
                 deviceName = slot.deviceName,
@@ -1850,6 +1863,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val slotIndex = current.indexOfFirst { it.id == slotId }
             require(slotIndex >= 0) { "رمز ربط الجهاز غير موجود أو تم حذفه" }
             val slot = current[slotIndex]
+            require(slot.pairingExpiresAt > System.currentTimeMillis()) { "انتهت صلاحية رمز الربط. اطلب من الجهاز الرئيسي إصدار رمز جديد." }
             transportSecret = slot.sessionToken
             require(event["_transportSecret"]?.jsonPrimitive?.contentOrNull == transportSecret) {
                 "رمز QR لا يطابق خانة الجهاز المطلوبة"
