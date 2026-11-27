@@ -6,6 +6,7 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
+  alias(libs.plugins.google.services)
 }
 
 android {
@@ -19,7 +20,7 @@ android {
     versionCode = 1
     versionName = "1.0"
     buildConfigField("String", "SUPABASE_URL", "\"https://qwnflmkpmomacznvzodx.supabase.co\"")
-    buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_WSBcbDikUzCNnO_nlW3OrA_y8n57mZ5\"")
+    buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_WSBcbDikUzCNnO_nlW3OrA_y8n57mZ\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -82,11 +83,15 @@ secrets {
   defaultPropertiesFileName = ".env.example"
 }
 
-// googleServices { missingGoogleServicesStrategy = com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy.WARN }
-
 // Some unused dependencies are commented out below instead of being removed.
-// This makes it easy to add them back in the future if needed.
 dependencies {
+  implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.auth)
+  implementation(libs.firebase.firestore)
+  implementation(libs.firebase.database)
+  implementation(libs.firebase.messaging)
+  implementation(libs.firebase.storage)
+
   implementation(platform(libs.supabase.bom))
   implementation(libs.supabase.auth)
   implementation(libs.supabase.postgrest)

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "507835633145",
+    "project_id": "mkhzny-c1402",
+    "storage_bucket": "mkhzny-c1402.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:507835633145:android:67c7f4bdb5ca4346468128",
+        "android_client_info": {
+          "package_name": "com.aistudio.inventory.essa"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAARPh-y75smpZKFgADXJ8inr8X9LkYti8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
