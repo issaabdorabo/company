@@ -94,6 +94,8 @@ jobs:
 
       - name: Build APK (retry Maven rate limits)
         shell: bash
+        env:
+          ANDROID_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEYSTORE_PASSWORD }}
         run: |
           cd "$PROJECT_DIR"
           set +e
