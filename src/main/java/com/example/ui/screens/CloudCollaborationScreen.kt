@@ -451,7 +451,7 @@ fun CloudCollaborationScreen(
 
                     if (activeWorkspace != null) {
                         Text(
-                            "قاعدة المخزون محلية على كل جهاز ولا تُرفع إلى Supabase. يُستخدم Firebase للصلاحيات والمحادثات وحالة اتصال الأجهزة، وتُحفظ النسخة الاحتياطية الكاملة عبر Google Drive.",
+                            "قاعدة المخزون محلية على كل جهاز ولا تُرفع إلى Firebase. يُستخدم Firebase للصلاحيات والمحادثات وحالة اتصال الأجهزة، وتُحفظ النسخة الاحتياطية الكاملة عبر Google Drive.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
