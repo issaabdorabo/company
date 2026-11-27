@@ -1159,19 +1159,22 @@ class CloudCollaborationRepository {
             return@withContext CloudMessage(messageId, conv.key!!, uid, m.textValue("clientMessageId"),
                 clean, m.textValue("attachmentPath").ifBlank { null }, m.textValue("createdAt"), now,
                 m.textValue("replyToMessageId").ifBlank { null })
+          }
         }
         error("الرسالة غير موجودة")
     }
 
     suspend fun deleteMessage(messageId: String) = withContext(Dispatchers.IO) {
         val uid = FirebaseAuthClient.currentUserIdOrNull() ?: error("يجب تسجيل الدخول")
-        val workspaces = Tasks.await(firebaseRoot.child("workspaces").get())
-        for (ws in workspaces.children) for (conv in ws.child("conversations").children) {
+        val workspaces = listMyWorkspaces()
+        for (ws in workspaces) {
+          val wsSnap = Tasks.await(firebaseRoot.child("workspaces").child(ws.id).get())
+          for (conv in wsSnap.child("conversations").children) {
             val m = conv.child("messages").child(messageId)
             if (!m.exists()) continue
             require(m.textValue("senderUserId") == uid || ws.ownerUserId == uid) { "لا تملك صلاحية حذف هذه الرسالة" }
             val path = m.textValue("attachmentPath")
-            Tasks.await(firebaseRoot.child("workspaces").child(ws.key!!).child("conversations")
+            Tasks.await(firebaseRoot.child("workspaces").child(ws.id).child("conversations")
                 .child(conv.key!!).child("messages").child(messageId).removeValue())
             if (path.isNotBlank()) runCatching { Tasks.await(FirebaseStorage.getInstance().reference.child(path).delete()) }
             return@withContext
@@ -1244,5 +1247,4 @@ class CloudCollaborationRepository {
     }
 
     fun observeMessages(conversationId: String): Flow<Unit> = flow { emit(Unit) }
-    }
 }
