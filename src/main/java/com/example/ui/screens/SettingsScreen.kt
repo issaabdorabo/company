@@ -78,11 +78,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.data.cloud.CloudBackupItem
-import com.example.data.cloud.SupabaseAuthClient
 import com.example.data.cloud.FirebaseAuthClient
 import com.google.firebase.auth.FirebaseAuth
-import io.github.jan.supabase.auth.auth
-import io.github.jan.supabase.auth.status.SessionStatus
 import com.example.data.model.BackupRecord
 import com.example.ui.components.CloudBackupRadioPickerDialog
 import com.example.ui.components.CloudSyncAndAuthCard
@@ -133,42 +130,18 @@ fun SettingsScreen(
     val lastCloudBackupName by viewModel.lastCloudBackupName.collectAsState()
 
     var internetAvailable by remember { mutableStateOf(false) }
-    var supabaseAuthStatus by remember { mutableStateOf("جارٍ التحقق من حساب Supabase…") }
-    var isSupabaseAuthenticated by remember { mutableStateOf(false) }
-    var isSupabaseConnecting by remember { mutableStateOf(false) }
-    var isFirebaseAuthenticated by remember {
-        mutableStateOf(FirebaseAuthClient.currentUserIdOrNull() != null)
-    }
+    var firebaseAuthStatus by remember { mutableStateOf("جارٍ التحقق من حساب Firebase…") }
+
 
     DisposableEffect(Unit) {
         val listener = FirebaseAuth.AuthStateListener { auth ->
             isFirebaseAuthenticated = auth.currentUser != null
+            firebaseAuthStatus = auth.currentUser?.email?.let { "الحساب مرتبط: $it" } ?: "لم يتم ربط حساب Firebase بعد"
         }
         FirebaseAuthClient.auth.addAuthStateListener(listener)
         onDispose { FirebaseAuthClient.auth.removeAuthStateListener(listener) }
     }
 
-    LaunchedEffect(Unit) {
-        SupabaseAuthClient.client.auth.sessionStatus.collect { status ->
-            when (status) {
-                is SessionStatus.Authenticated -> {
-                    isSupabaseAuthenticated = true
-                    supabaseAuthStatus = "الحساب مرتبط: ${status.session.user?.email ?: "Google"}"
-                }
-                is SessionStatus.NotAuthenticated -> {
-                    isSupabaseAuthenticated = false
-                    supabaseAuthStatus = "لم يتم ربط حساب Google بعد"
-                }
-                SessionStatus.Initializing -> {
-                    supabaseAuthStatus = "جارٍ استعادة جلسة الحساب…"
-                }
-                is SessionStatus.RefreshFailure -> {
-                    isSupabaseAuthenticated = false
-                    supabaseAuthStatus = "تعذر تحديث جلسة الحساب؛ تحقق من الاتصال"
-                }
-            }
-        }
-    }
 
     DisposableEffect(context) {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -430,11 +403,11 @@ fun SettingsScreen(
                     ) {
                         Button(
                             onClick = {
-                                if (!internetAvailable || isSupabaseConnecting || isSupabaseAuthenticated) return@Button
-                                isSupabaseConnecting = true
+                                if (!internetAvailable || isFirebaseConnecting || isFirebaseAuthenticated) return@Button
+                                isFirebaseConnecting = true
                                 coroutineScope.launch {
                                     try {
-                                        SupabaseAuthClient.signInWithGoogle(context)
+                                        FirebaseAuthClient.signInWithGoogle(context)
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
                                     } catch (error: Exception) {
@@ -444,18 +417,18 @@ fun SettingsScreen(
                                             Toast.LENGTH_LONG
                                         ).show()
                                     } finally {
-                                        isSupabaseConnecting = false
+                                        isFirebaseConnecting = false
                                     }
                                 }
                             },
-                            enabled = internetAvailable && !isSupabaseAuthenticated && !isSupabaseConnecting,
+                            enabled = internetAvailable && !isFirebaseAuthenticated && !isFirebaseConnecting,
                             modifier = Modifier.weight(1.2f),
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text(
                                 when {
-                                    isSupabaseAuthenticated -> "حساب التعاون مرتبط"
-                                    isSupabaseConnecting -> "جارٍ ربط الحساب..."
+                                    isFirebaseAuthenticated -> "حساب التعاون مرتبط"
+                                    isFirebaseConnecting -> "جارٍ ربط الحساب..."
                                     else -> "ربط حساب التعاون عبر Google"
                                 },
                                 fontSize = 12.sp
@@ -491,12 +464,12 @@ fun SettingsScreen(
                             }
                             Surface(
                                 shape = CircleShape,
-                                color = if (isSupabaseAuthenticated) InfoBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
+                                color = if (isFirebaseAuthenticated) InfoBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
                             ) {
                                 Text(
-                                    if (isSupabaseAuthenticated) "Supabase القديم مرتبط" else "Supabase القديم غير مرتبط",
+                                    if (isFirebaseAuthenticated) "Firebase Authentication" else "Firebase غير مرتبط",
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = if (isSupabaseAuthenticated) InfoBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (isFirebaseAuthenticated) InfoBlue else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -504,9 +477,9 @@ fun SettingsScreen(
                         }
                     }
                     Text(
-                        supabaseAuthStatus,
+                        firebaseAuthStatus,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (isSupabaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (isFirebaseAuthenticated) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
