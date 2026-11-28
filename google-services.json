@@ -1,0 +1,56 @@
+{
+  "project_info": {
+    "project_number": "507835633145",
+    "firebase_url": "https://mkhzny-c1402-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "mkhzny-c1402",
+    "storage_bucket": "mkhzny-c1402.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:507835633145:android:67c7f4bdb5ca4346468128",
+        "android_client_info": {
+          "package_name": "com.aistudio.inventory.essa"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "507835633145-bj05jv5vhcdvcq23ufcoipf1omkvfpbl.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.inventory.essa",
+            "certificate_hash": "d5600fee310f410e29a759945a4da0da629e4f40"
+          }
+        },
+        {
+          "client_id": "507835633145-d8lvckf3em6hrc5ljo4l61omr1492bk6.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.inventory.essa",
+            "certificate_hash": "7743ba75342d64edd9b66c4018c17f0ba65be063"
+          }
+        },
+        {
+          "client_id": "507835633145-hvejqle5v0tga6upock6gq2hptk1aeq5.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAARPh-y75smpZKFgADXJ8inr8X9LkYti8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "507835633145-hvejqle5v0tga6upock6gq2hptk1aeq5.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
