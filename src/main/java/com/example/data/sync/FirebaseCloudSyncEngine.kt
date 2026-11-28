@@ -186,6 +186,7 @@ class FirebaseCloudSyncEngine(
         // workspace first is not allowed by the owner-only Firestore read rule and can
         // leave a brand-new owner unable to create the workspace.
         // Firestore rules still protect existing workspaces: updates must retain ownerUid.
+        // Leave createdAt untouched on later refreshes.
         ref.set(
             mapOf(
                 "workspaceId" to workspaceId,
@@ -193,7 +194,6 @@ class FirebaseCloudSyncEngine(
                 "mainInstallationId" to installId,
                 "orgName" to orgName,
                 "schemaVersion" to 1,
-                "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             ),
             SetOptions.merge()
