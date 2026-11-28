@@ -422,7 +422,7 @@ class FirebaseCloudSyncEngine(
     suspend fun heartbeat() {
         val uid = requireUserUid()
         val role = preferences.deviceRoleFlow.first()
-        val workspaceId = if (role.name == "MAIN") ensureMainWorkspace() else preferences.workspaceCodeFlow.first()
+        val workspaceId = preferences.workspaceCodeFlow.first().ifBlank { preferences.ensureWorkspaceCode() }
         check(workspaceId.isNotBlank()) { "لا توجد مساحة عمل سحابية مرتبطة بهذا الجهاز" }
         val memberRef = workspaceRef(workspaceId).collection("members").document(uid)
         if (role.name != "MAIN") {
