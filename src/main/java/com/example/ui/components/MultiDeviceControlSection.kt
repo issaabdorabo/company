@@ -32,12 +32,9 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
-import androidx.compose.material.icons.filled.QrCode2
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -67,7 +64,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -84,7 +80,6 @@ import com.example.ui.theme.InfoBlue
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 import com.example.ui.viewmodel.InventoryViewModel
-import com.example.util.QrPairingHelper
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -677,13 +672,6 @@ fun MultiDeviceControlSection(
         )
     }
 
-},
-            onInvalidQrDetected = {
-                Toast.makeText(context, "هذا الباركود لا يخص ربط مخزني الذكي", Toast.LENGTH_SHORT).show()
-            },
-            onDismiss = { showQrScanner = false }
-        )
-    }
 }
 
 @Composable
@@ -908,99 +896,6 @@ private fun CreateSubDeviceDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
-    )
-}
-
-@Composable
-private fun CreatedCredentialsDialog(
-    credentials: CreatedDeviceCredentials,
-    onCopyAll: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val qrBitmap = remember(credentials) {
-        val payload = QrPairingHelper.encodePairingPayload(
-            hostAddress = credentials.hostAddress,
-            workspaceCode = credentials.workspaceCode,
-            plainPassword = credentials.plainPassword
-        )
-        QrPairingHelper.generateQrBitmap(payload, sizePx = 520)
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = Icons.Default.VpnKey,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
-            )
-        },
-        title = {
-            Text(
-                text = "باركود وبيانات ربط (${credentials.deviceName})",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                    modifier = Modifier.padding(vertical = 2.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Image(
-                            bitmap = qrBitmap.asImageBitmap(),
-                            contentDescription = "باركود ربط الجهاز الفرعي",
-                            modifier = Modifier
-                                .size(190.dp)
-                                .testTag("pairing_qr_code_image")
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "امسح الباركود من أي شبكة إنترنت لإتمام الربط",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF0F172A),
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
-                CredentialLine("طريقة الاتصال", "Firebase Firestore عبر الإنترنت")
-                CredentialLine("رمز قاعدة البيانات", credentials.workspaceCode)
-                CredentialLine("كلمة المرور المنفردة", credentials.plainPassword)
-                Text(
-                    text = "تنتهي صلاحية دعوة الربط بعد 30 دقيقة، وتُستخدم مرة واحدة فقط.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WarningOrange
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onCopyAll,
-                modifier = Modifier.testTag("copy_created_credentials_btn")
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("نسخ البيانات")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("إغلاق") }
-        }
     )
 }
 
