@@ -27,10 +27,11 @@ jobs:
         shell: bash
         env:
           ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+          ANDROID_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${ANDROID_DEBUG_KEYSTORE_BASE64}" ]; then
-            echo "::error::ANDROID_DEBUG_KEYSTORE_BASE64 secret is missing."
+          if [ -z "${ANDROID_DEBUG_KEYSTORE_BASE64}" ] || [ -z "${ANDROID_DEBUG_KEYSTORE_PASSWORD}" ]; then
+            echo "::error::ANDROID_DEBUG_KEYSTORE_BASE64 or ANDROID_DEBUG_KEYSTORE_PASSWORD secret is missing."
             exit 1
           fi
 
@@ -42,14 +43,26 @@ jobs:
             exit 1
           fi
 
-          ACTUAL_SHA1=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey 2>/dev/null | awk -F': ' '/SHA1:/{print $NF; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          if ! keytool -list -keystore "$HOME/.android/debug.keystore" -storepass "$ANDROID_DEBUG_KEYSTORE_PASSWORD" -alias androiddebugkey >/dev/null 2>&1; then
+            echo "::error::The permanent keystore could not be opened with ANDROID_DEBUG_KEYSTORE_PASSWORD or alias androiddebugkey was not found."
+            exit 1
+          fi
+
+          ACTUAL_SHA1=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass "$ANDROID_DEBUG_KEYSTORE_PASSWORD" -alias androiddebugkey 2>/dev/null | awk -F': ' '/SHA1:/{print $NF; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
 
           if [ -z "$ACTUAL_SHA1" ]; then
             echo "::error::Could not read SHA-1 from the permanent keystore."
             exit 1
           fi
-          echo "EXPECTED_APK_SHA1=$ACTUAL_SHA1" >> "$GITHUB_ENV"
-          echo "Permanent keystore verified. SHA-1: $ACTUAL_SHA1"
+
+          PINNED_ANDROID_DEBUG_SHA1="7743BA75342D64EDD9B66C4018C17F0BA65BE063"
+          if [ "$ACTUAL_SHA1" != "$PINNED_ANDROID_DEBUG_SHA1" ]; then
+            echo "::error::Permanent keystore mismatch. Expected $PINNED_ANDROID_DEBUG_SHA1 but found $ACTUAL_SHA1."
+            exit 1
+          fi
+
+          echo "EXPECTED_APK_SHA1=$PINNED_ANDROID_DEBUG_SHA1" >> "$GITHUB_ENV"
+          echo "Permanent keystore verified against the last successful APK fingerprint: $PINNED_ANDROID_DEBUG_SHA1"
 
       - name: Find Gradle project
         shell: bash
