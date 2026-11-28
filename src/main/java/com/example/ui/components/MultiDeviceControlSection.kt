@@ -267,7 +267,7 @@ fun MultiDeviceControlSection(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    imageVector = Icons.Default.Cloud,
+                                    imageVector = Icons.Default.Sync,
                                     contentDescription = null,
                                     tint = if (lastSyncError.isNullOrBlank()) SuccessGreen else WarningOrange,
                                     modifier = Modifier.size(18.dp)
