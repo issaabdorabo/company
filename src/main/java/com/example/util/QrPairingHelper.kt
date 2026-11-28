@@ -24,6 +24,7 @@ data class QrPairingPayload(
 object QrPairingHelper {
     private const val PAYLOAD_TYPE = "SMART_INV_PAIR"
 
+    @Suppress("UNUSED_PARAMETER")
     fun encodePairingPayload(
         hostAddress: String,
         workspaceCode: String,
