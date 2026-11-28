@@ -177,6 +177,8 @@ fun MainApp(viewModel: InventoryViewModel) {
     val isMainDevice by viewModel.isMainDevice.collectAsState()
     val devicePermissions by viewModel.devicePermissions.collectAsState()
     val isSubConnected by viewModel.isSubConnected.collectAsState()
+    val isCloudConnected by viewModel.isCloudConnected.collectAsState()
+    val lastSyncError by viewModel.lastSyncError.collectAsState()
     val kickedAlertMessage by viewModel.kickedAlertMessage.collectAsState()
     val operationAuditLogs by viewModel.operationAuditLogs.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
@@ -266,7 +268,8 @@ fun MainApp(viewModel: InventoryViewModel) {
                                 }
                             },
                             navigationIcon = {
-                                val syncReady = FirebaseAuth.getInstance().currentUser != null && (isMainDevice || isSubConnected)
+                                val syncReady = FirebaseAuth.getInstance().currentUser != null &&
+                                    ((isMainDevice && isCloudConnected && lastSyncError.isNullOrBlank()) || isSubConnected)
                                 IconButton(
                                     onClick = { currentDestination = AppNavDestination.DEVICES },
                                     modifier = Modifier.testTag("top_bar_sync_status_btn")
@@ -340,8 +343,12 @@ fun MainApp(viewModel: InventoryViewModel) {
                                 permissions = devicePermissions
                             )
                             val linkLabel = when {
+                                isMainDevice && isCloudConnected && lastSyncError.isNullOrBlank() ->
+                                    "🌐 اتصال Firebase مؤكد"
+                                isMainDevice && !lastSyncError.isNullOrBlank() ->
+                                    "⚠️ تعذر اتصال Firebase"
                                 isMainDevice && FirebaseAuth.getInstance().currentUser != null ->
-                                    "🌐 جاهز للربط عبر Firebase"
+                                    "⏳ لم يتم التحقق من اتصال Firebase"
                                 isMainDevice ->
                                     "⚠️ سجّل الدخول إلى Firebase"
                                 isSubConnected ->
@@ -353,7 +360,7 @@ fun MainApp(viewModel: InventoryViewModel) {
                                 text = linkLabel,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = if (isMainDevice || isSubConnected) SuccessGreen else WarningOrange
+                                color = if (syncReady) SuccessGreen else WarningOrange
                             )
                         }
                     }
