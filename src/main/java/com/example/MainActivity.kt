@@ -133,19 +133,19 @@ class MainActivity : ComponentActivity() {
                 // Ensure RTL layout for Arabic
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                     val firebaseAuth = remember { FirebaseAuth.getInstance() }
-                var signedInUser by remember { mutableStateOf<FirebaseUser?>(firebaseAuth.currentUser) }
-                DisposableEffect(firebaseAuth) {
-                    val listener = FirebaseAuth.AuthStateListener { auth ->
-                        signedInUser = auth.currentUser
+                    var signedInUser by remember { mutableStateOf<FirebaseUser?>(firebaseAuth.currentUser) }
+                    DisposableEffect(firebaseAuth) {
+                        val listener = FirebaseAuth.AuthStateListener { auth ->
+                            signedInUser = auth.currentUser
+                        }
+                        firebaseAuth.addAuthStateListener(listener)
+                        onDispose { firebaseAuth.removeAuthStateListener(listener) }
                     }
-                    firebaseAuth.addAuthStateListener(listener)
-                    onDispose { firebaseAuth.removeAuthStateListener(listener) }
-                }
-                if (signedInUser == null) {
-                    GoogleSignInScreen(onSignedIn = { signedInUser = it })
-                } else {
-                    MainApp(viewModel = viewModel)
-                }
+                    if (signedInUser == null) {
+                        GoogleSignInScreen(onSignedIn = { signedInUser = it })
+                    } else {
+                        MainApp(viewModel = viewModel)
+                    }
                 }
             }
         }
