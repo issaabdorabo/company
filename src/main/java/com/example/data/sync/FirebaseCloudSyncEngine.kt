@@ -12,6 +12,7 @@ import com.example.data.preferences.UserPreferencesManager
 import com.example.data.repository.InventoryRepository
 import com.example.util.SecurityUtils
 import com.google.firebase.Timestamp
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -211,8 +212,10 @@ class FirebaseCloudSyncEngine(
     suspend fun diagnoseFirestoreEndpoint(): String = withContext(Dispatchers.IO) {
         var connection: HttpURLConnection? = null
         try {
+            val projectId = FirebaseApp.getInstance().options.projectId
+                ?: throw IllegalStateException("لم يتم العثور على projectId في إعداد Firebase")
             val probeUrl = URL(
-                "https://firestore.googleapis.com/v1/projects/mkhzny-c1402/databases/(default)/documents/__connection_probe__/probe"
+                "https://firestore.googleapis.com/v1/projects/$projectId/databases/(default)/documents/__connection_probe__/probe"
             )
             connection = (probeUrl.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -231,7 +234,7 @@ class FirebaseCloudSyncEngine(
                 status == 403 && ("service_disabled" in normalized || "has not been used" in normalized) ->
                     "وصل الهاتف إلى Google، لكن Firestore API غير مفعّلة في مشروع mkhzny-c1402. فعّل Cloud Firestore API من Google Cloud Console. رد الخادم: $body"
                 status == 404 && ("database" in normalized && ("not found" in normalized || "does not exist" in normalized)) ->
-                    "وصل الهاتف إلى Google، لكن قاعدة Firestore الافتراضية (default) غير موجودة في المشروع mkhzny-c1402. أنشئ Cloud Firestore Database. رد الخادم: $body"
+                    "وصل الهاتف إلى Google، لكن قاعدة Firestore الافتراضية (default) غير موجودة في المشروع $projectId. أنشئ Cloud Firestore Database. رد الخادم: $body"
                 status in 200..499 ->
                     "فحص HTTPS ناجح: وصل الهاتف إلى firestore.googleapis.com (HTTP $status). هذا يثبت وصول HTTPS ولا يثبت نجاح قناة Firestore SDK. رد الخادم: $body"
                 else ->
