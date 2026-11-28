@@ -121,7 +121,7 @@ fun MultiDeviceControlSection(
     var showUnlinkConfirmDialog by remember { mutableStateOf(false) }
 
     // Sub-device pairing inputs
-    var hostInput by remember(mainHostUrl) { mutableStateOf(mainHostUrl.removePrefix("http://")) }
+    var hostInput by remember { mutableStateOf("CLOUD") }
     var codeInput by remember { mutableStateOf("") }
     var passwordInput by remember { mutableStateOf("") }
 
@@ -244,12 +244,12 @@ fun MultiDeviceControlSection(
             if (isMainDevice) {
                 // MAIN DEVICE CONTROLS
                 val displayCode = workspaceCode.ifBlank { serverStatus.workspaceCode }
-                val primaryAddr = serverStatus.primaryAddress
-                val hasLanIp = serverStatus.hostAddresses.isNotEmpty()
+                val primaryAddr = "Firebase Firestore"
+                val hasLanIp = true
 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = if (serverStatus.isRunning && hasLanIp) {
+                    color = if (lastSyncError.isNullOrBlank()) {
                         SuccessGreen.copy(alpha = 0.08f)
                     } else {
                         WarningOrange.copy(alpha = 0.1f)
@@ -275,9 +275,9 @@ fun MultiDeviceControlSection(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (serverStatus.isRunning && hasLanIp) {
-                                        "خادم الربط المباشر نشط وجاهز"
+                                        "المزامنة السحابية عبر الإنترنت جاهزة"
                                     } else {
-                                        "فعّل Wi-Fi أو نقطة الاتصال ليظهر عنوان الربط"
+                                        "الربط يعمل عبر الإنترنت ولا يحتاج شبكة أو نقطة اتصال مشتركة"
                                     },
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
@@ -292,7 +292,7 @@ fun MultiDeviceControlSection(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Refresh,
-                                    contentDescription = "تحديث عنوان الشبكة",
+                                    contentDescription = "تحديث حالة السحابة",
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(18.dp)
                                 )
@@ -310,7 +310,7 @@ fun MultiDeviceControlSection(
                             ) {
                                 Column(modifier = Modifier.padding(8.dp)) {
                                     Text(
-                                        text = "عنوان الجهاز (IP:Port)",
+                                        text = "وسيلة الربط",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -351,9 +351,9 @@ fun MultiDeviceControlSection(
                                 onClick = {
                                     copyToClipboard(
                                         context,
-                                        "عنوان الجهاز الرئيسي: $primaryAddr\nرمز القاعدة: $displayCode"
+                                        "الخدمة السحابية: Firebase Firestore\nرمز مساحة العمل: $displayCode"
                                     )
-                                    Toast.makeText(context, "تم نسخ عنوان الجهاز ورمز القاعدة", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "تم نسخ رمز مساحة العمل", Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier
                                     .weight(1f)
@@ -369,7 +369,7 @@ fun MultiDeviceControlSection(
                                 modifier = Modifier.testTag("regen_workspace_code_btn"),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("تحديث الرمز", fontSize = 11.sp)
+                                Text("تحديث حالة السحابة", fontSize = 11.sp)
                             }
                         }
                     }
@@ -434,81 +434,24 @@ fun MultiDeviceControlSection(
                         Text("مسح باركود الربط بالكاميرا (ربط تلقائي فوري)", fontWeight = FontWeight.Bold)
                     }
 
-                    // Nearby Auto-Discovered Main Devices
+                    // Cloud pairing is independent of local Wi-Fi, IP addresses, or hotspot discovery.
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = InfoBlue.copy(alpha = 0.08f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.WifiFind,
-                                    contentDescription = null,
-                                    tint = InfoBlue,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "الأجهزة الرئيسية المكتشفة تلقائياً على الشبكة",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = InfoBlue
-                                )
-                            }
-
-                            if (discoveredMainDevices.isEmpty()) {
-                                Text(
-                                    text = "جاري البحث على نفس شبكة Wi-Fi / نقطة الاتصال... يمكنك أيضاً إدخال عنوان IP والرمز يدوياً بالأسفل.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    discoveredMainDevices.forEach { found ->
-                                        AssistChip(
-                                            onClick = {
-                                                hostInput = found.hostAddress
-                                                codeInput = found.workspaceCode
-                                            },
-                                            label = {
-                                                Text("${found.workspaceCode} (${found.hostAddress})")
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    Icons.Default.Link,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            },
-                                            modifier = Modifier.testTag("discovered_main_chip_${found.workspaceCode}")
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        Text(
+                            text = "الربط يتم من خلال Firebase عبر الإنترنت؛ يمكن أن يكون الجهازان في مدينتين أو على شبكتين مختلفتين.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        )
                     }
-
-                    OutlinedTextField(
-                        value = hostInput,
-                        onValueChange = { hostInput = it },
-                        label = { Text("عنوان الجهاز الرئيسي (مثال: 192.168.43.1:8765)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("sub_host_input"),
-                        singleLine = true
-                    )
 
                     OutlinedTextField(
                         value = codeInput,
                         onValueChange = { codeInput = it.uppercase() },
-                        label = { Text("رمز قاعدة البيانات (مثال: INV-XXXXXX)") },
+                        label = { Text("رمز مساحة العمل (INV-XXXXXX)") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("sub_code_input"),
@@ -628,7 +571,7 @@ fun MultiDeviceControlSection(
                                 )
                             }
                             Text(
-                                text = "الجهاز الرئيسي: ${mainHostUrl.removePrefix("http://")} • رمز القاعدة: $workspaceCode",
+                                text = "الاتصال السحابي: Firebase Firestore • مساحة العمل: $workspaceCode",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -744,8 +687,8 @@ fun MultiDeviceControlSection(
             onCopyAll = {
                 val text = buildString {
                     appendLine("بيانات ربط الجهاز الفرعي (${creds.deviceName}):")
-                    appendLine("عنوان الجهاز الرئيسي: ${creds.hostAddress}")
-                    appendLine("رمز القاعدة: ${creds.workspaceCode}")
+                    appendLine("طريقة الربط: Firebase Firestore عبر الإنترنت")
+                    appendLine("رمز مساحة العمل: ${creds.workspaceCode}")
                     appendLine("كلمة المرور المنفردة: ${creds.plainPassword}")
                 }
                 copyToClipboard(context, text)
@@ -1096,7 +1039,7 @@ private fun CreatedCredentialsDialog(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "امسح الباركود بكاميرا الجهاز الفرعي للربط التلقائي",
+                            text = "امسح الباركود من أي شبكة إنترنت لإتمام الربط",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFF0F172A),
                             fontWeight = FontWeight.Bold,
@@ -1104,11 +1047,11 @@ private fun CreatedCredentialsDialog(
                         )
                     }
                 }
-                CredentialLine("عنوان الجهاز الرئيسي", credentials.hostAddress)
+                CredentialLine("طريقة الاتصال", "Firebase Firestore عبر الإنترنت")
                 CredentialLine("رمز قاعدة البيانات", credentials.workspaceCode)
                 CredentialLine("كلمة المرور المنفردة", credentials.plainPassword)
                 Text(
-                    text = "ملاحظة أمنية: يتم تشفير كلمة المرور بالبصمة الملحية (SHA-256) ولن تظهر مرة أخرى بعد إغلاق الجلسة.",
+                    text = "تنتهي صلاحية دعوة الربط بعد 30 دقيقة، وتُستخدم مرة واحدة فقط.",
                     style = MaterialTheme.typography.labelSmall,
                     color = WarningOrange
                 )
