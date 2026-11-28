@@ -150,10 +150,16 @@ service cloud.firestore {
     match /accountDirectory/{emailHash} {
       allow get: if signedIn();
       allow list: if false;
-      allow create, update: if signedIn()
+      allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.workspaceId is string
         && request.resource.data.email is string
+        && request.resource.data.status == 'ACTIVE';
+      allow update: if signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.workspaceId == resource.data.workspaceId
+        && request.resource.data.email == resource.data.email
         && request.resource.data.status == 'ACTIVE';
       allow delete: if false;
     }
@@ -215,11 +221,22 @@ service cloud.firestore {
         allow get: if signedIn()
           && (request.auth.uid == requestUid || isOwner(workspaceId));
         allow list: if isOwner(workspaceId);
-        allow update: if isOwner(workspaceId)
+        allow update: if (
+          isOwner(workspaceId)
           && resource.data.status == 'PENDING'
           && request.resource.data.status in ['APPROVED', 'REJECTED']
           && request.resource.data.requesterUid == resource.data.requesterUid
-          && request.resource.data.ownerUid == request.auth.uid;
+          && request.resource.data.ownerUid == request.auth.uid
+        ) || (
+          signedIn()
+          && request.auth.uid == requestUid
+          && resource.data.requesterUid == request.auth.uid
+          && resource.data.ownerUid == request.resource.data.ownerUid
+          && resource.data.status in ['PENDING', 'REJECTED']
+          && request.resource.data.status == 'PENDING'
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['requesterEmail', 'requesterName', 'deviceName', 'installationId', 'status', 'createdAt', 'updatedAt'])
+        );
         allow delete: if false;
       }
 
