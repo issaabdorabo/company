@@ -17,6 +17,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -166,9 +167,12 @@ class FirebaseCloudSyncEngine(
     private suspend fun ensureFirestoreNetwork() {
         try {
             firestore.enableNetwork().await()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
+            val detail = error.localizedMessage ?: error.javaClass.simpleName
             throw IllegalStateException(
-                "تعذر تفعيل اتصال Firebase. تحقق من اتصال الإنترنت ثم أعد المحاولة. التفاصيل: ${error.localizedMessage ?: error.javaClass.simpleName}",
+                "تعذر تفعيل اتصال Firebase: $detail",
                 error
             )
         }
