@@ -522,24 +522,34 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshMainServerInfo() {
         viewModelScope.launch {
-            val code = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            syncServer.refreshIpAddresses()
-            if (port > 0) {
-                nsdHelper.registerMainService(port, code)
+            runCatching {
+                cloudSyncEngine.ensureMainWorkspace()
+                cloudSyncEngine.syncOnce()
+            }.onSuccess {
+                _lastSyncError.value = null
+                _userMessage.emit("مساحة العمل السحابية جاهزة للربط عبر الإنترنت")
+            }.onFailure {
+                _lastSyncError.value = it.localizedMessage ?: "تعذر الاتصال بمساحة العمل السحابية"
+                _userMessage.emit(_lastSyncError.value ?: "تعذر تحديث حالة الربط")
             }
         }
     }
 
     fun regenerateWorkspaceCode() {
         viewModelScope.launch {
-            val newCode = preferences.regenerateWorkspaceCode()
-            syncServer.refreshIpAddresses()
-            val port = syncServer.actualPort
-            if (port > 0) {
-                nsdHelper.registerMainService(port, newCode)
+            val existingDevices = preferences.getLinkedSubDevicesSnapshot()
+            if (existingDevices.isNotEmpty()) {
+                _userMessage.emit("لا يمكن تغيير رمز مساحة العمل بعد تسجيل الأجهزة؛ أنشئ دعوة جديدة لكل جهاز عند الحاجة.")
+                return@launch
             }
-            _userMessage.emit("تم إنشاء رمز قاعدة بيانات جديد: $newCode")
+            val current = preferences.workspaceCodeFlow.first()
+            if (current.isNotBlank()) {
+                _userMessage.emit("رمز مساحة العمل ثابت للحفاظ على ارتباط البيانات السحابية: $current")
+            } else {
+                val created = preferences.ensureWorkspaceCode()
+                runCatching { cloudSyncEngine.ensureMainWorkspace() }
+                _userMessage.emit("تم إنشاء مساحة العمل السحابية: $created")
+            }
         }
     }
 
@@ -931,45 +941,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         targetItemIds: Set<Long> = emptySet(),
         targetVoucherIds: Set<Long> = emptySet()
     ) {
+        // Room is the durable offline copy. The sync worker compares it with the last
+        // acknowledged cloud baseline and sends only changed records/tombstones.
+        CloudSyncWorker.requestImmediate(getApplication())
         viewModelScope.launch {
-            if (isMainDevice.value) {
-                preferences.incrementSyncRevision()
-            } else {
-                val host = preferences.mainHostUrlFlow.first()
-                val token = preferences.subSessionTokenFlow.first()
-                if (host.isBlank() || token.isBlank()) return@launch
-                val entities = repository.exportAllEntitiesForCloud()
-                val res = syncClient.pushEntitiesToMain(
-                    rawHost = host,
-                    sessionToken = token,
-                    actionType = action?.name ?: "GENERAL",
-                    entities = entities,
-                    operationTitle = operationTitle,
-                    operationDetails = operationDetails,
-                    actorName = userName.value,
-                    warehouseIds = warehouseIds,
-                    targetItemIds = targetItemIds,
-                    targetVoucherIds = targetVoucherIds
-                )
-                res.onSuccess { newRev ->
-                    preferences.updateLastSync(newRev)
-                    _lastSyncError.value = null
-                }.onFailure { err ->
-                    val apiErr = err as? SyncApiException
-                    when (apiErr?.errorCode) {
-                        "KICKED" -> handleSubDeviceKicked(
-                            apiErr.message ?: "تم طرد هذا الجهاز من الجهاز الرئيسي."
-                        )
-                        "PERMISSION_DENIED" -> {
-                            _userMessage.emit(apiErr.message ?: "لا تملك صلاحية تنفيذ هذا التعديل")
-                            pullFromMainOnce(silent = true)
-                        }
-                        else -> {
-                            _lastSyncError.value = "تم الحفظ محلياً وبانتظار عودة الاتصال بالجهاز الرئيسي"
-                        }
-                    }
+            runCatching { cloudSyncEngine.syncOnce() }
+                .onSuccess { _lastSyncError.value = null }
+                .onFailure { error ->
+                    _lastSyncError.value = "تم حفظ التغيير محلياً، وستتم مزامنته تلقائياً عند عودة الإنترنت: ${error.localizedMessage ?: "لا يوجد اتصال"}"
                 }
-            }
         }
     }
 
