@@ -963,22 +963,29 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             subSyncJob?.cancel()
             subSyncJob = null
             val name = deviceName.value.ifBlank { "الجهاز الفرعي" }
-            runCatching { cloudSyncEngine.unlinkCurrentDevice() }
-                .onFailure { _lastSyncError.value = it.localizedMessage ?: "تعذر تسجيل فك الارتباط سحابياً" }
-            repository.recordOperation(OperationAuditLog(
+            val unlinkLog = OperationAuditLog(
                 actorName = userName.value.ifBlank { name },
                 deviceName = name,
                 operationType = "UNLINK",
                 title = "فك ارتباط الجهاز الفرعي",
-                details = "قام المستخدم بفك ارتباط هذا الجهاز من مساحة العمل السحابية"
-            ))
+                details = "طلب المستخدم فك ارتباط هذا الجهاز من مساحة العمل السحابية"
+            )
+            runCatching {
+                repository.recordOperation(unlinkLog)
+                cloudSyncEngine.syncOnce()
+                cloudSyncEngine.unlinkCurrentDevice()
+            }.onFailure { error ->
+                _lastSyncError.value = error.localizedMessage
+                    ?: "تعذر رفع البيانات أو تسجيل فك الارتباط. لم تُمسح البيانات المحلية."
+                _userMessage.emit(_lastSyncError.value ?: "تعذر فك الارتباط")
+                return@launch
+            }
             repository.clearAllUserData(preserveAuditLogs = false)
             preferences.clearSubPairingAndSwitchToMain()
             _lastSyncError.value = null
-            _userMessage.emit("تم فك الارتباط السحابي ومسح بيانات الحساب المحلية")
+            _userMessage.emit("تم رفع التغييرات وتسجيل فك الارتباط، ثم مسح البيانات المحلية لهذا الجهاز")
         }
     }
-
     fun dismissKickedAlert() {
         viewModelScope.launch {
             _kickedAlertMessage.value = null
