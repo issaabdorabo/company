@@ -206,6 +206,28 @@ class FirebaseCloudSyncEngine(
             ),
             SetOptions.merge()
         ).await()
+
+        // Migrate permissions on already-linked devices to the server-enforced format.
+        val knownDevices = preferences.getLinkedSubDevicesSnapshot()
+        for (slot in knownDevices) {
+            val permissions = permissionsMap(slot.toPermissions())
+            val members = ref.collection("members").whereEqualTo("deviceSlotId", slot.id).get().await()
+            members.documents.forEach { member ->
+                member.reference.update(
+                    "permissions", permissions,
+                    "updatedAt", FieldValue.serverTimestamp()
+                ).await()
+            }
+            val invites = ref.collection("pairingInvites").whereEqualTo("deviceSlotId", slot.id).get().await()
+            invites.documents.forEach { invite ->
+                if (invite.getString("status") == "PENDING") {
+                    invite.reference.update(
+                        "permissions", permissions,
+                        "updatedAt", FieldValue.serverTimestamp()
+                    ).await()
+                }
+            }
+        }
         return workspaceId
     }
 
