@@ -386,52 +386,36 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 syncServer.stop()
                 _discoveredMainDevices.value = emptyList()
 
-                if (role == DeviceRole.MAIN) {
+                if (role == DeviceRole.MAIN || (token.isNotBlank() && !perms.isKicked)) {
                     subSyncJob = launch {
-                        runCatching {
-                            cloudSyncEngine.ensureMainWorkspace()
-                            cloudSyncEngine.syncOnce()
-                            cloudSyncEngine.startRealtimeListeners(viewModelScope) { message ->
-                                if (message.contains("إيقاف ارتباط") || message.contains("طرد")) {
-                                    viewModelScope.launch { handleSubDeviceKicked(message) }
-                                } else {
-                                    _lastSyncError.value = message
-                                }
-                            }
-                        }.onFailure { error ->
-                            _lastSyncError.value = error.localizedMessage
-                                ?: "تعذر تهيئة المزامنة السحابية"
-                        }
+                        var listenersStarted = false
                         while (isActive) {
-                            runCatching { cloudSyncEngine.heartbeat() }
-                                .onFailure { error ->
-                                    _lastSyncError.value = error.localizedMessage
-                                        ?: "تعذر تحديث حالة الاتصال السحابي"
-                                }
-                            delay(30_000L)
-                        }
-                    }
-                } else if (token.isNotBlank() && !perms.isKicked) {
-                    subSyncJob = launch {
-                        pullFromMainOnce(silent = true)
-                        runCatching {
-                            cloudSyncEngine.startRealtimeListeners(viewModelScope) { message ->
-                                _lastSyncError.value = message
-                            }
-                        }.onFailure { error ->
-                            _lastSyncError.value = error.localizedMessage
-                                ?: "تعذر تشغيل مستمع المزامنة السحابية"
-                        }
-                        while (isActive) {
-                            runCatching { cloudSyncEngine.heartbeat() }
-                                .onFailure { error ->
-                                    val message = error.localizedMessage
-                                        ?: "تعذر تحديث حالة الاتصال السحابي"
-                                    _lastSyncError.value = message
-                                    if (message.contains("إيقاف ارتباط")) {
-                                        handleSubDeviceKicked(message)
+                            if (FirebaseAuth.getInstance().currentUser != null) {
+                                runCatching {
+                                    if (!listenersStarted) {
+                                        if (role == DeviceRole.MAIN) {
+                                            cloudSyncEngine.ensureMainWorkspace()
+                                        }
+                                        cloudSyncEngine.syncOnce()
+                                        cloudSyncEngine.startRealtimeListeners(viewModelScope) { message ->
+                                            if (message.contains("إيقاف ارتباط") || message.contains("طرد")) {
+                                                viewModelScope.launch { handleSubDeviceKicked(message) }
+                                            } else {
+                                                _lastSyncError.value = message
+                                            }
+                                        }
+                                        listenersStarted = true
+                                    } else {
+                                        cloudSyncEngine.heartbeat()
                                     }
+                                }.onSuccess {
+                                    _lastSyncError.value = null
+                                }.onFailure { error ->
+                                    listenersStarted = false
+                                    _lastSyncError.value = error.localizedMessage
+                                        ?: "تعذر تحديث الاتصال والمزامنة السحابية"
                                 }
+                            }
                             delay(30_000L)
                         }
                     }
