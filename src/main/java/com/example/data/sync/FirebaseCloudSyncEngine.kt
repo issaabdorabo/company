@@ -318,9 +318,10 @@ class FirebaseCloudSyncEngine(
             .documents.map { recordFromDocument(it.id, it.data ?: emptyMap()) }
         val localBeforePairing = repository.exportAllEntitiesForCloud()
         val tombstonedIds = remote.filter { it.isDeleted }.map { it.id }.toSet()
-        val mergedForPairing = (localBeforePairing
+        val localRecords = localBeforePairing
             .filterNot { it.docId in tombstonedIds }
-            .associateBy { it.docId } +
+            .map { localToRecord(it, workspaceId, uid) }
+        val mergedForPairing = (localRecords.associateBy { it.id } +
             remote.filterNot { it.isDeleted }.associateBy { it.id }).values.toList()
         if (mergedForPairing.isNotEmpty()) {
             val result = repository.replaceDatabaseFromCloudEntitiesSafely(mergedForPairing)
@@ -726,7 +727,7 @@ class FirebaseCloudSyncEngine(
 
         val incoming = remoteSnapshot.documents.mapNotNull { doc ->
             if (doc.id in localIds) return@mapNotNull null
-            val data = doc.data
+            val data = doc.data ?: return@mapNotNull null
             val timestamp = (data["timestamp"] as? Number)?.toLong() ?: return@mapNotNull null
             OperationAuditLog(
                 timestamp = timestamp,
