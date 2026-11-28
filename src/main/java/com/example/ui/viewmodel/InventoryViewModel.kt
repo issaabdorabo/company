@@ -575,7 +575,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (error: Exception) {
                 _isCloudConnected.value = false
                 val detail = error.localizedMessage ?: error.javaClass.simpleName
-                _lastSyncError.value = "فشل فحص Firebase: $detail"
+                val endpointDiagnostic = runCatching {
+                    cloudSyncEngine.diagnoseFirestoreEndpoint()
+                }.getOrElse { "تعذر إجراء فحص HTTPS: ${it.localizedMessage ?: it.javaClass.simpleName}" }
+                _lastSyncError.value = "فشل فحص Firebase: $detail\n$endpointDiagnostic"
                 _userMessage.emit(_lastSyncError.value ?: "تعذر تحديث حالة الربط")
             } finally {
                 mainFirebaseRefreshMutex.unlock()
