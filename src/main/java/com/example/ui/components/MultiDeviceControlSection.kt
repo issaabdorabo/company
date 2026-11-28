@@ -274,14 +274,14 @@ fun MultiDeviceControlSection(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (serverStatus.isRunning && hasLanIp) {
+                                    text = if (lastSyncError.isNullOrBlank()) {
                                         "المزامنة السحابية عبر الإنترنت جاهزة"
                                     } else {
                                         "الربط يعمل عبر الإنترنت ولا يحتاج شبكة أو نقطة اتصال مشتركة"
                                     },
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (serverStatus.isRunning && hasLanIp) SuccessGreen else WarningOrange
+                                    color = if (lastSyncError.isNullOrBlank()) SuccessGreen else WarningOrange
                                 )
                             }
                             IconButton(
