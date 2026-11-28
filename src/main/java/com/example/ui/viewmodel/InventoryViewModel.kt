@@ -41,6 +41,7 @@ import com.example.util.AppNotificationManager
 import com.example.util.SecurityUtils
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -543,18 +544,22 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun refreshMainServerInfo() {
-        viewModelScope.launch {
+        // Keep the Firebase check independent from a screen-scoped ViewModel job.
+        // Navigating/recomposing the device screen must not cancel a Firestore Task.await().
+        app.applicationScope.launch(Dispatchers.IO) {
             _isCloudConnected.value = false
-            runCatching {
+            try {
                 cloudSyncEngine.ensureMainWorkspace()
                 cloudSyncEngine.syncOnce()
-            }.onSuccess {
                 _lastSyncError.value = null
                 _isCloudConnected.value = true
                 _userMessage.emit("تم التحقق من اتصال Firebase ومزامنة البيانات بنجاح")
-            }.onFailure {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 _isCloudConnected.value = false
-                _lastSyncError.value = it.localizedMessage ?: "تعذر الاتصال بمساحة العمل السحابية"
+                val detail = error.localizedMessage ?: error.javaClass.simpleName
+                _lastSyncError.value = "فشل فحص Firebase: $detail"
                 _userMessage.emit(_lastSyncError.value ?: "تعذر تحديث حالة الربط")
             }
         }
@@ -595,7 +600,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         canDeleteSupplyVoucher: Boolean = canEditDelete,
         canEditCatalogItems: Boolean = false
     ) {
-        viewModelScope.launch {
+        // Pairing is a user-requested cloud transaction. Run it in the Application scope
+        // so a transient screen/ViewModel lifecycle cancellation cannot cancel Firebase Task.await().
+        app.applicationScope.launch(Dispatchers.IO) {
             val cleanName = deviceName.trim().ifBlank { "جهاز فرعي #${linkedSubDevices.value.size + 1}" }
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             if (current.any { it.deviceName.trim().equals(cleanName, ignoreCase = true) }) {
@@ -651,10 +658,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _sessionPairingCredentials.value = _sessionPairingCredentials.value + (newSlot.id to creds)
                 _createdDeviceCredentials.value = creds
                 _userMessage.emit("تم إنشاء دعوة ربط سحابية صالحة لمدة 30 دقيقة للجهاز ($cleanName)")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 _isCloudConnected.value = false
-                _pairingError.value = error.localizedMessage
-                    ?: "تعذر إنشاء دعوة الربط السحابية. تحقق من تسجيل الدخول والإنترنت وقواعد Firestore."
+                val detail = error.localizedMessage ?: error.javaClass.simpleName
+                _pairingError.value = "فشل إنشاء دعوة Firebase: $detail"
                 _lastSyncError.value = _pairingError.value
                 _userMessage.emit(_pairingError.value ?: "تعذر إنشاء دعوة الربط")
             }
