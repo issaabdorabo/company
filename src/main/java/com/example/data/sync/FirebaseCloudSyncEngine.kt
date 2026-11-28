@@ -180,35 +180,24 @@ class FirebaseCloudSyncEngine(
         val workspaceId = preferences.ensureWorkspaceCode()
         val installId = preferences.getOrCreateInstallationId()
         val ref = workspaceRef(workspaceId)
-        val existing = ref.get().await()
         val orgName = preferences.orgNameFlow.first()
 
-        if (!existing.exists()) {
-            ref.set(
-                mapOf(
-                    "workspaceId" to workspaceId,
-                    "ownerUid" to uid,
-                    "mainInstallationId" to installId,
-                    "orgName" to orgName,
-                    "schemaVersion" to 1,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-        } else {
-            val owner = existing.getString("ownerUid").orEmpty()
-            check(owner == uid) {
-                "رمز مساحة العمل مرتبط بحساب Google آخر. لا يمكن استخدام هذا الحساب كمالك."
-            }
-            ref.set(
-                mapOf(
-                    "mainInstallationId" to installId,
-                    "orgName" to orgName,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                ),
-                SetOptions.merge()
-            ).await()
-        }
+        // Bootstrap the workspace with one idempotent server write. Reading a missing
+        // workspace first is not allowed by the owner-only Firestore read rule and can
+        // leave a brand-new owner unable to create the workspace.
+        // Firestore rules still protect existing workspaces: updates must retain ownerUid.
+        ref.set(
+            mapOf(
+                "workspaceId" to workspaceId,
+                "ownerUid" to uid,
+                "mainInstallationId" to installId,
+                "orgName" to orgName,
+                "schemaVersion" to 1,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            ),
+            SetOptions.merge()
+        ).await()
 
         ref.collection("members").document(uid).set(
             mapOf(
