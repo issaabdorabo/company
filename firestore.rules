@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function workspacePath(workspaceId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId);
+    }
+
+    function memberPath(workspaceId, uid) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(uid);
+    }
+
+    function isOwner(workspaceId) {
+      return signedIn()
+        && exists(workspacePath(workspaceId))
+        && get(workspacePath(workspaceId)).data.ownerUid == request.auth.uid;
+    }
+
+    function isActiveMember(workspaceId) {
+      return signedIn() && (
+        isOwner(workspaceId)
+        || (
+          exists(memberPath(workspaceId, request.auth.uid))
+          && get(memberPath(workspaceId, request.auth.uid)).data.status == 'ACTIVE'
+        )
+      );
+    }
+
+    function validPairingInvite(workspaceId) {
+      let invitePath = /databases/$(database)/documents/workspaces/$(workspaceId)/pairingInvites/$(request.resource.data.inviteHash);
+      return request.resource.data.inviteHash is string
+        && exists(invitePath)
+        && get(invitePath).data.workspaceId == workspaceId
+        && get(invitePath).data.status == 'PENDING'
+        && get(invitePath).data.expiresAt > request.time
+        && get(invitePath).data.deviceSlotId == request.resource.data.deviceSlotId
+        && get(invitePath).data.deviceName == request.resource.data.deviceName
+        && get(invitePath).data.permissions == request.resource.data.permissions;
+    }
+
+    match /workspaces/{workspaceId} {
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.workspaceId == workspaceId;
+      allow get, list: if isActiveMember(workspaceId);
+      allow update: if isOwner(workspaceId)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if false;
+
+      match /members/{memberUid} {
+        allow get, list: if isOwner(workspaceId)
+          || (signedIn() && request.auth.uid == memberUid);
+        allow create: if (
+          signedIn()
+          && request.auth.uid == memberUid
+          && request.resource.data.uid == memberUid
+          && request.resource.data.role == 'SUB'
+          && request.resource.data.status == 'ACTIVE'
+          && validPairingInvite(workspaceId)
+        ) || (
+          isOwner(workspaceId)
+          && memberUid == request.auth.uid
+          && request.resource.data.role == 'MAIN'
+          && request.resource.data.status == 'ACTIVE'
+        );
+        allow update: if isOwner(workspaceId)
+          || (
+            signedIn()
+            && request.auth.uid == memberUid
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['online', 'lastSeenAt', 'updatedAt', 'installationId'])
+          );
+        allow delete: if isOwner(workspaceId);
+      }
+
+      match /pairingInvites/{inviteHash} {
+        allow get: if isOwner(workspaceId)
+          || (
+            signedIn()
+            && resource.data.status == 'PENDING'
+            && resource.data.expiresAt > request.time
+          );
+        allow list: if isOwner(workspaceId);
+        allow create, delete: if isOwner(workspaceId);
+        allow update: if isOwner(workspaceId)
+          || (
+            signedIn()
+            && resource.data.status == 'PENDING'
+            && resource.data.expiresAt > request.time
+            && request.resource.data.status == 'CLAIMED'
+            && request.resource.data.claimedByUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'claimedByUid', 'claimedAt'])
+          );
+      }
+
+      match /records/{recordId} {
+        allow read, create, update: if isActiveMember(workspaceId);
+        allow delete: if false;
+      }
+
+      match /auditLogs/{logId} {
+        allow read, create, update: if isActiveMember(workspaceId);
+        allow delete: if false;
+      }
+    }
+  }
+}
