@@ -1,6 +1,7 @@
 package com.example.data.sync
 
 import android.content.Context
+import android.net.ConnectivityManager
 import com.example.data.cloud.CloudEntityRecord
 import com.example.data.cloud.CloudEntityUpsert
 import com.example.data.cloud.DevicePermissions
@@ -319,7 +320,8 @@ class FirebaseCloudSyncEngine(
         val installId = preferences.getOrCreateInstallationId()
         val file = stateFile(workspaceId, installId)
         val state = SyncState()
-        remote.forEach { state.hashes[it.id] = signature(it) }
+        repository.exportAllEntitiesForCloud().forEach { state.hashes[it.docId] = signature(it) }
+        remote.filter { it.isDeleted }.forEach { state.hashes[it.id] = signature(it) }
         writeState(file, state)
         markPresence(workspaceId, uid, installId)
     }
@@ -398,6 +400,9 @@ class FirebaseCloudSyncEngine(
     }
 
     suspend fun syncOnce(): CloudSyncResult = syncMutex.withLock {
+        if (!hasNetworkConnection()) {
+            throw IllegalStateException("لا يوجد اتصال بالإنترنت حالياً. تم الاحتفاظ بالتعديلات محلياً وستعاد المحاولة تلقائياً.")
+        }
         val uid = requireUserUid()
         val role = preferences.deviceRoleFlow.first()
         val workspaceId = if (role.name == "MAIN") ensureMainWorkspace() else preferences.workspaceCodeFlow.first()
@@ -495,7 +500,14 @@ class FirebaseCloudSyncEngine(
         }
 
         baseline.hashes.clear()
-        mergedList.forEach { baseline.hashes[it.id] = signature(it) }
+        val actualLocalAfterMerge = repository.exportAllEntitiesForCloud().associateBy { it.docId }
+        mergedList.forEach { record ->
+            baseline.hashes[record.id] = if (record.isDeleted) {
+                signature(record)
+            } else {
+                actualLocalAfterMerge[record.id]?.let(::signature) ?: signature(record)
+            }
+        }
         writeState(file, baseline)
 
         val auditCount = syncAuditLogs(workspaceId)
@@ -508,6 +520,14 @@ class FirebaseCloudSyncEngine(
             auditLogs = auditCount,
             serverTimestamp = System.currentTimeMillis()
         )
+    }
+
+    private fun hasNetworkConnection(): Boolean {
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return true
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     private suspend fun markPresence(workspaceId: String, uid: String, installationId: String) {
