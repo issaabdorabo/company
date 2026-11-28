@@ -12,12 +12,10 @@ import com.example.data.cloud.CloudBackupItem
 import com.example.data.cloud.CreatedDeviceCredentials
 import com.example.data.cloud.DevicePermissions
 import com.example.data.cloud.DeviceRole
-import com.example.data.cloud.DiscoveredMainDevice
 import com.example.data.cloud.GoogleApiHttpException
 import com.example.data.cloud.GoogleOAuthHelper
 import com.example.data.cloud.LinkedSubDevice
 import com.example.data.cloud.WarehousePermission
-import com.example.data.cloud.LocalServerStatus
 import com.example.data.cloud.OAuthTokenResult
 import com.example.data.dao.VoucherWithItems
 import com.example.data.model.BackupRecord
@@ -37,10 +35,6 @@ import com.example.data.model.VoucherType
 import com.example.data.model.Warehouse
 import com.example.data.model.WarehouseParty
 import com.example.data.repository.StockSnapshot
-import com.example.data.sync.LocalNetworkSyncClient
-import com.example.data.sync.LocalNetworkSyncServer
-import com.example.data.sync.NsdDiscoveryHelper
-import com.example.data.sync.SyncApiException
 import com.example.data.sync.CloudSyncWorker
 import com.example.ui.theme.AppTheme
 import com.example.util.AppNotificationManager
@@ -75,48 +69,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudBackupRepo = app.cloudBackupRepository
     private val cloudSyncEngine = app.cloudSyncEngine
     private val notificationManager = AppNotificationManager(application)
-
-    private val syncClient = LocalNetworkSyncClient()
-    private val nsdHelper = NsdDiscoveryHelper(application)
-
-    private val syncServer = LocalNetworkSyncServer(
-        scope = viewModelScope,
-        getWorkspaceCode = { preferences.ensureWorkspaceCode() },
-        getOrgName = { preferences.orgNameFlow.first() },
-        getSyncVersion = { preferences.syncRevisionFlow.first() },
-        getLinkedDevices = { preferences.getLinkedSubDevicesSnapshot() },
-        onSaveLinkedDevices = { devices -> preferences.saveLinkedSubDevices(devices) },
-        onExportEntities = { repository.exportAllEntitiesForCloud() },
-        onExportAuditLogs = { device -> repository.getOperationLogsForDevice(device) },
-        onApplyRemoteEntities = { records ->
-            repository.replaceDatabaseFromCloudEntitiesSafely(records)
-            preferences.incrementSyncRevision()
-        },
-        onRemoteOperationAlert = { subDeviceName, actorName, actionType, operationTitle, operationDetails ->
-            viewModelScope.launch {
-                repository.recordOperation(
-                    OperationAuditLog(
-                        actorName = actorName.ifBlank { subDeviceName },
-                        deviceName = subDeviceName,
-                        operationType = actionType.ifBlank { "GENERAL" },
-                        title = operationTitle,
-                        details = operationDetails
-                    )
-                )
-            }
-            val title = "إشعار من ($subDeviceName): $operationTitle"
-            val actorPrefix = if (actorName.isNotBlank()) "بواسطة: $actorName • " else ""
-            val details = "$actorPrefix$operationDetails"
-            notificationManager.notifyOperation(
-                title = title,
-                details = details,
-                isRemoteSubDeviceAlert = true
-            )
-            viewModelScope.launch {
-                _userMessage.emit("🔔 $subDeviceName: $operationTitle")
-            }
-        }
-    )
 
     // Preferences & Theme
     val theme: StateFlow<AppTheme> = preferences.themeFlow
@@ -166,11 +118,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) { role, token, perms ->
         role == DeviceRole.SUB && token.isNotBlank() && !perms.isKicked
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
-
-    val serverStatus: StateFlow<LocalServerStatus> = syncServer.status
-
-    private val _discoveredMainDevices = MutableStateFlow<List<DiscoveredMainDevice>>(emptyList())
-    val discoveredMainDevices: StateFlow<List<DiscoveredMainDevice>> = _discoveredMainDevices.asStateFlow()
 
     private val _createdDeviceCredentials = MutableStateFlow<CreatedDeviceCredentials?>(null)
     val createdDeviceCredentials: StateFlow<CreatedDeviceCredentials?> = _createdDeviceCredentials.asStateFlow()
@@ -333,7 +280,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var subSyncJob: Job? = null
     private val subSyncMutex = Mutex()
-    private var nsdDiscoveryJob: Job? = null
 
     init {
         startMultiDeviceCoordinator()
@@ -393,11 +339,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 subSyncJob?.cancel()
                 subSyncJob = null
                 cloudSyncEngine.stopRealtimeListeners()
-                nsdDiscoveryJob?.cancel()
-                nsdDiscoveryJob = null
-                nsdHelper.unregisterMainService()
-                syncServer.stop()
-                _discoveredMainDevices.value = emptyList()
 
                 if (role == DeviceRole.MAIN || (token.isNotBlank() && !perms.isKicked)) {
                     subSyncJob = launch {
@@ -440,10 +381,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         subSyncJob?.cancel()
-        nsdDiscoveryJob?.cancel()
-        nsdHelper.unregisterMainService()
         cloudSyncEngine.stopRealtimeListeners()
-        syncServer.stop()
     }
 
     // Granular Multi-Device Permissions. Warehouse-scoped actions require grants for every target warehouse.
@@ -2424,38 +2362,25 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
 
-                if (isMainDevice.value) {
-                    val srv = serverStatus.value
-                    val activeDevices = linkedSubDevices.value.count { !it.isKicked }
-                    checks.add(
-                        DiagnosticCheckItem(
-                            title = "خادم الربط المباشر بين الأجهزة",
-                            passed = srv.isRunning,
-                            detail = if (srv.isRunning) {
-                                "نشط على العنوان (${srv.primaryAddress}) • رمز القاعدة: ${srv.workspaceCode} • أجهزة مسجلة: $activeDevices"
-                            } else {
-                                "متوقف مؤقتاً — اضغط تحديث خادم الربط أو فعّل شبكة Wi-Fi / نقطة الاتصال"
-                            },
-                            status = if (srv.isRunning) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
-                        )
-                    )
-                } else {
-                    val connected = isSubConnected.value
-                    val host = mainHostUrl.value
-                    val pingOk = if (host.isNotBlank()) syncClient.pingMainDevice(host).isSuccess else false
-                    checks.add(
-                        DiagnosticCheckItem(
-                            title = "اتصال الجهاز الفرعي بالجهاز الرئيسي",
-                            passed = connected && pingOk,
-                            detail = when {
-                                connected && pingOk -> "متصل مباشرة بالجهاز الرئيسي ($host) والمزامنة فعالة"
-                                connected -> "مرتبط بالجهاز ($host) لكنه غير متاح حالياً على الشبكة المحلية"
-                                else -> "غير مرتبط بعد — أدخل بيانات الربط من قسم ربط الأجهزة أعلاه"
-                            },
-                            status = if (connected && pingOk) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
-                        )
-                    )
+                val cloudResult = runCatching {
+                    if (isMainDevice.value) cloudSyncEngine.ensureMainWorkspace()
+                    cloudSyncEngine.syncOnce()
                 }
+                checks.add(
+                    DiagnosticCheckItem(
+                        title = "اتصال الأجهزة عبر Firebase Firestore",
+                        passed = cloudResult.isSuccess,
+                        detail = cloudResult.fold(
+                            onSuccess = {
+                                "الاتصال السحابي يعمل؛ لا يحتاج الجهازان إلى نفس شبكة Wi-Fi أو نقطة اتصال."
+                            },
+                            onFailure = { error ->
+                                error.localizedMessage ?: "تعذر الاتصال بـ Firebase. تحقق من الإنترنت وتسجيل الدخول وقواعد Firestore."
+                            }
+                        ),
+                        status = if (cloudResult.isSuccess) DiagnosticStatus.PASS else DiagnosticStatus.WARNING
+                    )
+                )
 
                 _diagnosticsReport.value = DiagnosticsReport(
                     checkedAtMillis = System.currentTimeMillis(),
