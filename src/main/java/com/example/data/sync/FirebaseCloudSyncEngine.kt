@@ -159,8 +159,24 @@ class FirebaseCloudSyncEngine(
     private suspend fun requireUserUid(): String =
         auth.currentUser?.uid ?: throw IllegalStateException("يجب تسجيل الدخول بحساب Google أولاً")
 
+    /**
+     * Firestore may remain explicitly disabled after a transient network transition.
+     * Re-enable its transport before operations that must reach the server.
+     */
+    private suspend fun ensureFirestoreNetwork() {
+        try {
+            firestore.enableNetwork().await()
+        } catch (error: Exception) {
+            throw IllegalStateException(
+                "تعذر تفعيل اتصال Firebase. تحقق من اتصال الإنترنت ثم أعد المحاولة. التفاصيل: ${error.localizedMessage ?: error.javaClass.simpleName}",
+                error
+            )
+        }
+    }
+
     suspend fun ensureMainWorkspace(): String {
         val uid = requireUserUid()
+        ensureFirestoreNetwork()
         val workspaceId = preferences.ensureWorkspaceCode()
         val installId = preferences.getOrCreateInstallationId()
         val ref = workspaceRef(workspaceId)
@@ -265,6 +281,7 @@ class FirebaseCloudSyncEngine(
         installationId: String
     ): CloudPairingInfo {
         val uid = requireUserUid()
+        ensureFirestoreNetwork()
         val workspaceId = workspaceIdInput.trim().uppercase()
         require(workspaceId.isNotBlank() && plainPassword.isNotBlank()) {
             "أدخل رمز مساحة العمل وكلمة المرور"
@@ -338,6 +355,7 @@ class FirebaseCloudSyncEngine(
 
     suspend fun initializeNewSubDevice(workspaceId: String) = syncMutex.withLock {
         val uid = requireUserUid()
+        ensureFirestoreNetwork()
         val member = workspaceRef(workspaceId).collection("members").document(uid).get().await()
         check(member.exists() && member.getString("status") == "ACTIVE") {
             "الجهاز غير معتمد في مساحة العمل"
@@ -471,6 +489,7 @@ class FirebaseCloudSyncEngine(
 
     suspend fun heartbeat() {
         val uid = requireUserUid()
+        ensureFirestoreNetwork()
         val role = preferences.deviceRoleFlow.first()
         val workspaceId = preferences.workspaceCodeFlow.first().ifBlank { preferences.ensureWorkspaceCode() }
         check(workspaceId.isNotBlank()) { "لا توجد مساحة عمل سحابية مرتبطة بهذا الجهاز" }
@@ -562,6 +581,7 @@ class FirebaseCloudSyncEngine(
     }
 
     suspend fun syncOnce(): CloudSyncResult = syncMutex.withLock {
+        ensureFirestoreNetwork()
         if (!hasNetworkConnection()) {
             throw IllegalStateException("لا يوجد اتصال بالإنترنت حالياً. تم الاحتفاظ بالتعديلات محلياً وستعاد المحاولة تلقائياً.")
         }
