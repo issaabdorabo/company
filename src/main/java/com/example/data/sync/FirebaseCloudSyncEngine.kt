@@ -213,14 +213,19 @@ class FirebaseCloudSyncEngine(
             val permissions = permissionsMap(slot.toPermissions())
             val members = ref.collection("members").whereEqualTo("deviceSlotId", slot.id).get().await()
             members.documents.forEach { member ->
-                member.reference.update(
-                    "permissions", permissions,
-                    "updatedAt", FieldValue.serverTimestamp()
-                ).await()
+                val currentPermissions = member.get("permissions") as? Map<*, *>
+                if (currentPermissions?.containsKey("canInwardWarehouseIds") != true) {
+                    member.reference.update(
+                        "permissions", permissions,
+                        "updatedAt", FieldValue.serverTimestamp()
+                    ).await()
+                }
             }
             val invites = ref.collection("pairingInvites").whereEqualTo("deviceSlotId", slot.id).get().await()
             invites.documents.forEach { invite ->
-                if (invite.getString("status") == "PENDING") {
+                val currentPermissions = invite.get("permissions") as? Map<*, *>
+                if (invite.getString("status") == "PENDING" &&
+                    currentPermissions?.containsKey("canInwardWarehouseIds") != true) {
                     invite.reference.update(
                         "permissions", permissions,
                         "updatedAt", FieldValue.serverTimestamp()
@@ -496,7 +501,9 @@ class FirebaseCloudSyncEngine(
         stopRealtimeListeners()
         val uid = requireUserUid()
         val role = preferences.deviceRoleFlow.first()
-        val workspaceId = if (role.name == "MAIN") ensureMainWorkspace() else preferences.workspaceCodeFlow.first()
+        val workspaceId = preferences.workspaceCodeFlow.first().ifBlank {
+            if (role.name == "MAIN") ensureMainWorkspace() else ""
+        }
         check(workspaceId.isNotBlank()) { "لا توجد مساحة عمل سحابية مرتبطة بهذا الجهاز" }
         val workspace = workspaceRef(workspaceId)
         val lastSecurityState = linkedMapOf<String, String>()
@@ -556,7 +563,9 @@ class FirebaseCloudSyncEngine(
         }
         val uid = requireUserUid()
         val role = preferences.deviceRoleFlow.first()
-        val workspaceId = if (role.name == "MAIN") ensureMainWorkspace() else preferences.workspaceCodeFlow.first()
+        val workspaceId = preferences.workspaceCodeFlow.first().ifBlank {
+            if (role.name == "MAIN") ensureMainWorkspace() else ""
+        }
         check(workspaceId.isNotBlank()) { "لا توجد مساحة عمل سحابية مرتبطة بهذا الجهاز" }
         val installationId = preferences.getOrCreateInstallationId()
         val workspace = workspaceRef(workspaceId)
