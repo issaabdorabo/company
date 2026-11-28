@@ -24,9 +24,10 @@ class InventoryApp : Application() {
     override fun onCreate() {
         super.onCreate()
         CloudSyncWorker.schedule(this)
-        // Seed initial warehouses and items if database is freshly created
+        // Create reference lookups only. Never insert demonstration warehouses, items,
+        // suppliers, beneficiaries or vouchers into a user's real inventory.
+        // Existing Room data is left untouched.
         applicationScope.launch {
-            repository.seedInitialDataIfEmpty()
             repository.ensureDefaultLookupRecords()
         }
     }
