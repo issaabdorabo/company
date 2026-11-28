@@ -399,7 +399,32 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         val perms = devicePermissions.value
         if (perms.isMainDevice) {
-            onAllowed()
+            if (warehouseIds.isEmpty()) {
+                onAllowed()
+                return
+            }
+            viewModelScope.launch {
+                val linkedOwners = preferences.getLinkedSubDevicesSnapshot().filter { slot ->
+                    !slot.isKicked && (
+                        slot.canViewAllWarehouses ||
+                            slot.warehousePermissions.any { grant ->
+                                grant.warehouseId in warehouseIds && grant.canView
+                            }
+                        )
+                }
+                val offlineDevice = linkedOwners.firstOrNull { slot ->
+                    !runCatching { cloudSyncEngine.isSubDeviceOnline(slot.id) }.getOrDefault(false)
+                }
+                if (offlineDevice != null) {
+                    _userMessage.emit(
+                        "لا يمكن تنفيذ العملية على هذا المخزن الآن؛ الجهاز الفرعي المرتبط به (" +
+                            offlineDevice.deviceName +
+                            ") غير متصل بالسحابة. أعد المحاولة بعد عودة اتصاله."
+                    )
+                } else {
+                    onAllowed()
+                }
+            }
             return
         }
         if (perms.isKicked) {
