@@ -37,9 +37,12 @@ android {
   signingConfigs {
     create("stableDebug") {
       storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-      storePassword = "android"
+      // CI uses the same protected password that was used to verify the permanent keystore.
+      // Local development falls back to the standard Android debug keystore password.
+      val debugKeystorePassword = System.getenv("ANDROID_DEBUG_KEYSTORE_PASSWORD") ?: "android"
+      storePassword = debugKeystorePassword
       keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      keyPassword = debugKeystorePassword
     }
   }
 
