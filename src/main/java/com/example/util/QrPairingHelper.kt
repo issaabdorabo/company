@@ -31,7 +31,7 @@ object QrPairingHelper {
     ): String {
         return JSONObject().apply {
             put("t", PAYLOAD_TYPE)
-            put("host", hostAddress.trim())
+            put("transport", "FIREBASE")
             put("code", workspaceCode.trim().uppercase())
             put("pwd", plainPassword.trim())
         }.toString()
@@ -43,10 +43,10 @@ object QrPairingHelper {
         return try {
             val obj = JSONObject(trimmed)
             if (obj.optString("t") != PAYLOAD_TYPE) return null
-            val host = obj.optString("host").trim()
+            val host = "FIREBASE"
             val code = obj.optString("code").trim().uppercase()
             val pwd = obj.optString("pwd").trim()
-            if (host.isBlank() || code.isBlank() || pwd.isBlank()) return null
+            if (code.isBlank() || pwd.isBlank()) return null
             QrPairingPayload(host = host, code = code, pwd = pwd)
         } catch (_: Exception) {
             null
