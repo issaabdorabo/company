@@ -145,6 +145,19 @@ service cloud.firestore {
         && get(invitePath).data.permissions == request.resource.data.permissions;
     }
 
+    // Email-hash directory: authenticated users can resolve an owner's workspace,
+    // but only that owner can publish or update the directory entry.
+    match /accountDirectory/{emailHash} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.workspaceId is string
+        && request.resource.data.email is string
+        && request.resource.data.status == 'ACTIVE';
+      allow delete: if false;
+    }
+
     match /workspaces/{workspaceId} {
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
@@ -157,19 +170,20 @@ service cloud.firestore {
       match /members/{memberUid} {
         allow get, list: if isOwner(workspaceId)
           || (signedIn() && request.auth.uid == memberUid);
-        allow create: if (
-          signedIn()
-          && request.auth.uid == memberUid
-          && request.resource.data.uid == memberUid
-          && request.resource.data.role == 'SUB'
-          && request.resource.data.status == 'ACTIVE'
-          && validPairingInvite(workspaceId)
-        ) || (
-          isOwner(workspaceId)
-          && memberUid == request.auth.uid
-          && request.resource.data.role == 'MAIN'
-          && request.resource.data.status == 'ACTIVE'
-        );
+        // Secondary memberships can only be created by the workspace owner
+        // after reviewing and approving the account's join request.
+        allow create: if isOwner(workspaceId)
+          && (
+            (memberUid == request.auth.uid
+              && request.resource.data.role == 'MAIN'
+              && request.resource.data.status == 'ACTIVE')
+            || (request.resource.data.uid == memberUid
+              && request.resource.data.role == 'SUB'
+              && request.resource.data.status == 'ACTIVE'
+              && exists(/databases/$(database)/documents/workspaces/$(workspaceId)/joinRequests/$(memberUid))
+              && get(/databases/$(database)/documents/workspaces/$(workspaceId)/joinRequests/$(memberUid)).data.status == 'PENDING'
+              && get(/databases/$(database)/documents/workspaces/$(workspaceId)/joinRequests/$(memberUid)).data.ownerUid == request.auth.uid)
+          );
         allow update: if isOwner(workspaceId)
           || (
             signedIn()
@@ -188,6 +202,25 @@ service cloud.firestore {
               .hasOnly(['status', 'online', 'updatedAt'])
           );
         allow delete: if isOwner(workspaceId);
+      }
+
+      match /joinRequests/{requestUid} {
+        allow create: if signedIn()
+          && request.auth.uid == requestUid
+          && request.resource.data.requesterUid == request.auth.uid
+          && request.resource.data.ownerUid == get(workspacePath(workspaceId)).data.ownerUid
+          && request.resource.data.status == 'PENDING'
+          && request.resource.data.installationId is string
+          && request.resource.data.deviceName is string;
+        allow get: if signedIn()
+          && (request.auth.uid == requestUid || isOwner(workspaceId));
+        allow list: if isOwner(workspaceId);
+        allow update: if isOwner(workspaceId)
+          && resource.data.status == 'PENDING'
+          && request.resource.data.status in ['APPROVED', 'REJECTED']
+          && request.resource.data.requesterUid == resource.data.requesterUid
+          && request.resource.data.ownerUid == request.auth.uid;
+        allow delete: if false;
       }
 
       match /pairingInvites/{inviteHash} {
