@@ -349,14 +349,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                         .joinToString("|")
                 }.toSet()
                 if (hasInitialAuditSnapshot) {
-                    logs.filter { log ->
+                    val newlyAddedLogs = logs.filter { log ->
                         val key = listOf(
                             log.timestamp, log.actorName, log.deviceName,
                             log.operationType, log.title, log.details
                         ).joinToString("|")
+                        key !in knownAuditKeys
+                    }
+                    newlyAddedLogs.filter { log ->
                         val currentDeviceName = if (isMainDevice.value) "الجهاز الرئيسي" else deviceName.value
-                        key !in knownAuditKeys &&
-                            log.deviceName.isNotBlank() &&
+                        log.deviceName.isNotBlank() &&
                             !log.deviceName.equals(currentDeviceName, ignoreCase = true)
                     }.forEach { log ->
                         notificationManager.notifyOperation(
@@ -364,6 +366,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             details = "بواسطة " + log.actorName + " • " + log.details,
                             isRemoteSubDeviceAlert = true
                         )
+                    }
+                    if (newlyAddedLogs.isNotEmpty() && FirebaseAuth.getInstance().currentUser != null) {
+                        CloudSyncWorker.requestImmediate(getApplication())
+                        viewModelScope.launch {
+                            runCatching { cloudSyncEngine.syncOnce() }
+                                .onFailure { error ->
+                                    _lastSyncError.value = error.localizedMessage
+                                        ?: "تم حفظ سجل العملية محلياً وسيتم رفعه عند توفر الاتصال"
+                                }
+                        }
                     }
                 }
                 knownAuditKeys = currentKeys
