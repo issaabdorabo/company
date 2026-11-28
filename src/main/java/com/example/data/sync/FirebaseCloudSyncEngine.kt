@@ -260,22 +260,36 @@ class FirebaseCloudSyncEngine(
         val permissionData = invite.get("permissions") as? Map<*, *> ?: emptyMap<String, Any?>()
         val permissions = permissionsFromMap(permissionData)
 
-        ref.collection("members").document(uid).set(
-            mapOf(
-                "uid" to uid,
-                "role" to "SUB",
-                "status" to "ACTIVE",
-                "deviceSlotId" to slotId,
-                "deviceName" to deviceName,
-                "installationId" to installationId,
-                "inviteHash" to inviteHash,
-                "permissions" to permissionsMap(permissions),
-                "online" to true,
-                "lastSeenAt" to FieldValue.serverTimestamp(),
-                "updatedAt" to FieldValue.serverTimestamp()
-            ),
-            SetOptions.merge()
-        ).await()
+        val memberRef = ref.collection("members").document(uid)
+        val existingMember = memberRef.get().await()
+        if (!existingMember.exists()) {
+            memberRef.set(
+                mapOf(
+                    "uid" to uid,
+                    "role" to "SUB",
+                    "status" to "ACTIVE",
+                    "deviceSlotId" to slotId,
+                    "deviceName" to deviceName,
+                    "installationId" to installationId,
+                    "inviteHash" to inviteHash,
+                    "permissions" to permissionsMap(permissions),
+                    "online" to true,
+                    "lastSeenAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } else {
+            check(existingMember.getString("status") == "ACTIVE" &&
+                existingMember.getString("deviceSlotId") == slotId) {
+                "هذا الحساب مرتبط بجهاز موقوف أو مختلف. اطلب من الرئيسي إعادة تفعيل الجهاز أولاً."
+            }
+            memberRef.update(
+                "online", true,
+                "installationId", installationId,
+                "lastSeenAt", FieldValue.serverTimestamp(),
+                "updatedAt", FieldValue.serverTimestamp()
+            ).await()
+        }
         if (status == "PENDING") {
             inviteRef.set(
                 mapOf(
@@ -372,7 +386,7 @@ class FirebaseCloudSyncEngine(
         }
     }
 
-    suspend fun isSubDeviceOnline(slotId: String, freshForMillis: Long = 90_000L): Boolean {
+    suspend fun isSubDeviceOnline(slotId: String, freshForMillis: Long = 20L * 60L * 1000L): Boolean {
         val workspaceId = preferences.workspaceCodeFlow.first()
         if (workspaceId.isBlank()) return false
         val members = workspaceRef(workspaceId).collection("members")
@@ -394,12 +408,16 @@ class FirebaseCloudSyncEngine(
 
         if (role.name != "MAIN") {
             val member = memberRef.get().await()
+            if (!member.exists()) {
+                throw IllegalStateException("عضوية هذا الجهاز غير مسجلة في مساحة العمل السحابية. أعد ربط الجهاز باستخدام رمز دعوة جديد.")
+            }
             val status = member.getString("status").orEmpty()
-            if (!member.exists() || status == "KICKED" || status == "REVOKED" || status == "UNLINKED") {
+            if (status == "KICKED" || status == "REVOKED" || status == "UNLINKED") {
                 repository.clearAllUserData(preserveAuditLogs = false)
                 preferences.markSubDeviceKicked()
                 throw IllegalStateException("تم إيقاف ارتباط هذا الجهاز من المستخدم الرئيسي")
             }
+            check(status == "ACTIVE") { "حالة ارتباط هذا الجهاز غير نشطة في السحابة" }
             val permissions = permissionsFromMap(
                 member.get("permissions") as? Map<*, *> ?: emptyMap<String, Any?>()
             )
