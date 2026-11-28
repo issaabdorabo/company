@@ -65,11 +65,10 @@ service cloud.firestore {
         : (isSupply ? p.canEditSupplyVoucher == true : p.canEditIssueVoucher == true);
     }
 
-    function canWriteRecord(workspaceId, recordId, data) {
+    function canWriteRecord(workspaceId, recordId, data, deleting) {
       let p = memberPermissions(workspaceId);
       let kind = data.entityType;
       let payload = data.payload;
-      let deleting = data.isDeleted == true;
       let existsBefore = exists(recordPath(workspaceId, recordId));
 
       return isOwner(workspaceId) || (
@@ -85,10 +84,23 @@ service cloud.firestore {
                 && (!existsBefore || canEditOrDeleteVoucher(workspaceId, payload, deleting)))
           : kind == 'voucher_item'
             ? (
-                existsAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
-                && canCreateVoucher(
+                exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+                  || existsAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+              )
+              && canCreateVoucher(
+                workspaceId,
+                exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+                  ? get(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                  : getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+              )
+              && (
+                !existsBefore
+                || canEditOrDeleteVoucher(
                   workspaceId,
-                  getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                  exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+                    ? get(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                    : getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload,
+                  deleting
                 )
               )
           : kind == 'adjustment'
@@ -176,13 +188,14 @@ service cloud.firestore {
         allow read: if isActiveMember(workspaceId);
         allow create: if isActiveMember(workspaceId)
           && request.resource.data.workspaceId == workspaceId
-          && canWriteRecord(workspaceId, recordId, request.resource.data);
+          && canWriteRecord(workspaceId, recordId, request.resource.data, false);
         allow update: if isActiveMember(workspaceId)
           && request.resource.data.workspaceId == workspaceId
           && canWriteRecord(
             workspaceId,
             recordId,
-            request.resource.data.isDeleted == true ? resource.data : request.resource.data
+            request.resource.data.isDeleted == true ? resource.data : request.resource.data,
+            request.resource.data.isDeleted == true
           );
         allow delete: if false;
       }
