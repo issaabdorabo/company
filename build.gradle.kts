@@ -91,6 +91,8 @@ dependencies {
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform("com.google.firebase:firebase-bom:35.2.0"))
   implementation("com.google.firebase:firebase-auth")
+  implementation("com.google.firebase:firebase-firestore")
+  implementation("androidx.work:work-runtime-ktx:2.10.1")
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
