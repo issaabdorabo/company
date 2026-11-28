@@ -36,6 +36,20 @@ data class CloudPairingInfo(
     val permissions: DevicePermissions
 )
 
+data class CloudJoinRequest(
+    val uid: String,
+    val email: String,
+    val displayName: String,
+    val deviceName: String,
+    val installationId: String,
+    val createdAtMillis: Long
+)
+
+data class CloudJoinTicket(
+    val workspaceId: String,
+    val ownerEmail: String
+)
+
 data class CloudSyncResult(
     val uploaded: Int,
     val downloaded: Int,
@@ -203,6 +217,20 @@ class FirebaseCloudSyncEngine(
             SetOptions.merge()
         ).await()
 
+        val ownerEmail = auth.currentUser?.email?.trim()?.lowercase()
+            ?: throw IllegalStateException("حساب Firebase الحالي لا يحتوي على بريد إلكتروني")
+        firestore.collection("accountDirectory").document(sha256(ownerEmail)).set(
+            mapOf(
+                "email" to ownerEmail,
+                "ownerUid" to uid,
+                "workspaceId" to workspaceId,
+                "ownerName" to (auth.currentUser?.displayName ?: ""),
+                "status" to "ACTIVE",
+                "updatedAt" to FieldValue.serverTimestamp()
+            ),
+            SetOptions.merge()
+        ).await()
+
         ref.collection("members").document(uid).set(
             mapOf(
                 "uid" to uid,
@@ -244,6 +272,113 @@ class FirebaseCloudSyncEngine(
             }
         }
         return workspaceId
+    }
+
+    /** Submit a device-account request addressed to the main user's Firebase email. */
+    suspend fun submitAccountJoinRequest(
+        ownerEmailInput: String,
+        deviceNameInput: String,
+        installationId: String
+    ): CloudJoinTicket {
+        ensureFirestoreNetwork()
+        val user = auth.currentUser ?: throw IllegalStateException("سجّل الدخول إلى Firebase بحساب الجهاز الفرعي أولاً")
+        val ownerEmail = ownerEmailInput.trim().lowercase()
+        require(ownerEmail.contains("@") && ownerEmail.contains(".")) { "أدخل بريد المستخدم الرئيسي بشكل صحيح" }
+        val directory = firestore.collection("accountDirectory").document(sha256(ownerEmail)).get().await()
+        check(directory.exists() && directory.getString("status") == "ACTIVE") {
+            "لم يتم العثور على مساحة عمل مرتبطة بهذا البريد. تأكد أن المستخدم الرئيسي فتح التطبيق وسجّل الدخول مرة واحدة."
+        }
+        val workspaceId = directory.getString("workspaceId").orEmpty()
+        val ownerUid = directory.getString("ownerUid").orEmpty()
+        check(workspaceId.isNotBlank() && ownerUid.isNotBlank() && ownerUid != user.uid) {
+            "البريد المدخل لا يشير إلى حساب رئيسي صالح"
+        }
+        val deviceName = deviceNameInput.trim().ifBlank {
+            user.displayName?.takeIf { it.isNotBlank() } ?: "جهاز فرعي"
+        }
+        val requestRef = workspaceRef(workspaceId).collection("joinRequests").document(user.uid)
+        val existing = requestRef.get().await()
+        val existingStatus = existing.getString("status").orEmpty()
+        check(existingStatus !in listOf("APPROVED", "ACTIVE")) {
+            "هذا الحساب معتمد بالفعل لدى المستخدم الرئيسي"
+        }
+        requestRef.set(
+            mapOf(
+                "requesterUid" to user.uid,
+                "requesterEmail" to (user.email ?: ""),
+                "requesterName" to (user.displayName ?: deviceName),
+                "deviceName" to deviceName,
+                "installationId" to installationId,
+                "ownerUid" to ownerUid,
+                "ownerEmail" to ownerEmail,
+                "status" to "PENDING",
+                "createdAt" to if (existingStatus == "PENDING") existing.get("createdAt") ?: FieldValue.serverTimestamp() else FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            ),
+            SetOptions.merge()
+        ).await()
+        return CloudJoinTicket(workspaceId, ownerEmail)
+    }
+
+    suspend fun getPendingAccountJoinRequests(): List<CloudJoinRequest> {
+        val workspaceId = ensureMainWorkspace()
+        return workspaceRef(workspaceId).collection("joinRequests")
+            .whereEqualTo("status", "PENDING")
+            .get().await().documents.map { doc ->
+                CloudJoinRequest(
+                    uid = doc.getString("requesterUid") ?: doc.id,
+                    email = doc.getString("requesterEmail").orEmpty(),
+                    displayName = doc.getString("requesterName").orEmpty(),
+                    deviceName = doc.getString("deviceName").orEmpty(),
+                    installationId = doc.getString("installationId").orEmpty(),
+                    createdAtMillis = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L
+                )
+            }
+    }
+
+    suspend fun approveAccountJoinRequest(
+        requesterUid: String,
+        slotId: String,
+        permissions: DevicePermissions
+    ) {
+        val ownerUid = requireUserUid()
+        val workspaceId = ensureMainWorkspace()
+        val workspace = workspaceRef(workspaceId)
+        val requestRef = workspace.collection("joinRequests").document(requesterUid)
+        val request = requestRef.get().await()
+        check(request.exists() && request.getString("status") == "PENDING") {
+            "طلب الاعتماد لم يعد متاحاً أو تمت معالجته مسبقاً"
+        }
+        check(request.getString("ownerUid") == ownerUid) { "هذا الطلب ليس موجهاً إلى حسابك" }
+        val deviceName = request.getString("deviceName").orEmpty().ifBlank { "جهاز فرعي" }
+        val installationId = request.getString("installationId").orEmpty()
+        workspace.collection("members").document(requesterUid).set(
+            mapOf(
+                "uid" to requesterUid,
+                "role" to "SUB",
+                "status" to "ACTIVE",
+                "deviceSlotId" to slotId,
+                "deviceName" to deviceName,
+                "installationId" to installationId,
+                "permissions" to permissionsMap(permissions.copy(isMainDevice = false, isKicked = false)),
+                "online" to false,
+                "approvedAt" to FieldValue.serverTimestamp(),
+                "lastSeenAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+        requestRef.update(
+            "status", "APPROVED",
+            "deviceSlotId", slotId,
+            "approvedAt", FieldValue.serverTimestamp(),
+            "updatedAt", FieldValue.serverTimestamp()
+        ).await()
+    }
+
+    suspend fun checkAccountJoinRequest(workspaceId: String, requesterUid: String): Map<String, Any?> {
+        ensureFirestoreNetwork()
+        val snapshot = workspaceRef(workspaceId).collection("joinRequests").document(requesterUid).get().await()
+        return snapshot.data ?: emptyMap()
     }
 
     suspend fun createPairingInvite(slot: LinkedSubDevice, plainPassword: String): String {
