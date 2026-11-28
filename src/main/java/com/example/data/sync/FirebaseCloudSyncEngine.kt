@@ -97,7 +97,7 @@ class FirebaseCloudSyncEngine(
         is Map<*, *> -> value.entries
             .filter { it.key is String }
             .sortedBy { it.key as String }
-            .joinToString(prefix = "{", postfix = "}") { (k, v) -> "\${k}:\${canonical(v)}" }
+            .joinToString(prefix = "{", postfix = "}") { (k, v) -> "${k}:${canonical(v)}" }
         is List<*> -> value.joinToString(prefix = "[", postfix = "]") { canonical(it) }
         is Number -> value.toString()
         is Boolean -> value.toString()
@@ -105,10 +105,10 @@ class FirebaseCloudSyncEngine(
     }
 
     private fun signature(record: CloudEntityUpsert): String =
-        sha256("\${record.entityType}|\${record.localId}|\${record.isDeleted}|\${canonical(record.payload)}")
+        sha256("${record.entityType}|${record.localId}|${record.isDeleted}|${canonical(record.payload)}")
 
     private fun signature(record: CloudEntityRecord): String =
-        sha256("\${record.entityType}|\${record.localId}|\${record.isDeleted}|\${canonical(record.payload)}")
+        sha256("${record.entityType}|${record.localId}|${record.isDeleted}|${canonical(record.payload)}")
 
     private fun recordFromDocument(id: String, data: Map<String, Any?>): CloudEntityRecord {
         @Suppress("UNCHECKED_CAST")
@@ -312,9 +312,12 @@ class FirebaseCloudSyncEngine(
         }
         val remote = workspaceRef(workspaceId).collection("records").get().await()
             .documents.map { recordFromDocument(it.id, it.data ?: emptyMap()) }
-        if (remote.isNotEmpty()) {
-            val result = repository.replaceDatabaseFromCloudEntitiesSafely(remote)
-            check(result.isSuccess) { result.exceptionOrNull()?.message ?: "تعذر استيراد بيانات المخزون" }
+        val localBeforePairing = repository.exportAllEntitiesForCloud()
+        val mergedForPairing = (localBeforePairing.associateBy { it.docId } +
+            remote.filterNot { it.isDeleted }.associateBy { it.id }).values.toList()
+        if (mergedForPairing.isNotEmpty()) {
+            val result = repository.replaceDatabaseFromCloudEntitiesSafely(mergedForPairing)
+            check(result.isSuccess) { result.exceptionOrNull()?.message ?: "تعذر دمج بيانات المخزون" }
         }
         syncAuditLogs(workspaceId)
         val installId = preferences.getOrCreateInstallationId()
@@ -339,6 +342,16 @@ class FirebaseCloudSyncEngine(
                     "permissions" to permissionsMap(permissions),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
+            ).await()
+        }
+        val pendingInvites = ref.collection("pairingInvites")
+            .whereEqualTo("deviceSlotId", slotId)
+            .whereEqualTo("status", "PENDING")
+            .get().await()
+        pendingInvites.documents.forEach { doc ->
+            doc.reference.update(
+                "permissions", permissionsMap(permissions),
+                "updatedAt", FieldValue.serverTimestamp()
             ).await()
         }
     }
