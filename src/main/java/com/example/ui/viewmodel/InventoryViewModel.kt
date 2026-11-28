@@ -960,8 +960,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun unlinkSubDevice() {
         viewModelScope.launch {
-            subSyncJob?.cancel()
-            subSyncJob = null
             val name = deviceName.value.ifBlank { "الجهاز الفرعي" }
             val unlinkLog = OperationAuditLog(
                 actorName = userName.value.ifBlank { name },
@@ -980,6 +978,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _userMessage.emit(_lastSyncError.value ?: "تعذر فك الارتباط")
                 return@launch
             }
+            subSyncJob?.cancel()
+            subSyncJob = null
+            cloudSyncEngine.stopRealtimeListeners()
             repository.clearAllUserData(preserveAuditLogs = false)
             preferences.clearSubPairingAndSwitchToMain()
             _lastSyncError.value = null
