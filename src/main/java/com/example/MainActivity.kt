@@ -177,7 +177,6 @@ fun MainApp(viewModel: InventoryViewModel) {
     val isMainDevice by viewModel.isMainDevice.collectAsState()
     val devicePermissions by viewModel.devicePermissions.collectAsState()
     val isSubConnected by viewModel.isSubConnected.collectAsState()
-    val serverStatus by viewModel.serverStatus.collectAsState()
     val kickedAlertMessage by viewModel.kickedAlertMessage.collectAsState()
     val operationAuditLogs by viewModel.operationAuditLogs.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
@@ -267,7 +266,7 @@ fun MainApp(viewModel: InventoryViewModel) {
                                 }
                             },
                             navigationIcon = {
-                                val syncReady = if (isMainDevice) serverStatus.isRunning else isSubConnected
+                                val syncReady = FirebaseAuth.getInstance().currentUser != null && (isMainDevice || isSubConnected)
                                 IconButton(
                                     onClick = { currentDestination = AppNavDestination.DEVICES },
                                     modifier = Modifier.testTag("top_bar_sync_status_btn")
@@ -327,7 +326,7 @@ fun MainApp(viewModel: InventoryViewModel) {
                             )
                         )
 
-                        // Role & LAN Link Status Strip (Click opens Settings -> MultiDevice Control)
+                        // Cloud connection status (Click opens device management)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -341,14 +340,14 @@ fun MainApp(viewModel: InventoryViewModel) {
                                 permissions = devicePermissions
                             )
                             val linkLabel = when {
-                                isMainDevice && serverStatus.isRunning && serverStatus.hostAddresses.isNotEmpty() ->
-                                    "🌐 خادم الربط نشط (${serverStatus.primaryAddress})"
+                                isMainDevice && FirebaseAuth.getInstance().currentUser != null ->
+                                    "🌐 جاهز للربط عبر Firebase"
                                 isMainDevice ->
-                                    "🌐 جاهز للربط المباشر عبر الشبكة"
+                                    "⚠️ سجّل الدخول إلى Firebase"
                                 isSubConnected ->
-                                    "🔗 متصل بالجهاز الرئيسي"
+                                    "🔗 مرتبط عبر Firebase"
                                 else ->
-                                    "⚠️ بانتظار ربط الجهاز الفرعي"
+                                    "⚠️ بانتظار ربط الجهاز الفرعي عبر Firebase"
                             }
                             Text(
                                 text = linkLabel,
