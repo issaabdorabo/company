@@ -561,10 +561,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             if (!mainFirebaseRefreshMutex.tryLock()) return@launch
             _isCloudConnected.value = false
             try {
-                cloudSyncEngine.ensureMainWorkspace()
-                if (isMainDevice.value) {
-                    _pendingAccountJoinRequests.value = cloudSyncEngine.getPendingAccountJoinRequests()
-                }
+                check(isMainDevice.value) { "هذا الفحص مخصص للجهاز الرئيسي" }
+                // Workspace bootstrap and inventory sync are owned by the background
+                // coordinator. The screen button only reloads approval requests.
+                _pendingAccountJoinRequests.value = cloudSyncEngine.getPendingAccountJoinRequests()
                 _lastSyncError.value = null
                 _isCloudConnected.value = true
                 _userMessage.emit("اتصال Firebase يعمل. تتم مزامنة البيانات في الخلفية.")
