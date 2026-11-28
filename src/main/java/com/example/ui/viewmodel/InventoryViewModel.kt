@@ -340,6 +340,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun startMultiDeviceCoordinator() {
         viewModelScope.launch {
+            launch {
             var hasInitialAuditSnapshot = false
             var knownAuditKeys = emptySet<String>()
             repository.operationAuditLogs.collect { logs ->
@@ -367,6 +368,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 knownAuditKeys = currentKeys
                 hasInitialAuditSnapshot = true
+            }
             }
             combine(
                 preferences.deviceRoleFlow,
