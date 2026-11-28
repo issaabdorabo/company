@@ -798,6 +798,7 @@ class InventoryRepository(
         database.withTransaction {
             val currentStock = getWarehouseItemStockQty(warehouseId, itemId)
             val log = StockAdjustmentLog(
+                id = nextCloudSafeId(),
                 warehouseId = warehouseId,
                 itemId = itemId,
                 oldQuantity = currentStock,
@@ -813,6 +814,7 @@ class InventoryRepository(
                 val voucherType = if (diff > 0) VoucherType.INWARD else VoucherType.DISBURSEMENT
                 val voucherNumber = "ADJ-${System.currentTimeMillis() % 100000}"
                 val voucher = Voucher(
+                    id = nextCloudSafeId(),
                     voucherNumber = voucherNumber,
                     voucherType = voucherType,
                     date = System.currentTimeMillis(),
@@ -828,6 +830,7 @@ class InventoryRepository(
                 voucherDao.insertVoucherItems(
                     listOf(
                         VoucherItem(
+                            id = nextCloudSafeId(),
                             voucherId = vId,
                             itemId = itemId,
                             itemName = item?.name ?: "صنف",
