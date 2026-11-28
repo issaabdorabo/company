@@ -130,6 +130,10 @@ fun MultiDeviceControlSection(
 
     // Cooldown countdown ticker
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(isMainDevice) {
+        if (isMainDevice) viewModel.refreshMainServerInfo()
+    }
+
     LaunchedEffect(pairingLockedUntil) {
         while (pairingLockedUntil > System.currentTimeMillis()) {
             nowMillis = System.currentTimeMillis()
