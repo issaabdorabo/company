@@ -709,7 +709,7 @@ class FirebaseCloudSyncEngine(
             compareBy<CloudEntityRecord> { if (it.entityType == "voucher") 0 else 1 }
                 .thenBy { it.id }
         )
-        orderedWrites.chunked(10).forEach { chunk ->
+        orderedWrites.chunked(5).forEach { chunk ->
             val batch = firestore.batch()
             chunk.forEach { record ->
                 batch.set(
