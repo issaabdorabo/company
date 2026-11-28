@@ -28,6 +28,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 import java.util.Date
 
@@ -181,14 +184,69 @@ class FirebaseCloudSyncEngine(
      * Re-enable its transport before operations that must reach the server.
      */
     private fun firestoreReadFailure(stage: String, error: FirebaseFirestoreException): IllegalStateException {
+        val rootCause = generateSequence<Throwable>(error) { it.cause }
+            .mapNotNull { it.message?.takeIf(String::isNotBlank) }
+            .distinct()
+            .take(3)
+            .joinToString(" ← ")
         val detail = when (error.code) {
-            FirebaseFirestoreException.Code.UNAVAILABLE -> "تعذر الوصول إلى خادم Firestore. تحقق من اتصال الإنترنت وإمكانية الوصول إلى Firebase ثم أعد المحاولة."
-            FirebaseFirestoreException.Code.PERMISSION_DENIED -> "رفضت قواعد Firestore قراءة البيانات في خطوة: " + stage + ". تحقق من نشر قواعد firestore.rules في Cloud Firestore."
-            FirebaseFirestoreException.Code.UNAUTHENTICATED -> "انتهت جلسة Firebase أو لم يتم تسجيل الدخول. سجّل الدخول مجدداً."
-            FirebaseFirestoreException.Code.NOT_FOUND -> "قاعدة بيانات Firestore أو المستند المطلوب غير موجود في المشروع الحالي."
-            else -> "فشل اتصال Firestore في خطوة: " + stage + " (" + error.code + "). " + (error.localizedMessage ?: "لا توجد تفاصيل إضافية")
+            FirebaseFirestoreException.Code.UNAVAILABLE ->
+                "تعذر الوصول إلى خادم Firestore في خطوة: $stage. تفاصيل SDK: ${rootCause.ifBlank { error.code.name }}"
+            FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                "رفضت قواعد Firestore العملية في خطوة: $stage. تحقق من نشر قواعد firestore.rules."
+            FirebaseFirestoreException.Code.UNAUTHENTICATED ->
+                "جلسة Firebase غير صالحة أو انتهى تسجيل الدخول. سجّل الدخول مجدداً."
+            FirebaseFirestoreException.Code.NOT_FOUND ->
+                "قاعدة بيانات Firestore أو المستند المطلوب غير موجود في المشروع الحالي. التفاصيل: ${rootCause}"
+            else ->
+                "فشل اتصال Firestore في خطوة: $stage (${error.code}). ${rootCause.ifBlank { "لا توجد تفاصيل إضافية" }}"
         }
         return IllegalStateException(detail, error)
+    }
+
+    /**
+     * Independent HTTPS probe. A 4xx response still proves DNS/TLS/HTTPS reachability;
+     * the response body helps distinguish a missing database from a blocked endpoint.
+     */
+    suspend fun diagnoseFirestoreEndpoint(): String = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
+        try {
+            val probeUrl = URL(
+                "https://firestore.googleapis.com/v1/projects/mkhzny-c1402/databases/(default)/documents/__connection_probe__/probe"
+            )
+            connection = (probeUrl.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8_000
+                readTimeout = 8_000
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+            }
+            val status = connection.responseCode
+            val stream = if (status >= 400) connection.errorStream else connection.inputStream
+            val body = stream?.bufferedReader()?.use { it.readText() }?.take(700).orEmpty()
+            val normalized = body.lowercase()
+            when {
+                status == 401 ->
+                    "فحص HTTPS ناجح: وصل الهاتف إلى firestore.googleapis.com (HTTP 401 متوقع دون تسجيل دخول في اختبار الشبكة)."
+                status == 403 && ("service_disabled" in normalized || "has not been used" in normalized) ->
+                    "وصل الهاتف إلى Google، لكن Firestore API غير مفعّلة في مشروع mkhzny-c1402. فعّل Cloud Firestore API من Google Cloud Console. رد الخادم: $body"
+                status == 404 && ("database" in normalized && ("not found" in normalized || "does not exist" in normalized)) ->
+                    "وصل الهاتف إلى Google، لكن قاعدة Firestore الافتراضية (default) غير موجودة في المشروع mkhzny-c1402. أنشئ Cloud Firestore Database. رد الخادم: $body"
+                status in 200..499 ->
+                    "فحص HTTPS ناجح: وصل الهاتف إلى firestore.googleapis.com (HTTP $status). هذا يثبت وصول HTTPS ولا يثبت نجاح قناة Firestore SDK. رد الخادم: $body"
+                else ->
+                    "وصل الهاتف إلى firestore.googleapis.com لكن الخادم أعاد HTTP $status. رد الخادم: $body"
+            }
+        } catch (error: Exception) {
+            val root = generateSequence<Throwable>(error) { it.cause }
+                .mapNotNull { it.message?.takeIf(String::isNotBlank) }
+                .distinct()
+                .take(4)
+                .joinToString(" ← ")
+            "فشل اتصال HTTPS بعنوان Firestore قبل الوصول إلى الخادم. السبب: ${root.ifBlank { error.javaClass.simpleName }}"
+        } finally {
+            connection?.disconnect()
+        }
     }
 
     private suspend fun ensureFirestoreNetwork() {
