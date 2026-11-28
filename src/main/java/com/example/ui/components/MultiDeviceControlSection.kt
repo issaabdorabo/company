@@ -111,6 +111,8 @@ fun MultiDeviceControlSection(
     val accountJoinStatus by viewModel.accountJoinStatus.collectAsState()
 
     var showCreateSubDialog by remember { mutableStateOf(false) }
+    var hostInput by remember { mutableStateOf("") }
+    var codeInput by remember { mutableStateOf("") }
     var requestToApprove by remember { mutableStateOf<CloudJoinRequest?>(null) }
     var deviceToKick by remember { mutableStateOf<LinkedSubDevice?>(null) }
     var showUnlinkConfirmDialog by remember { mutableStateOf(false) }
