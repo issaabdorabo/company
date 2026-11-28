@@ -36,6 +36,7 @@ import com.example.data.model.Warehouse
 import com.example.data.model.WarehouseParty
 import com.example.data.repository.StockSnapshot
 import com.example.data.sync.CloudSyncWorker
+import com.example.data.sync.CloudJoinRequest
 import com.example.ui.theme.AppTheme
 import com.example.util.AppNotificationManager
 import com.example.util.SecurityUtils
@@ -131,6 +132,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _pairingError = MutableStateFlow<String?>(null)
     val pairingError: StateFlow<String?> = _pairingError.asStateFlow()
+
+    private val _pendingAccountJoinRequests = MutableStateFlow<List<CloudJoinRequest>>(emptyList())
+    val pendingAccountJoinRequests: StateFlow<List<CloudJoinRequest>> = _pendingAccountJoinRequests.asStateFlow()
+
+    private val _accountJoinStatus = MutableStateFlow<String?>(null)
+    val accountJoinStatus: StateFlow<String?> = _accountJoinStatus.asStateFlow()
+
+    private val _joinRequestWorkspaceId = MutableStateFlow<String?>(null)
 
     private val _isSyncingNow = MutableStateFlow(false)
     val isSyncingNow: StateFlow<Boolean> = _isSyncingNow.asStateFlow()
@@ -550,6 +559,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _isCloudConnected.value = false
             try {
                 cloudSyncEngine.ensureMainWorkspace()
+                if (isMainDevice.value) {
+                    _pendingAccountJoinRequests.value = cloudSyncEngine.getPendingAccountJoinRequests()
+                }
                 cloudSyncEngine.syncOnce()
                 _lastSyncError.value = null
                 _isCloudConnected.value = true
@@ -561,6 +573,149 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val detail = error.localizedMessage ?: error.javaClass.simpleName
                 _lastSyncError.value = "فشل فحص Firebase: $detail"
                 _userMessage.emit(_lastSyncError.value ?: "تعذر تحديث حالة الربط")
+            }
+        }
+    }
+
+    fun submitAccountJoinRequest(ownerEmail: String, requestedDeviceName: String) {
+        app.applicationScope.launch(Dispatchers.IO) {
+            _isPairingInProgress.value = true
+            _pairingError.value = null
+            _accountJoinStatus.value = null
+            try {
+                val ticket = cloudSyncEngine.submitAccountJoinRequest(
+                    ownerEmailInput = ownerEmail,
+                    deviceNameInput = requestedDeviceName,
+                    installationId = preferences.getOrCreateInstallationId()
+                )
+                _joinRequestWorkspaceId.value = ticket.workspaceId
+                _accountJoinStatus.value = "PENDING"
+                _userMessage.emit("تم إرسال طلب الانضمام إلى ${ticket.ownerEmail}. انتظر اعتماد المستخدم الرئيسي.")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _pairingError.value = error.localizedMessage ?: "تعذر إرسال طلب الانضمام"
+                _accountJoinStatus.value = "ERROR"
+                _userMessage.emit(_pairingError.value ?: "تعذر إرسال الطلب")
+            } finally {
+                _isPairingInProgress.value = false
+            }
+        }
+    }
+
+    fun checkAccountJoinApproval() {
+        app.applicationScope.launch(Dispatchers.IO) {
+            val workspaceId = _joinRequestWorkspaceId.value
+            val uid = FirebaseAuth.getInstance().currentUser?.uid
+            if (workspaceId.isNullOrBlank() || uid.isNullOrBlank()) {
+                _pairingError.value = "أرسل طلب الانضمام أولاً وسجّل الدخول بحساب الجهاز الفرعي"
+                return@launch
+            }
+            _isPairingInProgress.value = true
+            try {
+                val request = cloudSyncEngine.checkAccountJoinRequest(workspaceId, uid)
+                when (request["status"] as? String) {
+                    "PENDING" -> {
+                        _accountJoinStatus.value = "PENDING"
+                        _userMessage.emit("لا يزال طلبك بانتظار موافقة المستخدم الرئيسي")
+                    }
+                    "APPROVED" -> {
+                        val paired = cloudSyncEngine.getApprovedAccountJoinInfo(workspaceId, uid)
+                        preferences.savePairedSubDevice(
+                            hostUrl = "cloud://${paired.workspaceId}",
+                            workspaceCode = paired.workspaceId,
+                            deviceSlotId = paired.deviceSlotId,
+                            deviceName = paired.deviceName,
+                            sessionToken = "FIRESTORE_ACCOUNT",
+                            permissions = paired.permissions,
+                            appliedRevision = 1L
+                        )
+                        cloudSyncEngine.initializeNewSubDevice(paired.workspaceId)
+                        CloudSyncWorker.requestImmediate(getApplication())
+                        _accountJoinStatus.value = "APPROVED"
+                        _isCloudConnected.value = true
+                        _pairingError.value = null
+                        _userMessage.emit("تم اعتماد الحساب وربط الجهاز الفرعي ومزامنة البيانات")
+                    }
+                    "REJECTED" -> {
+                        _accountJoinStatus.value = "REJECTED"
+                        _pairingError.value = "رفض المستخدم الرئيسي طلب الانضمام"
+                    }
+                    else -> {
+                        _accountJoinStatus.value = "ERROR"
+                        _pairingError.value = "لم يتم العثور على طلب الانضمام. أعد إرسال الطلب."
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _pairingError.value = error.localizedMessage ?: "تعذر التحقق من حالة طلب الاعتماد"
+            } finally {
+                _isPairingInProgress.value = false
+            }
+        }
+    }
+
+    fun approveAccountJoinRequest(
+        request: CloudJoinRequest,
+        canAddItems: Boolean,
+        canInward: Boolean,
+        canDisburse: Boolean,
+        canEditDelete: Boolean,
+        canBackup: Boolean,
+        canViewAllWarehouses: Boolean,
+        warehousePermissions: List<WarehousePermission>,
+        canDeleteItem: Boolean,
+        canEditIssueVoucher: Boolean,
+        canDeleteIssueVoucher: Boolean,
+        canEditSupplyVoucher: Boolean,
+        canDeleteSupplyVoucher: Boolean,
+        canEditCatalogItems: Boolean
+    ) {
+        app.applicationScope.launch(Dispatchers.IO) {
+            val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
+            if (current.any { it.id == request.uid }) {
+                _userMessage.emit("هذا الحساب مسجل بالفعل")
+                return@launch
+            }
+            val slot = LinkedSubDevice(
+                id = request.uid,
+                deviceName = request.deviceName.ifBlank { request.displayName.ifBlank { request.email } },
+                passwordSalt = "",
+                passwordHash = "",
+                sessionToken = "FIREBASE_ACCOUNT",
+                boundInstallationId = request.installationId,
+                isClaimed = true,
+                isKicked = false,
+                canAddItems = canAddItems,
+                canInward = canInward,
+                canDisburse = canDisburse,
+                canEditDelete = canEditDelete,
+                canEditInventory = canEditDelete,
+                canDeleteItem = canDeleteItem,
+                canEditIssueVoucher = canEditIssueVoucher,
+                canDeleteIssueVoucher = canDeleteIssueVoucher,
+                canEditSupplyVoucher = canEditSupplyVoucher,
+                canDeleteSupplyVoucher = canDeleteSupplyVoucher,
+                canEditCatalogItems = canEditCatalogItems,
+                canBackup = canBackup,
+                canViewAllWarehouses = canViewAllWarehouses,
+                warehousePermissions = warehousePermissions
+            )
+            try {
+                cloudSyncEngine.approveAccountJoinRequest(
+                    requesterUid = request.uid,
+                    slotId = slot.id,
+                    permissions = slot.toPermissions()
+                )
+                current.add(0, slot)
+                preferences.saveLinkedSubDevices(current)
+                _pendingAccountJoinRequests.value = _pendingAccountJoinRequests.value.filterNot { it.uid == request.uid }
+                _userMessage.emit("تم اعتماد حساب ${request.email} وتفعيل صلاحياته")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _userMessage.emit(error.localizedMessage ?: "تعذر اعتماد الحساب")
             }
         }
     }
