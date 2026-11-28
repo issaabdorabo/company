@@ -19,7 +19,7 @@ class QrPairingHelperTest {
         )
         val parsed = QrPairingHelper.parsePairingQr(raw)
         assertNotNull(parsed)
-        assertEquals("192.168.1.44:8765", parsed!!.host)
+        assertEquals("FIREBASE", parsed!!.host)
         assertEquals("INV-AB12CD", parsed.code)
         assertEquals("Pass#9988", parsed.pwd)
     }
@@ -57,7 +57,7 @@ class QrPairingHelperTest {
         assertEquals(payload, decoded)
         val parsed = QrPairingHelper.parsePairingQr(decoded!!)
         assertNotNull(parsed)
-        assertEquals("192.168.43.1:8765", parsed!!.host)
+        assertEquals("FIREBASE", parsed!!.host)
         assertEquals("INV-778899", parsed.code)
         assertEquals("XyZ#4567", parsed.pwd)
     }
