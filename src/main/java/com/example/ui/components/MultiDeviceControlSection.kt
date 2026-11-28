@@ -111,6 +111,7 @@ fun MultiDeviceControlSection(
     val isSyncingNow by viewModel.isSyncingNow.collectAsState()
     val lastSyncAt by viewModel.lastSyncAt.collectAsState()
     val lastSyncError by viewModel.lastSyncError.collectAsState()
+    val isCloudConnected by viewModel.isCloudConnected.collectAsState()
     val pairingLockedUntil by viewModel.pairingLockedUntil.collectAsState()
 
     var showCreateSubDialog by remember { mutableStateOf(false) }
@@ -246,10 +247,10 @@ fun MultiDeviceControlSection(
 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = if (lastSyncError.isNullOrBlank()) {
-                        SuccessGreen.copy(alpha = 0.08f)
-                    } else {
-                        WarningOrange.copy(alpha = 0.1f)
+                    color = when {
+                        isCloudConnected && lastSyncError.isNullOrBlank() -> SuccessGreen.copy(alpha = 0.08f)
+                        !lastSyncError.isNullOrBlank() -> WarningOrange.copy(alpha = 0.1f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -266,19 +267,27 @@ fun MultiDeviceControlSection(
                                 Icon(
                                     imageVector = Icons.Default.Sync,
                                     contentDescription = null,
-                                    tint = if (lastSyncError.isNullOrBlank()) SuccessGreen else WarningOrange,
+                                    tint = when {
+                                        isCloudConnected && lastSyncError.isNullOrBlank() -> SuccessGreen
+                                        !lastSyncError.isNullOrBlank() -> WarningOrange
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (lastSyncError.isNullOrBlank()) {
-                                        "المزامنة السحابية عبر الإنترنت جاهزة"
-                                    } else {
-                                        "الربط يعمل عبر الإنترنت ولا يحتاج شبكة أو نقطة اتصال مشتركة"
+                                    text = when {
+                                        isCloudConnected && lastSyncError.isNullOrBlank() -> "تم التحقق من اتصال Firebase"
+                                        !lastSyncError.isNullOrBlank() -> "تعذر الاتصال بـ Firebase"
+                                        else -> "لم يتم التحقق من اتصال Firebase بعد"
                                     },
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (lastSyncError.isNullOrBlank()) SuccessGreen else WarningOrange
+                                    color = when {
+                                        isCloudConnected && lastSyncError.isNullOrBlank() -> SuccessGreen
+                                        !lastSyncError.isNullOrBlank() -> WarningOrange
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
                                 )
                             }
                             IconButton(
@@ -362,12 +371,25 @@ fun MultiDeviceControlSection(
                                 Text("نسخ بيانات الربط", fontSize = 11.sp)
                             }
                             OutlinedButton(
-                                onClick = { viewModel.regenerateWorkspaceCode() },
+                                onClick = { viewModel.refreshMainServerInfo() },
                                 modifier = Modifier.testTag("regen_workspace_code_btn"),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("تحديث حالة السحابة", fontSize = 11.sp)
+                                Text("فحص اتصال Firebase", fontSize = 11.sp)
                             }
+                        }
+                        if (!lastSyncError.isNullOrBlank()) {
+                            Text(
+                                text = lastSyncError.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        } else if (!isCloudConnected) {
+                            Text(
+                                text = "اضغط «فحص اتصال Firebase» للتحقق من الوصول إلى الخادم قبل إنشاء دعوة جديدة.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
