@@ -378,16 +378,37 @@ class FirebaseCloudSyncEngine(
                 )
             ).await()
         }
+        val invites = ref.collection("pairingInvites").whereEqualTo("deviceSlotId", slotId).get().await()
+        invites.documents.forEach { doc ->
+            val currentStatus = doc.getString("status").orEmpty()
+            if (kicked && currentStatus == "PENDING") {
+                doc.reference.update("status", "SUSPENDED", "updatedAt", FieldValue.serverTimestamp()).await()
+            } else if (!kicked && matches.documents.isEmpty() && currentStatus == "SUSPENDED") {
+                doc.reference.update(
+                    "status", "PENDING",
+                    "expiresAt", Timestamp(Date(System.currentTimeMillis() + 30L * 60L * 1000L)),
+                    "updatedAt", FieldValue.serverTimestamp()
+                ).await()
+            }
+        }
     }
 
     suspend fun removeDeviceSlot(slotId: String) {
         val workspaceId = preferences.ensureWorkspaceCode()
+        val ownerUid = requireUserUid()
         val ref = workspaceRef(workspaceId)
+        check(ref.get().await().getString("ownerUid") == ownerUid) { "إزالة الجهاز متاحة للمالك فقط" }
         val matches = ref.collection("members").whereEqualTo("deviceSlotId", slotId).get().await()
         matches.documents.forEach { doc ->
             doc.reference.update(
                 "status", "REVOKED", "online", false, "updatedAt", FieldValue.serverTimestamp()
             ).await()
+        }
+        val invites = ref.collection("pairingInvites").whereEqualTo("deviceSlotId", slotId).get().await()
+        invites.documents.forEach { doc ->
+            if (doc.getString("status") == "PENDING" || doc.getString("status") == "SUSPENDED") {
+                doc.reference.update("status", "REVOKED", "updatedAt", FieldValue.serverTimestamp()).await()
+            }
         }
     }
 
