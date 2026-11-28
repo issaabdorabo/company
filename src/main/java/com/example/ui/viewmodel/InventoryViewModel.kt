@@ -293,6 +293,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var subSyncJob: Job? = null
     private val subSyncMutex = Mutex()
+    private val mainFirebaseRefreshMutex = Mutex()
 
     init {
         startMultiDeviceCoordinator()
@@ -553,26 +554,31 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun refreshMainServerInfo() {
-        // Keep the Firebase check independent from a screen-scoped ViewModel job.
-        // Navigating/recomposing the device screen must not cancel a Firestore Task.await().
+        // A refresh only verifies the Firebase account/workspace and reloads approval
+        // requests. Background coordinator owns inventory sync; running syncOnce here
+        // created duplicate concurrent Firestore work and surfaced coroutine cancellations.
         app.applicationScope.launch(Dispatchers.IO) {
+            if (!mainFirebaseRefreshMutex.tryLock()) return@launch
             _isCloudConnected.value = false
             try {
                 cloudSyncEngine.ensureMainWorkspace()
                 if (isMainDevice.value) {
                     _pendingAccountJoinRequests.value = cloudSyncEngine.getPendingAccountJoinRequests()
                 }
-                cloudSyncEngine.syncOnce()
                 _lastSyncError.value = null
                 _isCloudConnected.value = true
-                _userMessage.emit("تم التحقق من اتصال Firebase ومزامنة البيانات بنجاح")
+                _userMessage.emit("اتصال Firebase يعمل. تتم مزامنة البيانات في الخلفية.")
             } catch (cancelled: CancellationException) {
-                throw cancelled
+                // Do not display the coroutine implementation name as a Firebase error.
+                _isCloudConnected.value = false
+                _lastSyncError.value = "تم إيقاف فحص الاتصال قبل اكتماله. اضغط تحديث للمحاولة مجدداً."
             } catch (error: Exception) {
                 _isCloudConnected.value = false
                 val detail = error.localizedMessage ?: error.javaClass.simpleName
                 _lastSyncError.value = "فشل فحص Firebase: $detail"
                 _userMessage.emit(_lastSyncError.value ?: "تعذر تحديث حالة الربط")
+            } finally {
+                mainFirebaseRefreshMutex.unlock()
             }
         }
     }
