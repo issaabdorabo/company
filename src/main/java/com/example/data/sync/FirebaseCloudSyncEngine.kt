@@ -493,6 +493,9 @@ class FirebaseCloudSyncEngine(
             preferences.updateSubDevicePermissions(permissions)
         }
         markPresence(workspaceId, uid, preferences.getOrCreateInstallationId())
+        if (role.name == "MAIN") {
+            refreshMainDevicePresence(workspaceId, true)
+        }
     }
 
     suspend fun startRealtimeListeners(
@@ -788,17 +791,28 @@ class FirebaseCloudSyncEngine(
     private suspend fun refreshMainDevicePresence(workspaceId: String, isMain: Boolean) {
         if (!isMain) return
         val members = workspaceRef(workspaceId).collection("members").get().await()
-        val lastSeenBySlot = members.documents.mapNotNull { doc ->
+        val memberStateBySlot = members.documents.mapNotNull { doc ->
             val slotId = doc.getString("deviceSlotId") ?: return@mapNotNull null
             val timestamp = doc.getTimestamp("lastSeenAt")?.toDate()?.time ?: 0L
-            slotId to timestamp
+            val status = doc.getString("status").orEmpty()
+            slotId to (timestamp to status)
         }.toMap()
         val current = preferences.getLinkedSubDevicesSnapshot()
         if (current.isNotEmpty()) {
             preferences.saveLinkedSubDevices(
                 current.map { slot ->
-                    val seen = lastSeenBySlot[slot.id]
-                    if (seen != null) slot.copy(isClaimed = true, lastSeenAt = seen) else slot
+                    val state = memberStateBySlot[slot.id]
+                    if (state == null) {
+                        slot
+                    } else {
+                        val (seen, status) = state
+                        slot.copy(
+                            isClaimed = status == "ACTIVE",
+                            isKicked = status == "KICKED" || status == "REVOKED",
+                            wasUnlinked = status == "UNLINKED" || slot.wasUnlinked,
+                            lastSeenAt = seen
+                        )
+                    }
                 }
             )
         }
