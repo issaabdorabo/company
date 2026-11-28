@@ -381,6 +381,26 @@ class FirebaseCloudSyncEngine(
         return snapshot.data ?: emptyMap()
     }
 
+    suspend fun getApprovedAccountJoinInfo(workspaceId: String, requesterUid: String): CloudPairingInfo {
+        ensureFirestoreNetwork()
+        val workspace = workspaceRef(workspaceId)
+        val request = workspace.collection("joinRequests").document(requesterUid).get().await()
+        check(request.exists() && request.getString("status") == "APPROVED") {
+            "لم يعتمد المستخدم الرئيسي هذا الحساب بعد"
+        }
+        val member = workspace.collection("members").document(requesterUid).get().await()
+        check(member.exists() && member.getString("status") == "ACTIVE") {
+            "تمت الموافقة لكن عضوية الجهاز لم تُفعّل. تواصل مع المستخدم الرئيسي."
+        }
+        val permissions = permissionsFromMap(member.get("permissions") as? Map<*, *> ?: emptyMap<String, Any?>())
+        return CloudPairingInfo(
+            workspaceId = workspaceId,
+            deviceSlotId = member.getString("deviceSlotId").orEmpty(),
+            deviceName = member.getString("deviceName").orEmpty(),
+            permissions = permissions
+        )
+    }
+
     suspend fun createPairingInvite(slot: LinkedSubDevice, plainPassword: String): String {
         val uid = requireUserUid()
         val workspaceId = ensureMainWorkspace()
