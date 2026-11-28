@@ -2227,6 +2227,8 @@ class InventoryRepository(
                 else -> fallback
             }
 
+        val existingAttachmentUris = itemDao.getAllItemsList().associate { it.id to it.attachmentUri }
+
         val warehouses = mutableListOf<Warehouse>()
         val items = mutableListOf<Item>()
         val beneficiaries = mutableListOf<Beneficiary>()
@@ -2282,6 +2284,7 @@ class InventoryRepository(
                                 purchasePrice = asDouble(p, "purchasePrice", 0.0),
                                 salePrice = asDouble(p, "salePrice", 0.0),
                                 notes = asStr(p, "notes"),
+                                attachmentUri = existingAttachmentUris[id] ?: asNullableStr(p, "attachmentUri"),
                                 attachmentType = asNullableStr(p, "attachmentType"),
                                 createdAt = asLong(p, "createdAt", System.currentTimeMillis()),
                                 smallerUnitCapacity = asDouble(p, "smallerUnitCapacity", 1.0),
