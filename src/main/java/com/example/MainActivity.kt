@@ -360,7 +360,9 @@ fun MainApp(viewModel: InventoryViewModel) {
                                 text = linkLabel,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = if (syncReady) SuccessGreen else WarningOrange
+                                color = if (
+                                    (isMainDevice && isCloudConnected && lastSyncError.isNullOrBlank()) || isSubConnected
+                                ) SuccessGreen else WarningOrange
                             )
                         }
                     }
