@@ -623,7 +623,7 @@ class FirebaseCloudSyncEngine(
                 baseHash == null && remote != null -> {
                     if (local != null && localHash != remoteHash) {
                         conflictsToArchive.add(
-                            Triple(localToRecord(local, workspaceId, uid), remote, "")
+                            Triple(localToRecord(local, workspaceId, uid), remote, "REMOTE_WINS:")
                         )
                     }
                     remote
@@ -662,8 +662,10 @@ class FirebaseCloudSyncEngine(
             chunk.forEach { (localVersion, remoteVersion, baseHash) ->
                 val localHash = signature(localVersion)
                 val remoteHash = signature(remoteVersion)
+                val remoteWon = baseHash.startsWith("REMOTE_WINS:")
+                val originalBaseHash = if (remoteWon) baseHash.removePrefix("REMOTE_WINS:") else baseHash
                 val conflictId = sha256(
-                    "${localVersion.id}|${baseHash}|${localHash}|${remoteHash}"
+                    "${localVersion.id}|${originalBaseHash}|${localHash}|${remoteHash}"
                 )
                 batch.set(
                     conflictsRef.document(conflictId),
@@ -672,7 +674,7 @@ class FirebaseCloudSyncEngine(
                         "recordId" to localVersion.id,
                         "entityType" to localVersion.entityType,
                         "localId" to localVersion.localId,
-                        "baseHash" to baseHash,
+                        "baseHash" to originalBaseHash,
                         "localHash" to localHash,
                         "remoteHash" to remoteHash,
                         "localVersion" to mapOf(
@@ -689,7 +691,7 @@ class FirebaseCloudSyncEngine(
                             "isDeleted" to remoteVersion.isDeleted,
                             "updatedByUid" to remoteVersion.updatedByUid
                         ),
-                        "resolution" to "LOCAL_VERSION_SELECTED",
+                        "resolution" to if (remoteWon) "REMOTE_VERSION_SELECTED" else "LOCAL_VERSION_SELECTED",
                         "createdByUid" to uid,
                         "createdByDeviceId" to installationId,
                         "createdAt" to FieldValue.serverTimestamp()
