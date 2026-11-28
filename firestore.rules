@@ -116,7 +116,13 @@ service cloud.firestore {
               )
           : kind == 'adjustment'
             ? hasWarehousePermission(workspaceId, payload.warehouseId, 'canAdjustWarehouseIds', 'canAdjust')
-          : kind == 'association' || kind == 'serial'
+          : kind == 'association'
+            ? (deleting
+                ? (hasWarehousePermission(workspaceId, payload.warehouseId, 'canDeleteItemWarehouseIds', 'canDeleteItem')
+                    || hasWarehousePermission(workspaceId, payload.warehouseId, 'canEditInventoryWarehouseIds', 'canEditInventory'))
+                : (p.canAddItems == true
+                    || hasWarehousePermission(workspaceId, payload.warehouseId, 'canEditInventoryWarehouseIds', 'canEditInventory')))
+          : kind == 'serial'
             ? hasWarehousePermission(workspaceId, payload.warehouseId, 'canEditInventoryWarehouseIds', 'canEditInventory')
           : kind == 'beneficiary' || kind == 'supplier' || kind == 'party'
             ? (p.canAddItems == true || p.canEditDelete == true)
