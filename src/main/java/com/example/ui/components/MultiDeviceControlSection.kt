@@ -104,8 +104,6 @@ fun MultiDeviceControlSection(
     val isSubConnected by viewModel.isSubConnected.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val availableWarehouses by viewModel.warehouses.collectAsState()
-    val serverStatus by viewModel.serverStatus.collectAsState()
-    val discoveredMainDevices by viewModel.discoveredMainDevices.collectAsState()
     val createdCredentials by viewModel.createdDeviceCredentials.collectAsState()
     val sessionPairingCredentials by viewModel.sessionPairingCredentials.collectAsState()
     val isPairingInProgress by viewModel.isPairingInProgress.collectAsState()
@@ -243,9 +241,8 @@ fun MultiDeviceControlSection(
 
             if (isMainDevice) {
                 // MAIN DEVICE CONTROLS
-                val displayCode = workspaceCode.ifBlank { serverStatus.workspaceCode }
+                val displayCode = workspaceCode
                 val primaryAddr = "Firebase Firestore"
-                val hasLanIp = true
 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
