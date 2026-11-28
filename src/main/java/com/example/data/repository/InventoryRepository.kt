@@ -2228,6 +2228,8 @@ class InventoryRepository(
             }
 
         val existingAttachmentUris = itemDao.getAllItemsList().associate { it.id to it.attachmentUri }
+        val existingVoucherAttachmentUris = voucherDao.getAllVouchers().associate { it.id to it.attachmentUri }
+        val existingVoucherItemAttachmentUris = voucherDao.getAllVoucherItems().associate { it.id to it.attachmentUri }
 
         val warehouses = mutableListOf<Warehouse>()
         val items = mutableListOf<Item>()
@@ -2448,6 +2450,7 @@ class InventoryRepository(
                                 beneficiaryName = asStr(p, "beneficiaryName"),
                                 disburserName = asStr(p, "disburserName"),
                                 notes = asStr(p, "notes"),
+                                attachmentUri = existingVoucherAttachmentUris[id] ?: asNullableStr(p, "attachmentUri"),
                                 attachmentType = asNullableStr(p, "attachmentType"),
                                 createdAt = asLong(p, "createdAt", System.currentTimeMillis()),
                                 createdBy = asStr(p, "createdBy"),
@@ -2482,6 +2485,7 @@ class InventoryRepository(
                                 serialNumber = asStr(p, "serialNumber"),
                                 itemStatus = asStr(p, "itemStatus"),
                                 itemReceiverName = asStr(p, "itemReceiverName"),
+                                attachmentUri = existingVoucherItemAttachmentUris[id] ?: asNullableStr(p, "attachmentUri"),
                                 attachmentType = asNullableStr(p, "attachmentType"),
                                 sourceSerialRecordId = asNullableLong(p, "sourceSerialRecordId"),
                                 sourceUnitIndex = asNullableLong(p, "sourceUnitIndex")?.toInt()
