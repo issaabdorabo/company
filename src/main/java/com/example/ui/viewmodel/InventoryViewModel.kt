@@ -691,7 +691,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 canInward = canInward,
                 canDisburse = canDisburse,
                 canEditDelete = canEditDelete,
-                canEditInventory = canEditDelete,
+                canEditInventory = false,
                 canDeleteItem = canDeleteItem,
                 canEditIssueVoucher = canEditIssueVoucher,
                 canDeleteIssueVoucher = canDeleteIssueVoucher,
