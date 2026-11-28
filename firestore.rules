@@ -13,6 +13,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(uid);
     }
 
+    function recordPath(workspaceId, recordId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/records/$(recordId);
+    }
+
     function isOwner(workspaceId) {
       return signedIn()
         && exists(workspacePath(workspaceId))
@@ -25,6 +29,77 @@ service cloud.firestore {
         || (
           exists(memberPath(workspaceId, request.auth.uid))
           && get(memberPath(workspaceId, request.auth.uid)).data.status == 'ACTIVE'
+        )
+      );
+    }
+
+    function memberPermissions(workspaceId) {
+      return get(memberPath(workspaceId, request.auth.uid)).data.permissions;
+    }
+
+    function hasWarehousePermission(workspaceId, warehouseId, permissionList, globalPermission) {
+      let p = memberPermissions(workspaceId);
+      return p != null && (
+        (p.canViewAllWarehouses == true && p[globalPermission] == true)
+        || (p[permissionList] is list && warehouseId in p[permissionList])
+      );
+    }
+
+    function canCreateVoucher(workspaceId, voucherPayload) {
+      let voucherType = voucherPayload.voucherType;
+      let sourceId = voucherPayload.sourceWarehouseId;
+      let destinationId = voucherPayload.destinationWarehouseId;
+      return voucherType == 'INWARD'
+        ? hasWarehousePermission(workspaceId, destinationId, 'canInwardWarehouseIds', 'canInward')
+        : voucherType == 'TRANSFER'
+          ? hasWarehousePermission(workspaceId, sourceId, 'canTransferWarehouseIds', 'canTransfer')
+            && hasWarehousePermission(workspaceId, destinationId, 'canTransferWarehouseIds', 'canTransfer')
+          : hasWarehousePermission(workspaceId, sourceId, 'canDisburseWarehouseIds', 'canDisburse');
+    }
+
+    function canEditOrDeleteVoucher(workspaceId, voucherPayload, deleting) {
+      let p = memberPermissions(workspaceId);
+      let isSupply = voucherPayload.voucherType == 'INWARD';
+      return deleting
+        ? (isSupply ? p.canDeleteSupplyVoucher == true : p.canDeleteIssueVoucher == true)
+        : (isSupply ? p.canEditSupplyVoucher == true : p.canEditIssueVoucher == true);
+    }
+
+    function canWriteRecord(workspaceId, recordId, data) {
+      let p = memberPermissions(workspaceId);
+      let kind = data.entityType;
+      let payload = data.payload;
+      let deleting = data.isDeleted == true;
+      let existsBefore = exists(recordPath(workspaceId, recordId));
+
+      return isOwner(workspaceId) || (
+        p != null && (
+          kind == 'warehouse'
+            ? (p.canAddItems == true || p.canEditDelete == true)
+          : kind == 'item'
+            ? (deleting
+                ? p.canDeleteItem == true
+                : (existsBefore ? p.canEditCatalogItems == true : p.canAddItems == true))
+          : kind == 'voucher'
+            ? (canCreateVoucher(workspaceId, payload)
+                && (!existsBefore || canEditOrDeleteVoucher(workspaceId, payload, deleting)))
+          : kind == 'voucher_item'
+            ? (
+                existsAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+                && canCreateVoucher(
+                  workspaceId,
+                  getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                )
+              )
+          : kind == 'adjustment'
+            ? hasWarehousePermission(workspaceId, payload.warehouseId, 'canAdjustWarehouseIds', 'canAdjust')
+          : kind == 'association' || kind == 'serial'
+            ? hasWarehousePermission(workspaceId, payload.warehouseId, 'canEditInventoryWarehouseIds', 'canEditInventory')
+          : kind == 'beneficiary' || kind == 'supplier' || kind == 'party'
+            ? (p.canAddItems == true || p.canEditDelete == true)
+          : kind == 'category' || kind == 'unit' || kind == 'smaller_unit' || kind == 'item_status'
+            ? (p.canAddItems == true || p.canEditCatalogItems == true)
+          : false
         )
       );
     }
@@ -98,7 +173,17 @@ service cloud.firestore {
       }
 
       match /records/{recordId} {
-        allow read, create, update: if isActiveMember(workspaceId);
+        allow read: if isActiveMember(workspaceId);
+        allow create: if isActiveMember(workspaceId)
+          && request.resource.data.workspaceId == workspaceId
+          && canWriteRecord(workspaceId, recordId, request.resource.data);
+        allow update: if isActiveMember(workspaceId)
+          && request.resource.data.workspaceId == workspaceId
+          && canWriteRecord(
+            workspaceId,
+            recordId,
+            request.resource.data.isDeleted == true ? resource.data : request.resource.data
+          );
         allow delete: if false;
       }
 
