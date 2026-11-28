@@ -771,7 +771,14 @@ class FirebaseCloudSyncEngine(
                 "canEditInventory" to w.canEditInventory,
                 "canDeleteItem" to w.canDeleteItem
             )
-        }
+        },
+        "canInwardWarehouseIds" to p.warehousePermissions.filter { it.canView && it.canInward }.map { it.warehouseId },
+        "canDisburseWarehouseIds" to p.warehousePermissions.filter { it.canView && it.canDisburse }.map { it.warehouseId },
+        "canTransferWarehouseIds" to p.warehousePermissions.filter { it.canView && it.canTransfer }.map { it.warehouseId },
+        "canAdjustWarehouseIds" to p.warehousePermissions.filter { it.canView && it.canAdjust }.map { it.warehouseId },
+        "canEditWarehouseIds" to p.warehousePermissions.filter { it.canView && it.canEdit }.map { it.warehouseId },
+        "canEditInventoryWarehouseIds" to p.warehousePermissions.filter { it.canView && it.canEditInventory }.map { it.warehouseId },
+        "canDeleteItemWarehouseIds" to p.warehousePermissions.filter { it.canView && it.canDeleteItem }.map { it.warehouseId }
     )
 
     private fun permissionsFromMap(raw: Map<*, *>): DevicePermissions {
