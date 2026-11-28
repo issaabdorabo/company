@@ -17,6 +17,8 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -178,6 +180,17 @@ class FirebaseCloudSyncEngine(
      * Firestore may remain explicitly disabled after a transient network transition.
      * Re-enable its transport before operations that must reach the server.
      */
+    private fun firestoreReadFailure(stage: String, error: FirebaseFirestoreException): IllegalStateException {
+        val detail = when (error.code) {
+            FirebaseFirestoreException.Code.UNAVAILABLE -> "تعذر الوصول إلى خادم Firestore. تحقق من اتصال الإنترنت وإمكانية الوصول إلى Firebase ثم أعد المحاولة."
+            FirebaseFirestoreException.Code.PERMISSION_DENIED -> "رفضت قواعد Firestore قراءة البيانات في خطوة: " + stage + ". تحقق من نشر قواعد firestore.rules في Cloud Firestore."
+            FirebaseFirestoreException.Code.UNAUTHENTICATED -> "انتهت جلسة Firebase أو لم يتم تسجيل الدخول. سجّل الدخول مجدداً."
+            FirebaseFirestoreException.Code.NOT_FOUND -> "قاعدة بيانات Firestore أو المستند المطلوب غير موجود في المشروع الحالي."
+            else -> "فشل اتصال Firestore في خطوة: " + stage + " (" + error.code + "). " + (error.localizedMessage ?: "لا توجد تفاصيل إضافية")
+        }
+        return IllegalStateException(detail, error)
+    }
+
     private suspend fun ensureFirestoreNetwork() {
         try {
             firestore.enableNetwork().await()
@@ -284,7 +297,11 @@ class FirebaseCloudSyncEngine(
         val user = auth.currentUser ?: throw IllegalStateException("سجّل الدخول إلى Firebase بحساب الجهاز الفرعي أولاً")
         val ownerEmail = ownerEmailInput.trim().lowercase()
         require(ownerEmail.contains("@") && ownerEmail.contains(".")) { "أدخل بريد المستخدم الرئيسي بشكل صحيح" }
-        val directory = firestore.collection("accountDirectory").document(sha256(ownerEmail)).get().await()
+        val directory = try {
+            firestore.collection("accountDirectory").document(sha256(ownerEmail)).get(Source.SERVER).await()
+        } catch (error: FirebaseFirestoreException) {
+            throw firestoreReadFailure("البحث عن بريد المستخدم الرئيسي", error)
+        }
         check(directory.exists() && directory.getString("status") == "ACTIVE") {
             "لم يتم العثور على مساحة عمل مرتبطة بهذا البريد. تأكد أن المستخدم الرئيسي فتح التطبيق وسجّل الدخول مرة واحدة."
         }
@@ -297,7 +314,11 @@ class FirebaseCloudSyncEngine(
             user.displayName?.takeIf { it.isNotBlank() } ?: "جهاز فرعي"
         }
         val requestRef = workspaceRef(workspaceId).collection("joinRequests").document(user.uid)
-        val existing = requestRef.get().await()
+        val existing = try {
+            requestRef.get(Source.SERVER).await()
+        } catch (error: FirebaseFirestoreException) {
+            throw firestoreReadFailure("التحقق من طلب الانضمام السابق", error)
+        }
         val existingStatus = existing.getString("status").orEmpty()
         check(existingStatus !in listOf("APPROVED", "ACTIVE")) {
             "هذا الحساب معتمد بالفعل لدى المستخدم الرئيسي"
@@ -377,14 +398,22 @@ class FirebaseCloudSyncEngine(
 
     suspend fun checkAccountJoinRequest(workspaceId: String, requesterUid: String): Map<String, Any?> {
         ensureFirestoreNetwork()
-        val snapshot = workspaceRef(workspaceId).collection("joinRequests").document(requesterUid).get().await()
+        val snapshot = try {
+            workspaceRef(workspaceId).collection("joinRequests").document(requesterUid).get(Source.SERVER).await()
+        } catch (error: FirebaseFirestoreException) {
+            throw firestoreReadFailure("قراءة حالة طلب الانضمام", error)
+        }
         return snapshot.data ?: emptyMap()
     }
 
     suspend fun getApprovedAccountJoinInfo(workspaceId: String, requesterUid: String): CloudPairingInfo {
         ensureFirestoreNetwork()
         val workspace = workspaceRef(workspaceId)
-        val request = workspace.collection("joinRequests").document(requesterUid).get().await()
+        val request = try {
+            workspace.collection("joinRequests").document(requesterUid).get(Source.SERVER).await()
+        } catch (error: FirebaseFirestoreException) {
+            throw firestoreReadFailure("التحقق من اعتماد الجهاز", error)
+        }
         check(request.exists() && request.getString("status") == "APPROVED") {
             "لم يعتمد المستخدم الرئيسي هذا الحساب بعد"
         }
