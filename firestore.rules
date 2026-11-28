@@ -80,28 +80,39 @@ service cloud.firestore {
                 ? p.canDeleteItem == true
                 : (existsBefore ? p.canEditCatalogItems == true : p.canAddItems == true))
           : kind == 'voucher'
-            ? (canCreateVoucher(workspaceId, payload)
-                && (!existsBefore || canEditOrDeleteVoucher(workspaceId, payload, deleting)))
+            ? (deleting
+                ? canEditOrDeleteVoucher(workspaceId, resource.data.payload, true)
+                : (canCreateVoucher(workspaceId, payload)
+                    && (!existsBefore || canEditOrDeleteVoucher(workspaceId, payload, false))))
           : kind == 'voucher_item'
             ? (
                 exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
                   || existsAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
               )
-              && canCreateVoucher(
-                workspaceId,
-                exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
-                  ? get(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
-                  : getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
-              )
               && (
-                !existsBefore
-                || canEditOrDeleteVoucher(
-                  workspaceId,
-                  exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
-                    ? get(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
-                    : getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload,
-                  deleting
-                )
+                deleting
+                  ? canEditOrDeleteVoucher(
+                      workspaceId,
+                      exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+                        ? get(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                        : getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload,
+                      true
+                    )
+                  : (
+                      canCreateVoucher(
+                        workspaceId,
+                        exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+                          ? get(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                          : getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                      )
+                      && (!existsBefore || canEditOrDeleteVoucher(
+                        workspaceId,
+                        exists(recordPath(workspaceId, 'voucher_' + string(payload.voucherId)))
+                          ? get(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload
+                          : getAfter(recordPath(workspaceId, 'voucher_' + string(payload.voucherId))).data.payload,
+                        false
+                      ))
+                    )
               )
           : kind == 'adjustment'
             ? hasWarehousePermission(workspaceId, payload.warehouseId, 'canAdjustWarehouseIds', 'canAdjust')
