@@ -75,6 +75,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.cloud.CreatedDeviceCredentials
+import com.example.data.sync.CloudJoinRequest
 import com.example.data.cloud.LinkedSubDevice
 import com.example.data.cloud.WarehousePermission
 import com.example.data.model.Warehouse
@@ -113,8 +114,11 @@ fun MultiDeviceControlSection(
     val lastSyncError by viewModel.lastSyncError.collectAsState()
     val isCloudConnected by viewModel.isCloudConnected.collectAsState()
     val pairingLockedUntil by viewModel.pairingLockedUntil.collectAsState()
+    val pendingAccountJoinRequests by viewModel.pendingAccountJoinRequests.collectAsState()
+    val accountJoinStatus by viewModel.accountJoinStatus.collectAsState()
 
     var showCreateSubDialog by remember { mutableStateOf(false) }
+    var requestToApprove by remember { mutableStateOf<CloudJoinRequest?>(null) }
     var showQrScanner by remember { mutableStateOf(false) }
     var deviceToKick by remember { mutableStateOf<LinkedSubDevice?>(null) }
     var showUnlinkConfirmDialog by remember { mutableStateOf(false) }
@@ -394,16 +398,44 @@ fun MultiDeviceControlSection(
                     }
                 }
 
-                Button(
-                    onClick = { showCreateSubDialog = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("add_sub_device_btn"),
+                OutlinedButton(
+                    onClick = { viewModel.refreshMainServerInfo() },
+                    modifier = Modifier.fillMaxWidth().testTag("refresh_join_requests_btn"),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("إضافة جهاز فرعي وإنشاء كلمة مرور منفردة")
+                    Text("تحديث طلبات اعتماد الحسابات")
+                }
+
+                HorizontalDivider()
+                Text(
+                    text = "طلبات انضمام الحسابات (${pendingAccountJoinRequests.size})",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                if (pendingAccountJoinRequests.isEmpty()) {
+                    Text(
+                        "لا توجد طلبات اعتماد معلقة حالياً. سجّل المستخدم الفرعي الدخول ثم أدخل بريدك الرئيسي من جهازه لإرسال الطلب.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    pendingAccountJoinRequests.forEach { request ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(request.deviceName.ifBlank { request.displayName.ifBlank { "جهاز فرعي" } }, fontWeight = FontWeight.Bold)
+                                Text(request.email, style = MaterialTheme.typography.bodySmall)
+                                Button(
+                                    onClick = { requestToApprove = request },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("مراجعة الحساب وتحديد الصلاحيات") }
+                            }
+                        }
+                    }
                 }
 
                 // Linked Sub-Devices List
@@ -438,29 +470,13 @@ fun MultiDeviceControlSection(
             } else {
                 // SUB-DEVICE MODE
                 if (!isSubConnected) {
-                    // Quick Camera QR Scan Button
-                    Button(
-                        onClick = { showQrScanner = true },
-                        enabled = !isPairingInProgress && remainingLockSeconds == 0L,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("scan_pairing_qr_btn"),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("مسح باركود الربط بالكاميرا (ربط تلقائي فوري)", fontWeight = FontWeight.Bold)
-                    }
-
-                    // Cloud pairing is independent of local Wi-Fi, IP addresses, or hotspot discovery.
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = InfoBlue.copy(alpha = 0.08f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "الربط يتم من خلال Firebase عبر الإنترنت؛ يمكن أن يكون الجهازان في مدينتين أو على شبكتين مختلفتين.",
+                            "سجّل الدخول بحساب Firebase الخاص بهذا الجهاز، ثم أدخل بريد المستخدم الرئيسي لإرسال طلب الانضمام. لا يلزم باركود أو كلمة مرور ربط.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(12.dp)
@@ -468,99 +484,75 @@ fun MultiDeviceControlSection(
                     }
 
                     OutlinedTextField(
-                        value = codeInput,
-                        onValueChange = { codeInput = it.uppercase() },
-                        label = { Text("رمز مساحة العمل (INV-XXXXXX)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("sub_code_input"),
+                        value = hostInput,
+                        onValueChange = { hostInput = it },
+                        label = { Text("بريد حساب المستخدم الرئيسي") },
+                        modifier = Modifier.fillMaxWidth().testTag("main_account_email_input"),
                         singleLine = true
                     )
-
                     OutlinedTextField(
-                        value = passwordInput,
-                        onValueChange = { passwordInput = it },
-                        label = { Text("كلمة المرور المنفردة الممنوحة من الجهاز الرئيسي") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("sub_password_input"),
+                        value = codeInput,
+                        onValueChange = { codeInput = it },
+                        label = { Text("اسم هذا الجهاز / المستخدم") },
+                        modifier = Modifier.fillMaxWidth().testTag("sub_device_name_input"),
                         singleLine = true
                     )
 
-                    if (remainingLockSeconds > 0L) {
+                    if (accountJoinStatus == "PENDING") {
                         Surface(
-                            color = DangerRed.copy(alpha = 0.1f),
+                            color = SuccessGreen.copy(alpha = 0.08f),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "محاولات التحقق مقفلة مؤقتاً لمدة $remainingLockSeconds ثانية.",
-                                color = DangerRed,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(10.dp)
+                                "تم إرسال طلبك. انتظر موافقة المستخدم الرئيسي، ثم اضغط تحديث حالة الطلب.",
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall
                             )
                         }
-                    } else if (!pairingError.isNullOrBlank()) {
-                        Surface(
-                            color = DangerRed.copy(alpha = 0.1f),
-                            shape = RoundedCornerShape(10.dp),
+                        OutlinedButton(
+                            onClick = { viewModel.checkAccountJoinApproval() },
+                            enabled = !isPairingInProgress,
                             modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = pairingError!!,
-                                color = DangerRed,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                        ) { Text("تحديث حالة طلب الاعتماد") }
+                    } else {
                         Button(
-                            onClick = {
-                                viewModel.pairWithMainDevice(
-                                    hostAddress = hostInput,
-                                    workspaceCodeInput = codeInput,
-                                    passwordInput = passwordInput
-                                )
-                            },
-                            enabled = !isPairingInProgress && remainingLockSeconds == 0L,
-                            modifier = Modifier
-                                .weight(1.4f)
-                                .testTag("pair_device_btn"),
+                            onClick = { viewModel.submitAccountJoinRequest(hostInput, codeInput) },
+                            enabled = !isPairingInProgress && hostInput.contains("@"),
+                            modifier = Modifier.fillMaxWidth().testTag("submit_account_join_request_btn"),
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             if (isPairingInProgress) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.White
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("جاري الربط...")
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(8.dp))
+                                Text("جارٍ إرسال الطلب...")
                             } else {
-                                Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("ربط ومزامنة الآن")
+                                Icon(Icons.Default.Link, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("إرسال طلب الانضمام")
                             }
                         }
+                    }
 
-                        OutlinedButton(
-                            onClick = { viewModel.switchToMainDeviceMode() },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("cancel_sub_mode_btn"),
-                            shape = RoundedCornerShape(10.dp)
+                    if (!pairingError.isNullOrBlank()) {
+                        Surface(
+                            color = DangerRed.copy(alpha = 0.1f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("إلغاء / رئيسي", fontSize = 12.sp)
+                            Text(
+                                pairingError.orEmpty(),
+                                color = DangerRed,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(10.dp)
+                            )
                         }
                     }
-                } else {
+                    OutlinedButton(
+                        onClick = { viewModel.switchToMainDeviceMode() },
+                        modifier = Modifier.fillMaxWidth().testTag("cancel_sub_mode_btn")
+                    ) { Text("إلغاء / رئيسي") }
+                }else {
                     // CONNECTED SUB-DEVICE STATUS
                     val timeFmt = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
                     val lastSyncLabel = if (lastSyncAt > 0L) timeFmt.format(Date(lastSyncAt)) else "الآن"
@@ -684,6 +676,23 @@ fun MultiDeviceControlSection(
                 }
             }
         }
+    }
+
+    requestToApprove?.let { request ->
+        CreateSubDeviceDialog(
+            warehouses = availableWarehouses,
+            existingDeviceNames = linkedSubDevices.map { it.deviceName },
+            initialName = request.deviceName.ifBlank { request.displayName },
+            onDismiss = { requestToApprove = null },
+            onCreate = { name, canAdd, canInward, canDisburse, legacyEdit, canBackup, allWarehouses, grants, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog ->
+                val approvedRequest = request.copy(deviceName = name)
+                viewModel.approveAccountJoinRequest(
+                    approvedRequest, canAdd, canInward, canDisburse, legacyEdit, canBackup,
+                    allWarehouses, grants, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog
+                )
+                requestToApprove = null
+            }
+        )
     }
 
     // Dialog: Create new Sub-Device Slot
@@ -949,10 +958,11 @@ private fun PermissionSwitchRow(
 private fun CreateSubDeviceDialog(
     warehouses: List<Warehouse>,
     existingDeviceNames: List<String>,
+    initialName: String = "",
     onDismiss: () -> Unit,
     onCreate: (String, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, List<WarehousePermission>, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
+    var name by remember(initialName) { mutableStateOf(initialName) }
     var canAdd by remember { mutableStateOf(false) }
     var canInward by remember { mutableStateOf(false) }
     var canDisburse by remember { mutableStateOf(false) }
@@ -992,7 +1002,7 @@ private fun CreateSubDeviceDialog(
         },
         confirmButton = {
             Button(onClick = { onCreate(name, canAdd, canInward, canDisburse, canEditGeneral, canBackup, allWarehouses, grants, canDeleteItem, canEditIssue, canDeleteIssue, canEditSupply, canDeleteSupply, canEditCatalogItems) }, enabled = name.trim().isNotBlank() && !existingDeviceNames.any { it.trim().equals(name.trim(), ignoreCase = true) }, modifier = Modifier.testTag("confirm_create_sub_device_btn")) {
-                Text("إنشاء كلمة المرور")
+                Text("اعتماد الحساب وحفظ الصلاحيات")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
