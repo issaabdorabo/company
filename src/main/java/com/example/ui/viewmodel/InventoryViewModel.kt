@@ -393,7 +393,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             cloudSyncEngine.syncOnce()
                             cloudSyncEngine.startRealtimeListeners(viewModelScope) { message ->
                                 if (message.contains("إيقاف ارتباط") || message.contains("طرد")) {
-                                    handleSubDeviceKicked(message)
+                                    viewModelScope.launch { handleSubDeviceKicked(message) }
                                 } else {
                                     _lastSyncError.value = message
                                 }
