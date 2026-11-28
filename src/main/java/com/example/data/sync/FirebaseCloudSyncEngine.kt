@@ -583,6 +583,10 @@ class FirebaseCloudSyncEngine(
             val remoteChanged = remote != null && remoteHash != baseHash
 
             val chosen = when {
+                // A device restored from Google Drive may have lost its local sync baseline.
+                // Prefer the already-shared cloud version for matching IDs; only local-only
+                // records are uploaded on that first reconciliation.
+                baseHash == null && remote != null -> remote
                 localDeleted -> CloudEntityRecord(
                     id = id,
                     workspaceId = workspaceId,
@@ -605,7 +609,9 @@ class FirebaseCloudSyncEngine(
         }
 
         var uploaded = 0
-        writes.chunked(450).forEach { chunk ->
+        // A sub-device write can consult its own member document and a voucher parent in Rules.
+        // Keeping batches small stays comfortably inside Firestore's 20 document-access call limit.
+        writes.chunked(10).forEach { chunk ->
             val batch = firestore.batch()
             chunk.forEach { record ->
                 batch.set(
