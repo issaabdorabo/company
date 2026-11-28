@@ -105,8 +105,6 @@ fun MultiDeviceControlSection(
     val isSubConnected by viewModel.isSubConnected.collectAsState()
     val linkedSubDevices by viewModel.linkedSubDevices.collectAsState()
     val availableWarehouses by viewModel.warehouses.collectAsState()
-    val createdCredentials by viewModel.createdDeviceCredentials.collectAsState()
-    val sessionPairingCredentials by viewModel.sessionPairingCredentials.collectAsState()
     val isPairingInProgress by viewModel.isPairingInProgress.collectAsState()
     val pairingError by viewModel.pairingError.collectAsState()
     val isSyncingNow by viewModel.isSyncingNow.collectAsState()
@@ -119,14 +117,9 @@ fun MultiDeviceControlSection(
 
     var showCreateSubDialog by remember { mutableStateOf(false) }
     var requestToApprove by remember { mutableStateOf<CloudJoinRequest?>(null) }
-    var showQrScanner by remember { mutableStateOf(false) }
     var deviceToKick by remember { mutableStateOf<LinkedSubDevice?>(null) }
     var showUnlinkConfirmDialog by remember { mutableStateOf(false) }
 
-    // Sub-device pairing inputs
-    var hostInput by remember { mutableStateOf("CLOUD") }
-    var codeInput by remember { mutableStateOf("") }
-    var passwordInput by remember { mutableStateOf("") }
 
     // Cooldown countdown ticker
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -404,8 +397,6 @@ fun MultiDeviceControlSection(
                     linkedSubDevices.forEach { slot ->
                         SubDeviceManagementCard(
                             slot = slot,
-                            hasQrAvailable = !slot.isClaimed && !slot.isKicked && sessionPairingCredentials.containsKey(slot.id),
-                            onShowQr = { viewModel.showSessionCredentialsQr(slot.id) },
                             warehouses = availableWarehouses,
                             onUpdatePermissions = { add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog ->
                                 viewModel.updateSubDevicePermissions(slot.id, add, inward, disburse, editLegacy, backup, allWarehouses, grants, editInventory, deleteItem, editIssue, deleteIssue, editSupply, deleteSupply, editCatalog)
@@ -656,24 +647,6 @@ fun MultiDeviceControlSection(
         )
     }
 
-    // Dialog: Show Generated Per-Device Credentials
-    createdCredentials?.let { creds ->
-        CreatedCredentialsDialog(
-            credentials = creds,
-            onCopyAll = {
-                val text = buildString {
-                    appendLine("بيانات ربط الجهاز الفرعي (${creds.deviceName}):")
-                    appendLine("طريقة الربط: Firebase Firestore عبر الإنترنت")
-                    appendLine("رمز مساحة العمل: ${creds.workspaceCode}")
-                    appendLine("كلمة المرور المنفردة: ${creds.plainPassword}")
-                }
-                copyToClipboard(context, text)
-                Toast.makeText(context, "تم نسخ كامل بيانات الربط", Toast.LENGTH_SHORT).show()
-            },
-            onDismiss = { viewModel.dismissCreatedDeviceCredentials() }
-        )
-    }
-
     // Confirm Kick Sub-Device
     deviceToKick?.let { target ->
         SimpleConfirmDialog(
@@ -704,21 +677,7 @@ fun MultiDeviceControlSection(
         )
     }
 
-    // QR Scanner Dialog for Sub-Device
-    if (showQrScanner) {
-        QrScannerDialog(
-            onQrScanned = { payload ->
-                showQrScanner = false
-                hostInput = payload.host
-                codeInput = payload.code
-                passwordInput = payload.pwd
-                Toast.makeText(context, "تمت قراءة باركود الربط، جاري الاتصال...", Toast.LENGTH_SHORT).show()
-                viewModel.pairWithMainDevice(
-                    hostAddress = payload.host,
-                    workspaceCodeInput = payload.code,
-                    passwordInput = payload.pwd
-                )
-            },
+},
             onInvalidQrDetected = {
                 Toast.makeText(context, "هذا الباركود لا يخص ربط مخزني الذكي", Toast.LENGTH_SHORT).show()
             },
@@ -749,8 +708,6 @@ private fun PermissionBadge(label: String, granted: Boolean) {
 private fun SubDeviceManagementCard(
     slot: LinkedSubDevice,
     warehouses: List<Warehouse>,
-    hasQrAvailable: Boolean,
-    onShowQr: () -> Unit,
     onUpdatePermissions: (Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, List<WarehousePermission>, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onKick: () -> Unit,
     onReactivate: () -> Unit
@@ -795,9 +752,6 @@ private fun SubDeviceManagementCard(
                     })
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (hasQrAvailable) IconButton(onClick = onShowQr, modifier = Modifier.testTag("show_device_qr_btn_${slot.id}")) {
-                        Icon(Icons.Default.QrCode2, contentDescription = "عرض باركود الربط", tint = MaterialTheme.colorScheme.primary)
-                    }
                     if (!slot.isKicked) {
                         OutlinedButton(onClick = onKick, colors = ButtonDefaults.outlinedButtonColors(contentColor = DangerRed), modifier = Modifier.testTag("kick_device_btn_${slot.id}"), shape = RoundedCornerShape(8.dp)) {
                             Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("طرد", fontSize = 11.sp)
