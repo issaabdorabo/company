@@ -137,6 +137,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val _lastSyncError = MutableStateFlow<String?>(null)
     val lastSyncError: StateFlow<String?> = _lastSyncError.asStateFlow()
 
+    private val _isCloudConnected = MutableStateFlow(false)
+    val isCloudConnected: StateFlow<Boolean> = _isCloudConnected.asStateFlow()
+
     private val _kickedAlertMessage = MutableStateFlow<String?>(null)
     val kickedAlertMessage: StateFlow<String?> = _kickedAlertMessage.asStateFlow()
 
@@ -541,13 +544,16 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshMainServerInfo() {
         viewModelScope.launch {
+            _isCloudConnected.value = false
             runCatching {
                 cloudSyncEngine.ensureMainWorkspace()
                 cloudSyncEngine.syncOnce()
             }.onSuccess {
                 _lastSyncError.value = null
-                _userMessage.emit("مساحة العمل السحابية جاهزة للربط عبر الإنترنت")
+                _isCloudConnected.value = true
+                _userMessage.emit("تم التحقق من اتصال Firebase ومزامنة البيانات بنجاح")
             }.onFailure {
+                _isCloudConnected.value = false
                 _lastSyncError.value = it.localizedMessage ?: "تعذر الاتصال بمساحة العمل السحابية"
                 _userMessage.emit(_lastSyncError.value ?: "تعذر تحديث حالة الربط")
             }
@@ -627,8 +633,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 updatedAt = System.currentTimeMillis()
             )
 
+            _isCloudConnected.value = false
             try {
                 cloudSyncEngine.createPairingInvite(newSlot, plainPassword)
+                _lastSyncError.value = null
+                _isCloudConnected.value = true
                 current.add(0, newSlot)
                 preferences.saveLinkedSubDevices(current)
                 val code = preferences.ensureWorkspaceCode()
@@ -643,8 +652,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 _createdDeviceCredentials.value = creds
                 _userMessage.emit("تم إنشاء دعوة ربط سحابية صالحة لمدة 30 دقيقة للجهاز ($cleanName)")
             } catch (error: Exception) {
+                _isCloudConnected.value = false
                 _pairingError.value = error.localizedMessage
                     ?: "تعذر إنشاء دعوة الربط السحابية. تحقق من تسجيل الدخول والإنترنت وقواعد Firestore."
+                _lastSyncError.value = _pairingError.value
                 _userMessage.emit(_pairingError.value ?: "تعذر إنشاء دعوة الربط")
             }
         }
@@ -813,8 +824,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 cloudSyncEngine.initializeNewSubDevice(paired.workspaceId)
                 CloudSyncWorker.requestImmediate(getApplication())
                 _lastSyncError.value = null
+                _isCloudConnected.value = true
                 _userMessage.emit("تم ربط الجهاز الفرعي (${paired.deviceName}) عبر الإنترنت ومزامنة بياناته")
             } catch (error: Exception) {
+                _isCloudConnected.value = false
                 val (attempts, lockTime) = preferences.recordPairingFailure()
                 _pairingError.value = if (lockTime > 0L) {
                     "تم تجاوز 5 محاولات خاطئة. تم إيقاف المحاولات لمدة 60 ثانية."
@@ -842,6 +855,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 cloudSyncEngine.syncOnce()
             }.onSuccess { result ->
                 _lastSyncError.value = null
+                _isCloudConnected.value = true
                 preferences.updateLastSync(preferences.lastAppliedRevisionFlow.first() + 1L)
                 val conflictNotice = if (result.conflictsArchived > 0) {
                     " • تم حفظ ${result.conflictsArchived} تعارض في السحابة للمراجعة"
@@ -852,6 +866,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     "اكتملت المزامنة السحابية: رفع ${result.uploaded} وتحديث ${result.downloaded} سجل" + conflictNotice
                 )
             }.onFailure { error ->
+                _isCloudConnected.value = false
                 _lastSyncError.value = error.localizedMessage ?: "تعذرت المزامنة السحابية"
                 _userMessage.emit(_lastSyncError.value ?: "تعذرت المزامنة")
             }
@@ -872,9 +887,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         try {
             cloudSyncEngine.syncOnce()
             _lastSyncError.value = null
+            _isCloudConnected.value = true
             preferences.updateLastSync(preferences.lastAppliedRevisionFlow.first() + 1L)
             if (!silent) _userMessage.emit("تمت المزامنة السحابية بنجاح عبر الإنترنت")
         } catch (error: Exception) {
+            _isCloudConnected.value = false
             val message = error.localizedMessage ?: "تعذر الوصول إلى Firestore"
             if (message.contains("إيقاف ارتباط") || message.contains("غير معتمد")) {
                 handleSubDeviceKicked(message)
