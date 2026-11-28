@@ -309,78 +309,22 @@ fun MultiDeviceControlSection(
                             }
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Text(
-                                        text = "وسيلة الربط",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = primaryAddr,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Text(
-                                        text = "رمز مساحة العمل",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = displayCode.ifBlank { "---" },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
-                                }
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("طريقة الربط", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("حساب Firebase مع اعتماد المستخدم الرئيسي", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                             }
                         }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        OutlinedButton(
+                            onClick = { viewModel.refreshMainServerInfo() },
+                            modifier = Modifier.fillMaxWidth().testTag("regen_workspace_code_btn"),
+                            shape = RoundedCornerShape(10.dp)
                         ) {
-                            OutlinedButton(
-                                onClick = {
-                                    copyToClipboard(
-                                        context,
-                                        "الخدمة السحابية: Firebase Firestore\nرمز مساحة العمل: $displayCode"
-                                    )
-                                    Toast.makeText(context, "تم نسخ رمز مساحة العمل", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("copy_main_info_btn"),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("نسخ بيانات الربط", fontSize = 11.sp)
-                            }
-                            OutlinedButton(
-                                onClick = { viewModel.refreshMainServerInfo() },
-                                modifier = Modifier.testTag("regen_workspace_code_btn"),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text("فحص اتصال Firebase", fontSize = 11.sp)
-                            }
+                            Text("فحص اتصال Firebase", fontSize = 11.sp)
                         }
                         if (!lastSyncError.isNullOrBlank()) {
                             Text(
@@ -448,7 +392,7 @@ fun MultiDeviceControlSection(
 
                 if (linkedSubDevices.isEmpty()) {
                     Text(
-                        text = "لم يتم إنشاء أي أجهزة فرعية بعد. اضغط على الزر أعلاه لتوليد كلمة مرور منفردة لجهاز جديد.",
+                        text = "لا توجد حسابات فرعية معتمدة حتى الآن.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -582,7 +526,7 @@ fun MultiDeviceControlSection(
                                 )
                             }
                             Text(
-                                text = "الاتصال السحابي: Firebase Firestore • مساحة العمل: $workspaceCode",
+                                text = "طريقة الربط: حساب Firebase مع اعتماد المستخدم الرئيسي",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
