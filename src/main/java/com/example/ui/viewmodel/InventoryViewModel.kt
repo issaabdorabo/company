@@ -340,6 +340,34 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun startMultiDeviceCoordinator() {
         viewModelScope.launch {
+            var hasInitialAuditSnapshot = false
+            var knownAuditKeys = emptySet<String>()
+            repository.operationAuditLogs.collect { logs ->
+                val currentKeys = logs.map { log ->
+                    listOf(log.timestamp, log.actorName, log.deviceName, log.operationType, log.title, log.details)
+                        .joinToString("|")
+                }.toSet()
+                if (hasInitialAuditSnapshot) {
+                    logs.filter { log ->
+                        val key = listOf(
+                            log.timestamp, log.actorName, log.deviceName,
+                            log.operationType, log.title, log.details
+                        ).joinToString("|")
+                        val currentDeviceName = if (isMainDevice.value) "الجهاز الرئيسي" else deviceName.value
+                        key !in knownAuditKeys &&
+                            log.deviceName.isNotBlank() &&
+                            !log.deviceName.equals(currentDeviceName, ignoreCase = true)
+                    }.forEach { log ->
+                        notificationManager.notifyOperation(
+                            title = "عملية جديدة من " + log.deviceName + ": " + log.title,
+                            details = "بواسطة " + log.actorName + " • " + log.details,
+                            isRemoteSubDeviceAlert = true
+                        )
+                    }
+                }
+                knownAuditKeys = currentKeys
+                hasInitialAuditSnapshot = true
+            }
             combine(
                 preferences.deviceRoleFlow,
                 preferences.subSessionTokenFlow,
@@ -362,7 +390,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                             cloudSyncEngine.ensureMainWorkspace()
                             cloudSyncEngine.syncOnce()
                             cloudSyncEngine.startRealtimeListeners(viewModelScope) { message ->
-                                _lastSyncError.value = message
+                                if (message.contains("إيقاف ارتباط") || message.contains("طرد")) {
+                                    handleSubDeviceKicked(message)
+                                } else {
+                                    _lastSyncError.value = message
+                                }
                             }
                         }.onFailure { error ->
                             _lastSyncError.value = error.localizedMessage
