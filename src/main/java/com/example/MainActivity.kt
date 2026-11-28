@@ -61,6 +61,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -103,6 +104,9 @@ import com.example.ui.theme.WarningOrange
 import com.example.ui.viewmodel.InventoryViewModel
 import com.example.ui.viewmodel.DeviceAction
 import com.example.ui.viewmodel.InventoryViewModelFactory
+import com.example.ui.auth.GoogleSignInScreen
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 
 enum class AppNavDestination(val titleAr: String, val icon: ImageVector) {
     DASHBOARD("الرئيسية", Icons.Default.Dashboard),
@@ -128,7 +132,20 @@ class MainActivity : ComponentActivity() {
             SmartInventoryTheme(theme = currentTheme) {
                 // Ensure RTL layout for Arabic
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                    val firebaseAuth = remember { FirebaseAuth.getInstance() }
+                var signedInUser by remember { mutableStateOf<FirebaseUser?>(firebaseAuth.currentUser) }
+                DisposableEffect(firebaseAuth) {
+                    val listener = FirebaseAuth.AuthStateListener { auth ->
+                        signedInUser = auth.currentUser
+                    }
+                    firebaseAuth.addAuthStateListener(listener)
+                    onDispose { firebaseAuth.removeAuthStateListener(listener) }
+                }
+                if (signedInUser == null) {
+                    GoogleSignInScreen(onSignedIn = { signedInUser = it })
+                } else {
                     MainApp(viewModel = viewModel)
+                }
                 }
             }
         }
