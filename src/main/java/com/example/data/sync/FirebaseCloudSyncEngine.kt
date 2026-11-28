@@ -21,6 +21,7 @@ import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -232,7 +233,7 @@ class FirebaseCloudSyncEngine(
                 status == 401 ->
                     "فحص HTTPS ناجح: وصل الهاتف إلى firestore.googleapis.com (HTTP 401 متوقع دون تسجيل دخول في اختبار الشبكة)."
                 status == 403 && ("service_disabled" in normalized || "has not been used" in normalized) ->
-                    "وصل الهاتف إلى Google، لكن Firestore API غير مفعّلة في مشروع mkhzny-c1402. فعّل Cloud Firestore API من Google Cloud Console. رد الخادم: $body"
+                    "وصل الهاتف إلى Google، لكن Firestore API غير مفعّلة في المشروع $projectId. فعّل Cloud Firestore API من Google Cloud Console. رد الخادم: $body"
                 status == 404 && ("database" in normalized && ("not found" in normalized || "does not exist" in normalized)) ->
                     "وصل الهاتف إلى Google، لكن قاعدة Firestore الافتراضية (default) غير موجودة في المشروع $projectId. أنشئ Cloud Firestore Database. رد الخادم: $body"
                 status in 200..499 ->
