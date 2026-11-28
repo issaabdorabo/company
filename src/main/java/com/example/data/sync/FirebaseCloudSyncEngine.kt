@@ -258,32 +258,8 @@ class FirebaseCloudSyncEngine(
             SetOptions.merge()
         ).await()
 
-        // Migrate permissions on already-linked devices to the server-enforced format.
-        val knownDevices = preferences.getLinkedSubDevicesSnapshot()
-        for (slot in knownDevices) {
-            val permissions = permissionsMap(slot.toPermissions())
-            val members = ref.collection("members").whereEqualTo("deviceSlotId", slot.id).get().await()
-            members.documents.forEach { member ->
-                val currentPermissions = member.get("permissions") as? Map<*, *>
-                if (currentPermissions?.containsKey("canInwardWarehouseIds") != true) {
-                    member.reference.update(
-                        "permissions", permissions,
-                        "updatedAt", FieldValue.serverTimestamp()
-                    ).await()
-                }
-            }
-            val invites = ref.collection("pairingInvites").whereEqualTo("deviceSlotId", slot.id).get().await()
-            invites.documents.forEach { invite ->
-                val currentPermissions = invite.get("permissions") as? Map<*, *>
-                if (invite.getString("status") == "PENDING" &&
-                    currentPermissions?.containsKey("canInwardWarehouseIds") != true) {
-                    invite.reference.update(
-                        "permissions", permissions,
-                        "updatedAt", FieldValue.serverTimestamp()
-                    ).await()
-                }
-            }
-        }
+        // Account-based linking no longer uses legacy pairingInvites. Avoid
+        // querying obsolete invitation collections during every startup/refresh.
         return workspaceId
     }
 
@@ -314,38 +290,44 @@ class FirebaseCloudSyncEngine(
             user.displayName?.takeIf { it.isNotBlank() } ?: "جهاز فرعي"
         }
         val requestRef = workspaceRef(workspaceId).collection("joinRequests").document(user.uid)
-        val existing = try {
-            requestRef.get(Source.SERVER).await()
+        // One idempotent write: no preliminary read is needed to create or
+        // safely resubmit a pending/rejected request for this authenticated UID.
+        try {
+            requestRef.set(
+                mapOf(
+                    "requesterUid" to user.uid,
+                    "requesterEmail" to (user.email ?: ""),
+                    "requesterName" to (user.displayName ?: deviceName),
+                    "deviceName" to deviceName,
+                    "installationId" to installationId,
+                    "ownerUid" to ownerUid,
+                    "ownerEmail" to ownerEmail,
+                    "status" to "PENDING",
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+            ).await()
         } catch (error: FirebaseFirestoreException) {
-            throw firestoreReadFailure("التحقق من طلب الانضمام السابق", error)
+            throw firestoreReadFailure("إرسال طلب الانضمام", error)
         }
-        val existingStatus = existing.getString("status").orEmpty()
-        check(existingStatus !in listOf("APPROVED", "ACTIVE")) {
-            "هذا الحساب معتمد بالفعل لدى المستخدم الرئيسي"
-        }
-        requestRef.set(
-            mapOf(
-                "requesterUid" to user.uid,
-                "requesterEmail" to (user.email ?: ""),
-                "requesterName" to (user.displayName ?: deviceName),
-                "deviceName" to deviceName,
-                "installationId" to installationId,
-                "ownerUid" to ownerUid,
-                "ownerEmail" to ownerEmail,
-                "status" to "PENDING",
-                "createdAt" to if (existingStatus == "PENDING") existing.get("createdAt") ?: FieldValue.serverTimestamp() else FieldValue.serverTimestamp(),
-                "updatedAt" to FieldValue.serverTimestamp()
-            ),
-            SetOptions.merge()
-        ).await()
         return CloudJoinTicket(workspaceId, ownerEmail)
     }
 
     suspend fun getPendingAccountJoinRequests(): List<CloudJoinRequest> {
-        val workspaceId = ensureMainWorkspace()
-        return workspaceRef(workspaceId).collection("joinRequests")
-            .whereEqualTo("status", "PENDING")
-            .get().await().documents.map { doc ->
+        // The owner workspace is initialized once by refreshMainServerInfo().
+        // Do not bootstrap it again from this read-only request-list operation.
+        val workspaceId = preferences.workspaceCodeFlow.first()
+        check(workspaceId.isNotBlank()) { "لم يتم إنشاء مساحة العمل الرئيسية بعد" }
+        ensureFirestoreNetwork()
+        val snapshot = try {
+            workspaceRef(workspaceId).collection("joinRequests")
+                .whereEqualTo("status", "PENDING")
+                .get(Source.SERVER).await()
+        } catch (error: FirebaseFirestoreException) {
+            throw firestoreReadFailure("تحميل طلبات انضمام الأجهزة", error)
+        }
+        return snapshot.documents.map { doc ->
                 CloudJoinRequest(
                     uid = doc.getString("requesterUid") ?: doc.id,
                     email = doc.getString("requesterEmail").orEmpty(),
@@ -417,7 +399,11 @@ class FirebaseCloudSyncEngine(
         check(request.exists() && request.getString("status") == "APPROVED") {
             "لم يعتمد المستخدم الرئيسي هذا الحساب بعد"
         }
-        val member = workspace.collection("members").document(requesterUid).get().await()
+        val member = try {
+            workspace.collection("members").document(requesterUid).get(Source.SERVER).await()
+        } catch (error: FirebaseFirestoreException) {
+            throw firestoreReadFailure("تحميل عضوية الجهاز المعتمد", error)
+        }
         check(member.exists() && member.getString("status") == "ACTIVE") {
             "تمت الموافقة لكن عضوية الجهاز لم تُفعّل. تواصل مع المستخدم الرئيسي."
         }
