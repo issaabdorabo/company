@@ -39,7 +39,8 @@ data class CloudSyncResult(
     val uploaded: Int,
     val downloaded: Int,
     val auditLogs: Int,
-    val serverTimestamp: Long
+    val serverTimestamp: Long,
+    val conflictsArchived: Int = 0
 )
 
 /** Firestore transport for multi-device collaboration. Room remains the operational database. */
@@ -602,6 +603,7 @@ class FirebaseCloudSyncEngine(
         val baseline = readState(file)
         val merged = linkedMapOf<String, CloudEntityRecord>()
         val writes = mutableListOf<CloudEntityRecord>()
+        val conflictsToArchive = mutableListOf<Triple<CloudEntityRecord, CloudEntityRecord, String>>()
         val allIds = (baseline.hashes.keys + localById.keys + remoteById.keys).toSortedSet()
 
         for (id in allIds) {
@@ -618,7 +620,20 @@ class FirebaseCloudSyncEngine(
                 // A device restored from Google Drive may have lost its local sync baseline.
                 // Prefer the already-shared cloud version for matching IDs; only local-only
                 // records are uploaded on that first reconciliation.
-                baseHash == null && remote != null -> remote
+                baseHash == null && remote != null -> {
+                    if (local != null && localHash != remoteHash) {
+                        conflictsToArchive.add(
+                            Triple(localToRecord(local, workspaceId, uid), remote, "")
+                        )
+                    }
+                    remote
+                }
+                localChanged && remoteChanged && localHash != remoteHash -> {
+                    conflictsToArchive.add(
+                        Triple(localToRecord(local!!, workspaceId, uid), remote!!, baseHash.orEmpty())
+                    )
+                    localToRecord(local, workspaceId, uid)
+                }
                 localDeleted -> CloudEntityRecord(
                     id = id,
                     workspaceId = workspaceId,
@@ -638,6 +653,51 @@ class FirebaseCloudSyncEngine(
                 merged[id] = chosen
                 if (remote == null || signature(remote) != signature(chosen)) writes.add(chosen)
             }
+        }
+
+        var archivedConflicts = 0
+        val conflictsRef = workspace.collection("conflicts")
+        conflictsToArchive.chunked(5).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { (localVersion, remoteVersion, baseHash) ->
+                val localHash = signature(localVersion)
+                val remoteHash = signature(remoteVersion)
+                val conflictId = sha256(
+                    "${localVersion.id}|${baseHash}|${localHash}|${remoteHash}"
+                )
+                batch.set(
+                    conflictsRef.document(conflictId),
+                    mapOf(
+                        "workspaceId" to workspaceId,
+                        "recordId" to localVersion.id,
+                        "entityType" to localVersion.entityType,
+                        "localId" to localVersion.localId,
+                        "baseHash" to baseHash,
+                        "localHash" to localHash,
+                        "remoteHash" to remoteHash,
+                        "localVersion" to mapOf(
+                            "entityType" to localVersion.entityType,
+                            "localId" to localVersion.localId,
+                            "payload" to localVersion.payload,
+                            "isDeleted" to localVersion.isDeleted,
+                            "updatedByUid" to localVersion.updatedByUid
+                        ),
+                        "remoteVersion" to mapOf(
+                            "entityType" to remoteVersion.entityType,
+                            "localId" to remoteVersion.localId,
+                            "payload" to remoteVersion.payload,
+                            "isDeleted" to remoteVersion.isDeleted,
+                            "updatedByUid" to remoteVersion.updatedByUid
+                        ),
+                        "resolution" to "LOCAL_VERSION_SELECTED",
+                        "createdByUid" to uid,
+                        "createdByDeviceId" to installationId,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().await()
+            archivedConflicts += chunk.size
         }
 
         var uploaded = 0
@@ -663,6 +723,16 @@ class FirebaseCloudSyncEngine(
         val needsLocalApply = mergedList.size != localById.size ||
             mergedList.any { rec -> localById[rec.id]?.let(::signature) != signature(rec) }
         if (needsLocalApply) {
+            // Do not replace Room with a stale snapshot if the user changed anything
+            // while this sync was downloading and merging the remote collection.
+            val latestLocalById = repository.exportAllEntitiesForCloud().associateBy { it.docId }
+            val changedDuringSync = (localById.keys + latestLocalById.keys).any { id ->
+                localById[id]?.let(::signature) != latestLocalById[id]?.let(::signature)
+            }
+            check(!changedDuringSync) {
+                "تم تعديل بيانات محلية أثناء المزامنة. احتفظ التطبيق بهذه التعديلات وسيعيد المحاولة تلقائياً."
+            }
+            val activeForImport = mergedList.filterNot { it.isDeleted }
             val result = repository.replaceDatabaseFromCloudEntitiesSafely(mergedList)
             check(result.isSuccess) {
                 result.exceptionOrNull()?.message ?: "تعذر تطبيق التغييرات السحابية على قاعدة البيانات المحلية"
@@ -688,7 +758,8 @@ class FirebaseCloudSyncEngine(
                 rec.isDeleted || local?.let(::signature) != signature(rec)
             },
             auditLogs = auditCount,
-            serverTimestamp = System.currentTimeMillis()
+            serverTimestamp = System.currentTimeMillis(),
+            conflictsArchived = archivedConflicts
         )
     }
 
