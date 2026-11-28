@@ -15,7 +15,10 @@ import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -49,6 +52,7 @@ class FirebaseCloudSyncEngine(
 ) {
     private val appContext = context.applicationContext
     private val syncMutex = Mutex()
+    private val listenerRegistrations = mutableListOf<ListenerRegistration>()
 
     private fun workspaceRef(workspaceId: String) =
         firestore.collection("workspaces").document(workspaceId)
@@ -313,7 +317,10 @@ class FirebaseCloudSyncEngine(
         val remote = workspaceRef(workspaceId).collection("records").get().await()
             .documents.map { recordFromDocument(it.id, it.data ?: emptyMap()) }
         val localBeforePairing = repository.exportAllEntitiesForCloud()
-        val mergedForPairing = (localBeforePairing.associateBy { it.docId } +
+        val tombstonedIds = remote.filter { it.isDeleted }.map { it.id }.toSet()
+        val mergedForPairing = (localBeforePairing
+            .filterNot { it.docId in tombstonedIds }
+            .associateBy { it.docId } +
             remote.filterNot { it.isDeleted }.associateBy { it.id }).values.toList()
         if (mergedForPairing.isNotEmpty()) {
             val result = repository.replaceDatabaseFromCloudEntitiesSafely(mergedForPairing)
@@ -401,7 +408,7 @@ class FirebaseCloudSyncEngine(
         }
     }
 
-    suspend fun isSubDeviceOnline(slotId: String, freshForMillis: Long = 20L * 60L * 1000L): Boolean {
+    suspend fun isSubDeviceOnline(slotId: String, freshForMillis: Long = 90_000L): Boolean {
         val workspaceId = preferences.workspaceCodeFlow.first()
         if (workspaceId.isBlank()) return false
         val members = workspaceRef(workspaceId).collection("members")
@@ -410,6 +417,93 @@ class FirebaseCloudSyncEngine(
             .get().await()
         val lastSeen = members.documents.firstOrNull()?.getTimestamp("lastSeenAt")?.toDate()?.time ?: 0L
         return lastSeen > 0L && System.currentTimeMillis() - lastSeen <= freshForMillis
+    }
+
+    suspend fun heartbeat() {
+        val uid = requireUserUid()
+        val role = preferences.deviceRoleFlow.first()
+        val workspaceId = if (role.name == "MAIN") ensureMainWorkspace() else preferences.workspaceCodeFlow.first()
+        check(workspaceId.isNotBlank()) { "لا توجد مساحة عمل سحابية مرتبطة بهذا الجهاز" }
+        val memberRef = workspaceRef(workspaceId).collection("members").document(uid)
+        if (role.name != "MAIN") {
+            val member = memberRef.get().await()
+            if (!member.exists()) throw IllegalStateException("عضوية هذا الجهاز غير مسجلة في السحابة")
+            val status = member.getString("status").orEmpty()
+            if (status != "ACTIVE") {
+                if (status == "KICKED" || status == "REVOKED" || status == "UNLINKED") {
+                    repository.clearAllUserData(preserveAuditLogs = false)
+                    preferences.markSubDeviceKicked()
+                    throw IllegalStateException("تم إيقاف ارتباط هذا الجهاز من المستخدم الرئيسي")
+                }
+                throw IllegalStateException("حالة ارتباط هذا الجهاز غير نشطة")
+            }
+            val permissions = permissionsFromMap(
+                member.get("permissions") as? Map<*, *> ?: emptyMap<String, Any?>()
+            )
+            preferences.updateSubDevicePermissions(permissions)
+        }
+        markPresence(workspaceId, uid, preferences.getOrCreateInstallationId())
+    }
+
+    suspend fun startRealtimeListeners(
+        scope: CoroutineScope,
+        onError: (String) -> Unit
+    ) {
+        stopRealtimeListeners()
+        val uid = requireUserUid()
+        val role = preferences.deviceRoleFlow.first()
+        val workspaceId = if (role.name == "MAIN") ensureMainWorkspace() else preferences.workspaceCodeFlow.first()
+        check(workspaceId.isNotBlank()) { "لا توجد مساحة عمل سحابية مرتبطة بهذا الجهاز" }
+        val workspace = workspaceRef(workspaceId)
+        val lastSecurityState = linkedMapOf<String, String>()
+
+        fun requestSync(reason: String) {
+            scope.launch {
+                runCatching { syncOnce() }
+                    .onFailure { error ->
+                        val message = error.localizedMessage ?: "فشلت المزامنة السحابية"
+                        onError(reason + ": " + message)
+                    }
+            }
+        }
+
+        listenerRegistrations += workspace.collection("records")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error.localizedMessage ?: "انقطع مستمع بيانات المخزون")
+                } else if (snapshot != null && snapshot.documentChanges.isNotEmpty()) {
+                    requestSync("تحديث بيانات المخزون")
+                }
+            }
+
+        listenerRegistrations += workspace.collection("auditLogs")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error.localizedMessage ?: "انقطع مستمع سجل العمليات")
+                } else if (snapshot != null && snapshot.documentChanges.isNotEmpty()) {
+                    requestSync("تحديث سجل العمليات")
+                }
+            }
+
+        listenerRegistrations += workspace.collection("members").document(uid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error.localizedMessage ?: "تعذر متابعة صلاحيات الجهاز")
+                } else if (snapshot != null && snapshot.exists()) {
+                    val status = snapshot.getString("status").orEmpty()
+                    val permissions = snapshot.get("permissions")
+                    val securityState = sha256(status + "|" + canonical(permissions))
+                    val previous = lastSecurityState.put("member", securityState)
+                    if (previous != null && previous != securityState) {
+                        requestSync("تحديث الصلاحيات أو حالة الجهاز")
+                    }
+                }
+            }
+    }
+
+    fun stopRealtimeListeners() {
+        listenerRegistrations.forEach { registration -> registration.remove() }
+        listenerRegistrations.clear()
     }
 
     suspend fun syncOnce(): CloudSyncResult = syncMutex.withLock {
