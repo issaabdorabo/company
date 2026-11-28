@@ -170,7 +170,7 @@ fun MultiDeviceControlSection(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "ربط مباشر عبر Wi-Fi أو نقطة الاتصال بدون تسجيل دخول Google أو قيود مفاتيح",
+                        text = "ربط سحابي عبر Firebase؛ يعمل بين شبكات مختلفة باستخدام حساب Google المعتمد",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -267,9 +267,9 @@ fun MultiDeviceControlSection(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    imageVector = Icons.Default.Router,
+                                    imageVector = Icons.Default.Cloud,
                                     contentDescription = null,
-                                    tint = if (serverStatus.isRunning && hasLanIp) SuccessGreen else WarningOrange,
+                                    tint = if (lastSyncError.isNullOrBlank()) SuccessGreen else WarningOrange,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -329,7 +329,7 @@ fun MultiDeviceControlSection(
                             ) {
                                 Column(modifier = Modifier.padding(8.dp)) {
                                     Text(
-                                        text = "رمز قاعدة البيانات",
+                                        text = "رمز مساحة العمل",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -602,7 +602,7 @@ fun MultiDeviceControlSection(
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
-                                text = "صلاحياتك المفعلة حالياً من الجهاز الرئيسي:",
+                                text = "صلاحياتك المفعلة حالياً من مساحة العمل:",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
