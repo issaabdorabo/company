@@ -176,6 +176,16 @@ service cloud.firestore {
             && request.auth.uid == memberUid
             && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['online', 'lastSeenAt', 'updatedAt', 'installationId'])
+          )
+          || (
+            signedIn()
+            && request.auth.uid == memberUid
+            && resource.data.role == 'SUB'
+            && resource.data.status == 'ACTIVE'
+            && request.resource.data.status == 'UNLINKED'
+            && request.resource.data.online == false
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'online', 'updatedAt'])
           );
         allow delete: if isOwner(workspaceId);
       }
