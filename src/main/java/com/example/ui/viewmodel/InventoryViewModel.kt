@@ -349,6 +349,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }.collect { (role, token, perms) ->
                 subSyncJob?.cancel()
                 subSyncJob = null
+                cloudSyncEngine.stopRealtimeListeners()
                 nsdDiscoveryJob?.cancel()
                 nsdDiscoveryJob = null
                 nsdHelper.unregisterMainService()
@@ -357,24 +358,47 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
                 if (role == DeviceRole.MAIN) {
                     subSyncJob = launch {
-                        while (isActive) {
-                            runCatching {
-                                cloudSyncEngine.ensureMainWorkspace()
-                                cloudSyncEngine.syncOnce()
-                            }.onSuccess {
-                                _lastSyncError.value = null
-                            }.onFailure { error ->
-                                _lastSyncError.value = error.localizedMessage
-                                    ?: "تعذر الاتصال بمساحة العمل السحابية"
+                        runCatching {
+                            cloudSyncEngine.ensureMainWorkspace()
+                            cloudSyncEngine.syncOnce()
+                            cloudSyncEngine.startRealtimeListeners(viewModelScope) { message ->
+                                _lastSyncError.value = message
                             }
+                        }.onFailure { error ->
+                            _lastSyncError.value = error.localizedMessage
+                                ?: "تعذر تهيئة المزامنة السحابية"
+                        }
+                        while (isActive) {
+                            runCatching { cloudSyncEngine.heartbeat() }
+                                .onFailure { error ->
+                                    _lastSyncError.value = error.localizedMessage
+                                        ?: "تعذر تحديث حالة الاتصال السحابي"
+                                }
                             delay(30_000L)
                         }
                     }
                 } else if (token.isNotBlank() && !perms.isKicked) {
                     subSyncJob = launch {
+                        pullFromMainOnce(silent = true)
+                        runCatching {
+                            cloudSyncEngine.startRealtimeListeners(viewModelScope) { message ->
+                                _lastSyncError.value = message
+                            }
+                        }.onFailure { error ->
+                            _lastSyncError.value = error.localizedMessage
+                                ?: "تعذر تشغيل مستمع المزامنة السحابية"
+                        }
                         while (isActive) {
-                            pullFromMainOnce(silent = true)
-                            delay(20_000L)
+                            runCatching { cloudSyncEngine.heartbeat() }
+                                .onFailure { error ->
+                                    val message = error.localizedMessage
+                                        ?: "تعذر تحديث حالة الاتصال السحابي"
+                                    _lastSyncError.value = message
+                                    if (message.contains("إيقاف ارتباط")) {
+                                        handleSubDeviceKicked(message)
+                                    }
+                                }
+                            delay(30_000L)
                         }
                     }
                 }
@@ -387,6 +411,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         subSyncJob?.cancel()
         nsdDiscoveryJob?.cancel()
         nsdHelper.unregisterMainService()
+        cloudSyncEngine.stopRealtimeListeners()
         syncServer.stop()
     }
 
