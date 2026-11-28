@@ -643,7 +643,11 @@ class FirebaseCloudSyncEngine(
         var uploaded = 0
         // A sub-device write can consult its own member document and a voucher parent in Rules.
         // Keeping batches small stays comfortably inside Firestore's 20 document-access call limit.
-        writes.chunked(10).forEach { chunk ->
+        val orderedWrites = writes.sortedWith(
+            compareBy<CloudEntityRecord> { if (it.entityType == "voucher") 0 else 1 }
+                .thenBy { it.id }
+        )
+        orderedWrites.chunked(10).forEach { chunk ->
             val batch = firestore.batch()
             chunk.forEach { record ->
                 batch.set(
