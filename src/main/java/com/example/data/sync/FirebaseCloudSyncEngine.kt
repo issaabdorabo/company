@@ -632,7 +632,7 @@ class FirebaseCloudSyncEngine(
                     conflictsToArchive.add(
                         Triple(localToRecord(local!!, workspaceId, uid), remote!!, baseHash.orEmpty())
                     )
-                    localToRecord(local, workspaceId, uid)
+                    localToRecord(local!!, workspaceId, uid)
                 }
                 localDeleted -> CloudEntityRecord(
                     id = id,
@@ -732,7 +732,6 @@ class FirebaseCloudSyncEngine(
             check(!changedDuringSync) {
                 "تم تعديل بيانات محلية أثناء المزامنة. احتفظ التطبيق بهذه التعديلات وسيعيد المحاولة تلقائياً."
             }
-            val activeForImport = mergedList.filterNot { it.isDeleted }
             val result = repository.replaceDatabaseFromCloudEntitiesSafely(mergedList)
             check(result.isSuccess) {
                 result.exceptionOrNull()?.message ?: "تعذر تطبيق التغييرات السحابية على قاعدة البيانات المحلية"
