@@ -41,6 +41,7 @@ import com.example.data.sync.LocalNetworkSyncClient
 import com.example.data.sync.LocalNetworkSyncServer
 import com.example.data.sync.NsdDiscoveryHelper
 import com.example.data.sync.SyncApiException
+import com.example.data.sync.CloudSyncWorker
 import com.example.ui.theme.AppTheme
 import com.example.util.AppNotificationManager
 import com.example.util.SecurityUtils
@@ -71,6 +72,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val repository = app.repository
     private val preferences = app.preferencesManager
     private val cloudBackupRepo = app.cloudBackupRepository
+    private val cloudSyncEngine = app.cloudSyncEngine
     private val notificationManager = AppNotificationManager(application)
 
     private val syncClient = LocalNetworkSyncClient()
@@ -340,48 +342,39 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             combine(
                 preferences.deviceRoleFlow,
-                preferences.mainHostUrlFlow,
                 preferences.subSessionTokenFlow,
                 preferences.devicePermissionsFlow
-            ) { role, host, token, perms ->
-                CoordinatorState(role, host, token, perms)
-            }.collect { state ->
-                if (state.role == DeviceRole.MAIN) {
-                    subSyncJob?.cancel()
-                    subSyncJob = null
-                    nsdDiscoveryJob?.cancel()
-                    nsdDiscoveryJob = null
-                    _discoveredMainDevices.value = emptyList()
+            ) { role, token, perms ->
+                Triple(role, token, perms)
+            }.collect { (role, token, perms) ->
+                subSyncJob?.cancel()
+                subSyncJob = null
+                nsdDiscoveryJob?.cancel()
+                nsdDiscoveryJob = null
+                nsdHelper.unregisterMainService()
+                syncServer.stop()
+                _discoveredMainDevices.value = emptyList()
 
-                    val code = preferences.ensureWorkspaceCode()
-                    val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-                    if (port > 0) {
-                        nsdHelper.registerMainService(port, code)
-                    }
-                } else {
-                    syncServer.stop()
-                    nsdHelper.unregisterMainService()
-
-                    if (state.subToken.isBlank() || state.permissions.isKicked) {
-                        subSyncJob?.cancel()
-                        subSyncJob = null
-                        if (nsdDiscoveryJob?.isActive != true) {
-                            nsdDiscoveryJob = launch {
-                                nsdHelper.observeDiscoveredMainDevices().collect { found ->
-                                    _discoveredMainDevices.value = found
-                                }
+                if (role == DeviceRole.MAIN) {
+                    subSyncJob = launch {
+                        while (isActive) {
+                            runCatching {
+                                cloudSyncEngine.ensureMainWorkspace()
+                                cloudSyncEngine.syncOnce()
+                            }.onSuccess {
+                                _lastSyncError.value = null
+                            }.onFailure { error ->
+                                _lastSyncError.value = error.localizedMessage
+                                    ?: "تعذر الاتصال بمساحة العمل السحابية"
                             }
+                            delay(30_000L)
                         }
-                    } else {
-                        nsdDiscoveryJob?.cancel()
-                        nsdDiscoveryJob = null
-                        if (subSyncJob?.isActive != true) {
-                            subSyncJob = launch {
-                                while (isActive) {
-                                    pullFromMainOnce(silent = true)
-                                    delay(1000L)
-                                }
-                            }
+                    }
+                } else if (token.isNotBlank() && !perms.isKicked) {
+                    subSyncJob = launch {
+                        while (isActive) {
+                            pullFromMainOnce(silent = true)
+                            delay(20_000L)
                         }
                     }
                 }
@@ -569,31 +562,21 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         viewModelScope.launch {
             val cleanName = deviceName.trim().ifBlank { "جهاز فرعي #${linkedSubDevices.value.size + 1}" }
-            val currentDevices = preferences.getLinkedSubDevicesSnapshot()
-            if (currentDevices.any { it.deviceName.trim().equals(cleanName, ignoreCase = true) }) {
+            val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
+            if (current.any { it.deviceName.trim().equals(cleanName, ignoreCase = true) }) {
                 _userMessage.emit("اسم الجهاز ($cleanName) مستخدم بالفعل. اختر اسماً مختلفاً.")
                 return@launch
             }
-            val code = preferences.ensureWorkspaceCode()
-            val port = syncServer.start(LocalNetworkSyncServer.DEFAULT_PORT)
-            if (port > 0) {
-                nsdHelper.registerMainService(port, code)
-            }
-            val ips = LocalNetworkSyncServer.getLocalLanIpAddresses()
-            val hostDisplay = (ips.firstOrNull() ?: "192.168.43.1") + ":" + (if (port > 0) port else LocalNetworkSyncServer.DEFAULT_PORT)
 
             val plainPassword = SecurityUtils.generateUniqueDevicePassword(10)
             val salt = SecurityUtils.generateSalt()
             val passwordHash = SecurityUtils.hashPassword(plainPassword, salt)
-            val sessionToken = UUID.randomUUID().toString()
-            val now = System.currentTimeMillis()
-
             val newSlot = LinkedSubDevice(
                 id = UUID.randomUUID().toString(),
                 deviceName = cleanName,
                 passwordSalt = salt,
                 passwordHash = passwordHash,
-                sessionToken = sessionToken,
+                sessionToken = UUID.randomUUID().toString(),
                 boundInstallationId = "",
                 isClaimed = false,
                 isKicked = false,
@@ -611,25 +594,30 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 canBackup = canBackup,
                 canViewAllWarehouses = canViewAllWarehouses,
                 warehousePermissions = warehousePermissions,
-                createdAt = now,
-                updatedAt = now,
-                lastSeenAt = 0L
+                createdAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis()
             )
 
-            val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
-            current.add(0, newSlot)
-            preferences.saveLinkedSubDevices(current)
-
-            val creds = CreatedDeviceCredentials(
-                deviceSlotId = newSlot.id,
-                deviceName = newSlot.deviceName,
-                workspaceCode = code,
-                hostAddress = hostDisplay,
-                plainPassword = plainPassword
-            )
-            _sessionPairingCredentials.value = _sessionPairingCredentials.value + (newSlot.id to creds)
-            _createdDeviceCredentials.value = creds
-            _userMessage.emit("تم إنشاء بيانات الربط والباركود للجهاز الفرعي ($cleanName)")
+            try {
+                cloudSyncEngine.createPairingInvite(newSlot, plainPassword)
+                current.add(0, newSlot)
+                preferences.saveLinkedSubDevices(current)
+                val code = preferences.ensureWorkspaceCode()
+                val creds = CreatedDeviceCredentials(
+                    deviceSlotId = newSlot.id,
+                    deviceName = newSlot.deviceName,
+                    workspaceCode = code,
+                    hostAddress = "CLOUD",
+                    plainPassword = plainPassword
+                )
+                _sessionPairingCredentials.value = _sessionPairingCredentials.value + (newSlot.id to creds)
+                _createdDeviceCredentials.value = creds
+                _userMessage.emit("تم إنشاء دعوة ربط سحابية صالحة لمدة 30 دقيقة للجهاز ($cleanName)")
+            } catch (error: Exception) {
+                _pairingError.value = error.localizedMessage
+                    ?: "تعذر إنشاء دعوة الربط السحابية. تحقق من تسجيل الدخول والإنترنت وقواعد Firestore."
+                _userMessage.emit(_pairingError.value ?: "تعذر إنشاء دعوة الربط")
+            }
         }
     }
 
@@ -665,7 +653,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val idx = current.indexOfFirst { it.id == slotId }
             if (idx >= 0) {
-                current[idx] = current[idx].copy(
+                val updated = current[idx].copy(
                     canAddItems = canAddItems,
                     canInward = canInward,
                     canDisburse = canDisburse,
@@ -682,9 +670,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     warehousePermissions = warehousePermissions,
                     updatedAt = System.currentTimeMillis()
                 )
+                current[idx] = updated
                 preferences.saveLinkedSubDevices(current)
+                runCatching { cloudSyncEngine.updatePermissions(slotId, updated.toPermissions()) }
+                    .onFailure { _lastSyncError.value = it.localizedMessage ?: "تعذر إرسال الصلاحيات إلى Firestore" }
                 preferences.incrementSyncRevision()
-                _userMessage.emit("تم تحديث صلاحيات ${current[idx].deviceName}")
+                _userMessage.emit("تم تحديث صلاحيات ${updated.deviceName} سحابياً")
             }
         }
     }
@@ -697,19 +688,26 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val targetName = current[idx].deviceName
                 current[idx] = current[idx].copy(
                     isKicked = true,
-                    sessionToken = UUID.randomUUID().toString(), // invalidate existing token
+                    sessionToken = UUID.randomUUID().toString(),
                     updatedAt = System.currentTimeMillis()
                 )
                 preferences.saveLinkedSubDevices(current)
+                runCatching { cloudSyncEngine.setDeviceKicked(slotId, true) }
+                    .onFailure { _lastSyncError.value = it.localizedMessage ?: "تعذر نشر أمر الطرد سحابياً" }
                 preferences.incrementSyncRevision()
-                repository.recordOperation(OperationAuditLog(actorName = userName.value.ifBlank { "المسؤول" }, deviceName = "الجهاز الرئيسي", operationType = "KICK_DEVICE", title = "طرد جهاز فرعي", details = "تم طرد الجهاز ($targetName) وإبطال رمز جلسته. سيُمسح محتواه عند أول اتصال يصل إليه أمر الإيقاف"))
-                notificationManager.notifyOperation("طرد جهاز فرعي", "تم طرد الجهاز ($targetName)", false)
-                _userMessage.emit("تم إبطال جلسة ($targetName). سيُمسح محتواه تلقائياً فور وصول أمر الإيقاف إليه عبر الاتصال")
+                repository.recordOperation(OperationAuditLog(
+                    actorName = userName.value.ifBlank { "المسؤول" },
+                    deviceName = "الجهاز الرئيسي",
+                    operationType = "KICK_DEVICE",
+                    title = "طرد جهاز فرعي",
+                    details = "تم إيقاف الجهاز ($targetName) وإلغاء عضويته السحابية"
+                ))
+                notificationManager.notifyOperation("طرد جهاز فرعي", "تم إيقاف الجهاز ($targetName)", false)
+                _userMessage.emit("تم إرسال أمر إيقاف ($targetName) إلى Firestore")
             }
         }
     }
 
-    /** Re-enable a previously kicked device without deleting its identity, permissions or audit history. */
     fun reactivateSubDevice(slotId: String) {
         viewModelScope.launch {
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
@@ -724,8 +722,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     updatedAt = System.currentTimeMillis()
                 )
                 preferences.saveLinkedSubDevices(current)
+                runCatching { cloudSyncEngine.setDeviceKicked(slotId, false) }
+                    .onFailure { _lastSyncError.value = it.localizedMessage ?: "تعذر إعادة تفعيل الجهاز سحابياً" }
                 preferences.incrementSyncRevision()
-                _userMessage.emit("تمت إعادة تفعيل ${previous.deviceName} مع الاحتفاظ بصلاحياته وسجلات عملياته. أعد ربط الجهاز باستخدام كلمة مروره السابقة.")
+                _userMessage.emit("تمت إعادة تفعيل عضوية ${previous.deviceName} سحابياً. أعد الربط من الجهاز الفرعي.")
             }
         }
     }
@@ -735,10 +735,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             val current = preferences.getLinkedSubDevicesSnapshot().toMutableList()
             val removed = current.firstOrNull { it.id == slotId }
             if (removed != null) {
+                runCatching { cloudSyncEngine.removeDeviceSlot(slotId) }
+                    .onFailure { _lastSyncError.value = it.localizedMessage ?: "تعذر إلغاء العضوية السحابية" }
                 current.removeAll { it.id == slotId }
                 preferences.saveLinkedSubDevices(current)
                 preferences.incrementSyncRevision()
-                _userMessage.emit("تم حذف سجل الجهاز (${removed.deviceName})")
+                _userMessage.emit("تم إلغاء ارتباط الجهاز (${removed.deviceName}) في السحابة")
             }
         }
     }
@@ -757,12 +759,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 return@launch
             }
 
-            val cleanHost = hostAddress.trim()
             val cleanCode = workspaceCodeInput.trim().uppercase()
             val cleanPwd = passwordInput.trim()
-
-            if (cleanHost.isBlank() || cleanCode.isBlank() || cleanPwd.isBlank()) {
-                _pairingError.value = "يرجى إدخال عنوان الجهاز الرئيسي ورمز القاعدة وكلمة المرور المنفردة"
+            if (cleanCode.isBlank() || cleanPwd.isBlank()) {
+                _pairingError.value = "أدخل رمز مساحة العمل وكلمة المرور الممنوحة من الجهاز الرئيسي"
                 return@launch
             }
 
@@ -770,47 +770,29 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _pairingError.value = null
             try {
                 val installId = preferences.getOrCreateInstallationId()
-                val normalizedUrl = syncClient.normalizeBaseUrl(cleanHost)
-                val result = syncClient.pairWithMainDevice(
-                    rawHost = normalizedUrl,
-                    workspaceCode = cleanCode,
-                    password = cleanPwd,
-                    installationId = installId
+                val paired = cloudSyncEngine.joinWithInvite(cleanCode, cleanPwd, installId)
+                preferences.resetPairingFailures()
+                preferences.savePairedSubDevice(
+                    hostUrl = "cloud://${paired.workspaceId}",
+                    workspaceCode = paired.workspaceId,
+                    deviceSlotId = paired.deviceSlotId,
+                    deviceName = paired.deviceName,
+                    sessionToken = "FIRESTORE",
+                    permissions = paired.permissions,
+                    appliedRevision = 1L
                 )
-
-                result.onSuccess { paired ->
-                    preferences.resetPairingFailures()
-                    if (paired.entities.isNotEmpty()) {
-                        repository.replaceDatabaseFromCloudEntitiesSafely(paired.entities)
-                    } else {
-                        repository.clearAllSyncedData()
-                    }
-                    repository.importOperationLogsFromMain(paired.auditLogs)
-                    preferences.savePairedSubDevice(
-                        hostUrl = normalizedUrl,
-                        workspaceCode = paired.workspaceCode,
-                        deviceSlotId = paired.deviceSlotId,
-                        deviceName = paired.deviceName,
-                        sessionToken = paired.sessionToken,
-                        permissions = paired.permissions,
-                        appliedRevision = paired.syncVersion
-                    )
-                    _lastSyncError.value = null
-                    _userMessage.emit("تم ربط الجهاز الفرعي (${paired.deviceName}) ومزامنة البيانات بنجاح")
-                }.onFailure { err ->
-                    val apiErr = err as? SyncApiException
-                    if (apiErr?.errorCode == "INVALID_PASSWORD" || apiErr?.errorCode == "INVALID_WORKSPACE") {
-                        val (attempts, lockTime) = preferences.recordPairingFailure()
-                        _pairingError.value = if (lockTime > 0L) {
-                            "تم تجاوز 5 محاولات خاطئة. تم إيقاف المحاولات لمدة 60 ثانية."
-                        } else {
-                            "${apiErr.message} (محاولة $attempts من 5)"
-                        }
-                    } else {
-                        _pairingError.value = apiErr?.message
-                            ?: "تعذر الاتصال بالجهاز الرئيسي. تأكد أن الجهازين على نفس شبكة Wi-Fi أو نقطة الاتصال وأن العنوان صحيح."
-                    }
+                cloudSyncEngine.initializeNewSubDevice(paired.workspaceId)
+                CloudSyncWorker.requestImmediate(getApplication())
+                _lastSyncError.value = null
+                _userMessage.emit("تم ربط الجهاز الفرعي (${paired.deviceName}) عبر الإنترنت ومزامنة بياناته")
+            } catch (error: Exception) {
+                val (attempts, lockTime) = preferences.recordPairingFailure()
+                _pairingError.value = if (lockTime > 0L) {
+                    "تم تجاوز 5 محاولات خاطئة. تم إيقاف المحاولات لمدة 60 ثانية."
+                } else {
+                    (error.localizedMessage ?: "تعذر إتمام الربط السحابي") + " (محاولة $attempts من 5)"
                 }
+                runCatching { preferences.clearSubPairingAndSwitchToMain() }
             } finally {
                 _isPairingInProgress.value = false
             }
@@ -826,63 +808,43 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun syncNow() {
         viewModelScope.launch {
-            if (isMainDevice.value) {
-                preferences.incrementSyncRevision()
-                refreshMainServerInfo()
-                _userMessage.emit("تم تحديث حالة خادم الربط المحلي وجاهزية المزامنة")
-            } else {
-                pullFromMainOnce(silent = false)
+            _isSyncingNow.value = true
+            runCatching {
+                cloudSyncEngine.syncOnce()
+            }.onSuccess { result ->
+                _lastSyncError.value = null
+                preferences.updateLastSync(preferences.lastAppliedRevisionFlow.first() + 1L)
+                _userMessage.emit("اكتملت المزامنة السحابية: رفع ${result.uploaded} وتحديث ${result.downloaded} سجل")
+            }.onFailure { error ->
+                _lastSyncError.value = error.localizedMessage ?: "تعذرت المزامنة السحابية"
+                _userMessage.emit(_lastSyncError.value ?: "تعذرت المزامنة")
             }
+            _isSyncingNow.value = false
         }
     }
 
-    /** Called by the navigation shell so revocation/permission changes are checked on every screen change. */
+    /** Refresh remote records and permissions when the user navigates between screens. */
     fun syncOnNavigation() {
-        if (isMainDevice.value || !isSubConnected.value) return
+        if (subSessionToken.value.isBlank() && !isMainDevice.value) return
         viewModelScope.launch { pullFromMainOnce(silent = true) }
     }
 
-    private suspend fun pullFromMainOnce(silent: Boolean) = subSyncMutex.withLock {
-        val host = preferences.mainHostUrlFlow.first()
-        val token = preferences.subSessionTokenFlow.first()
-        if (host.isBlank() || token.isBlank()) return@withLock Result.failure(IllegalStateException("بيانات اتصال الجهاز الرئيسي غير مكتملة"))
+    
 
+    private suspend fun pullFromMainOnce(silent: Boolean) = subSyncMutex.withLock {
         if (!silent) _isSyncingNow.value = true
         try {
-            val result = syncClient.fetchSyncSnapshot(host, token)
-            result.onSuccess { snapshot ->
-                _lastSyncError.value = null
-                if (snapshot.isKicked) {
-                    handleSubDeviceKicked("تم طرد هذا الجهاز وإلغاء ارتباطه من الجهاز الرئيسي.")
-                    return@onSuccess
-                }
-
-                preferences.updateSubDevicePermissions(snapshot.permissions)
-                val lastApplied = preferences.lastAppliedRevisionFlow.first()
-                if (snapshot.syncVersion != lastApplied) {
-                    if (snapshot.entities.isNotEmpty()) {
-                        repository.replaceDatabaseFromCloudEntitiesSafely(snapshot.entities)
-                    } else {
-                        repository.clearAllSyncedData()
-                    }
-                    preferences.updateLastSync(snapshot.syncVersion)
-                } else {
-                    preferences.updateLastSync(lastApplied)
-                }
-
-                if (!silent) {
-                    _userMessage.emit("تمت المزامنة مع الجهاز الرئيسي بنجاح")
-                }
-            }.onFailure { err ->
-                val apiErr = err as? SyncApiException
-                if (apiErr?.errorCode == "KICKED") {
-                    handleSubDeviceKicked(apiErr.message ?: "تم طرد هذا الجهاز وإلغاء ارتباطه من الجهاز الرئيسي.")
-                } else {
-                    _lastSyncError.value = "بانتظار توفر الجهاز الرئيسي على الشبكة المحلية"
-                    if (!silent) {
-                        _userMessage.emit("تعذر الوصول للجهاز الرئيسي حالياً. تأكد من الاتصال بنفس الشبكة.")
-                    }
-                }
+            cloudSyncEngine.syncOnce()
+            _lastSyncError.value = null
+            preferences.updateLastSync(preferences.lastAppliedRevisionFlow.first() + 1L)
+            if (!silent) _userMessage.emit("تمت المزامنة السحابية بنجاح عبر الإنترنت")
+        } catch (error: Exception) {
+            val message = error.localizedMessage ?: "تعذر الوصول إلى Firestore"
+            if (message.contains("إيقاف ارتباط") || message.contains("غير معتمد")) {
+                handleSubDeviceKicked(message)
+            } else {
+                _lastSyncError.value = message
+                if (!silent) _userMessage.emit("تعذرت المزامنة السحابية: $message")
             }
         } finally {
             if (!silent) _isSyncingNow.value = false
@@ -903,26 +865,20 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             subSyncJob?.cancel()
             subSyncJob = null
-            val host = preferences.mainHostUrlFlow.first()
-            val token = preferences.subSessionTokenFlow.first()
             val name = deviceName.value.ifBlank { "الجهاز الفرعي" }
-            if (host.isNotBlank() && token.isNotBlank()) {
-                val remote = syncClient.unlinkFromMain(host, token)
-                if (remote.isFailure) {
-                    _userMessage.emit("تعذر إبلاغ الجهاز الرئيسي بفك الارتباط الآن؛ سيتم حفظ سجل العملية محلياً")
-                }
-            }
+            runCatching { cloudSyncEngine.unlinkCurrentDevice() }
+                .onFailure { _lastSyncError.value = it.localizedMessage ?: "تعذر تسجيل فك الارتباط سحابياً" }
             repository.recordOperation(OperationAuditLog(
                 actorName = userName.value.ifBlank { name },
                 deviceName = name,
                 operationType = "UNLINK",
                 title = "فك ارتباط الجهاز الفرعي",
-                details = "قام المستخدم بفك ارتباط هذا الجهاز من الجهاز الرئيسي"
+                details = "قام المستخدم بفك ارتباط هذا الجهاز من مساحة العمل السحابية"
             ))
             repository.clearAllUserData(preserveAuditLogs = false)
             preferences.clearSubPairingAndSwitchToMain()
             _lastSyncError.value = null
-            _userMessage.emit("تم فك الارتباط ومسح بيانات الحساب وسجل العمليات المحلي؛ سيُستعاد سجل هذا الجهاز عند إعادة ربطه بالجهاز الرئيسي")
+            _userMessage.emit("تم فك الارتباط السحابي ومسح بيانات الحساب المحلية")
         }
     }
 
