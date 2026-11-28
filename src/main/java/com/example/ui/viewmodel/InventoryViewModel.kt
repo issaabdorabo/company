@@ -904,7 +904,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }.onSuccess { result ->
                 _lastSyncError.value = null
                 preferences.updateLastSync(preferences.lastAppliedRevisionFlow.first() + 1L)
-                _userMessage.emit("اكتملت المزامنة السحابية: رفع ${result.uploaded} وتحديث ${result.downloaded} سجل")
+                val conflictNotice = if (result.conflictsArchived > 0) {
+                    " • تم حفظ ${result.conflictsArchived} تعارض في السحابة للمراجعة"
+                } else {
+                    ""
+                }
+                _userMessage.emit(
+                    "اكتملت المزامنة السحابية: رفع ${result.uploaded} وتحديث ${result.downloaded} سجل" + conflictNotice
+                )
             }.onFailure { error ->
                 _lastSyncError.value = error.localizedMessage ?: "تعذرت المزامنة السحابية"
                 _userMessage.emit(_lastSyncError.value ?: "تعذرت المزامنة")
